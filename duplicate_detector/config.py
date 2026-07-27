@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 
+from image_loader import default_image_loader
+
 
 @dataclass(slots=True)
 class DetectorConfig:
@@ -65,15 +67,13 @@ class DetectorConfig:
     # ------------------------------------------------------------------
 
     #: Supported file extensions.
-    supported_extensions: tuple[str, ...] = (
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".bmp",
-        ".tif",
-        ".tiff",
-        ".webp",
-    )
+    supported_extensions: tuple[str, ...] = default_image_loader.supported_extensions()
+
+    #: Maximum decode size used for duplicate hashes.
+    hash_decode_dimension: int = 2048
+
+    #: Maximum decode size used for ORB verification.
+    orb_decode_dimension: int = 1600
 
     #: Ignore unreadable/corrupted images instead of raising.
     ignore_load_errors: bool = True
@@ -107,6 +107,12 @@ class DetectorConfig:
 
         if not self.supported_extensions:
             raise ValueError("supported_extensions cannot be empty.")
+
+        if self.hash_decode_dimension <= 0:
+            raise ValueError("hash_decode_dimension must be positive.")
+
+        if self.orb_decode_dimension <= 0:
+            raise ValueError("orb_decode_dimension must be positive.")
 
     @property
     def workers(self) -> int:

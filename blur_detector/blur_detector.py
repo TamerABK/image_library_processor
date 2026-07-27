@@ -7,20 +7,20 @@ from typing import Callable, List
 import cv2
 import numpy as np
 
+from image_file_utils import find_supported_files
+from image_loader import default_image_loader
 
-def _detect_worker(args):
-    detector, path = args
+from .cache import BlurScanCache
+
+
+def _detect_worker(detector, path):
 
     try:
         score = detector.detect(path)
-
-        if score.status == "Blurry":
-            return BlurScanResult(path=path, result=score)
-
     except Exception:
-        pass
+        return path, None
 
-    return None
+    return path, score
 
 
 @dataclass
@@ -44,15 +44,7 @@ class BlurScanResult:
 
 
 class BlurDetector:
-    supported_extensions = (
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".bmp",
-        ".tif",
-        ".tiff",
-        ".webp",
-    )
+    supported_extensions = default_image_loader.supported_extensions()
 
     def __init__(
             self,
@@ -76,32 +68,16 @@ class BlurDetector:
         self.max_dimension = max_dimension
 
         cv2.setUseOptimized(True)
+        self._cache = BlurScanCache()
 
     def detect(self, image_path: str | Path) -> BlurResult:
-        image = cv2.imread(str(image_path))
-
-        if image is None:
-            raise ValueError(f"Could not open image: {image_path}")
-
-        gray = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        gray = default_image_loader.load_grayscale(
+            Path(image_path),
+            max_dimension=self.max_dimension,
+        )
 
         if gray is None:
             raise ValueError(f"Could not open image: {image_path}")
-
-        h, w = gray.shape
-
-        largest = max(h, w)
-
-        if largest > self.max_dimension:
-            scale = self.max_dimension / largest
-
-            gray = cv2.resize(
-                gray,
-                None,
-                fx=scale,
-                fy=scale,
-                interpolation=cv2.INTER_AREA,
-            )
 
         lap_score = self._laplacian(gray)
         sobel_score = self._sobel(gray)
@@ -177,15 +153,17 @@ class BlurDetector:
             self,
             folder_path: str | Path,
             progress_callback: Callable[[int, int], None] | None = None,
+            file_extensions: tuple[str, ...] | None = None,
+            orientation_filter: str | None = None,
     ) -> List[BlurScanResult]:
         folder = Path(folder_path)
 
-        paths = [
-            p
-            for p in folder.rglob("*")
-            if p.is_file()
-               and p.suffix.lower() in self.supported_extensions
-        ]
+        paths = find_supported_files(
+            folder,
+            self.supported_extensions,
+            file_extensions,
+            orientation_filter=orientation_filter,
+        )
 
         total = len(paths)
 
@@ -196,20 +174,78 @@ class BlurDetector:
             return []
 
         blurry_results: list[BlurScanResult] = []
+        pending_paths: list[tuple[Path, int, int]] = []
+        completed = 0
+        pending_metadata: dict[Path, tuple[int | None, int | None, bool | None]] = {}
+
+        for path in paths:
+            normalized_path = path.resolve()
+
+            try:
+                stat = normalized_path.stat()
+            except OSError:
+                completed += 1
+                if progress_callback is not None:
+                    progress_callback(completed, total)
+                continue
+
+            cached = self._get_cached_result(
+                normalized_path,
+                stat.st_size,
+                stat.st_mtime_ns,
+            )
+
+            if cached is not None:
+                if cached.status == "Blurry":
+                    blurry_results.append(
+                        BlurScanResult(path=normalized_path, result=cached)
+                    )
+
+                completed += 1
+                if progress_callback is not None:
+                    progress_callback(completed, total)
+                continue
+
+            metadata = default_image_loader.read_metadata(normalized_path)
+            pending_paths.append((normalized_path, stat.st_size, stat.st_mtime_ns))
+            pending_metadata[normalized_path] = (
+                metadata.width if metadata is not None else None,
+                metadata.height if metadata is not None else None,
+                metadata.is_raw if metadata is not None else None,
+            )
 
         executor_cls = ThreadPoolExecutor if os.name == "nt" else ProcessPoolExecutor
 
         with executor_cls(max_workers=os.cpu_count()) as executor:
             futures = [
-                executor.submit(_detect_worker, (self, path))
-                for path in paths
+                executor.submit(_detect_worker, self, path)
+                for path, _, _ in pending_paths
             ]
 
-            completed = 0
+            pending_meta = {
+                path: (file_size, mtime_ns)
+                for path, file_size, mtime_ns in pending_paths
+            }
+
             for future in as_completed(futures):
-                result = future.result()
+                path, result = future.result()
                 if result is not None:
-                    blurry_results.append(result)
+                    file_size, mtime_ns = pending_meta[path]
+                    width, height, is_raw = pending_metadata.get(path, (None, None, None))
+                    self._store_cached_result(
+                        path,
+                        file_size,
+                        mtime_ns,
+                        result,
+                        width=width,
+                        height=height,
+                        is_raw=is_raw,
+                    )
+
+                    if result.status == "Blurry":
+                        blurry_results.append(
+                            BlurScanResult(path=path, result=result)
+                        )
 
                 completed += 1
                 if progress_callback is not None:
@@ -219,6 +255,41 @@ class BlurDetector:
 
     def find_blurry_photos(self, folder_path: str | Path) -> List[str]:
         return [str(result.path) for result in self.scan_folder(folder_path)]
+
+    def _get_cached_result(
+        self,
+        path: Path,
+        file_size: int,
+        mtime_ns: int,
+    ) -> BlurResult | None:
+        try:
+            return self._cache.get(path, file_size, mtime_ns)
+        except Exception:
+            return None
+
+    def _store_cached_result(
+        self,
+        path: Path,
+        file_size: int,
+        mtime_ns: int,
+        result: BlurResult,
+        *,
+        width: int | None = None,
+        height: int | None = None,
+        is_raw: bool | None = None,
+    ) -> None:
+        try:
+            self._cache.put(
+                path,
+                file_size,
+                mtime_ns,
+                result,
+                width=width,
+                height=height,
+                is_raw=is_raw,
+            )
+        except Exception:
+            return
 
 
 

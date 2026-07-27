@@ -16,6 +16,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from image_loader import default_image_loader
+
 from .config import DetectorConfig
 from .models import CandidatePair
 
@@ -128,9 +130,9 @@ class OrbVerifier:
 
             return cached
 
-        image = cv2.imread(
-            str(path),
-            cv2.IMREAD_GRAYSCALE,
+        image = default_image_loader.load_grayscale(
+            path,
+            max_dimension=self._config.orb_decode_dimension,
         )
 
         if image is None:

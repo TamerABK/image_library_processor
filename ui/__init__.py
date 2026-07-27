@@ -1,1 +1,2 @@
-from .app import PhotoCleanerApp, ResultGroup, ResultItem, run_app
+from .app import PhotoCleanerApp, run_app
+from .models import ResultGroup, ResultItem

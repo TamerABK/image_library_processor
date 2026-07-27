@@ -1,7 +1,29 @@
+flatbuffers==25.12.19
 ImageHash==4.3.2
-numpy==2.5.0
+joblib==1.5.3
+ml_dtypes==0.5.4
+narwhals==2.23.0
+numpy==2.5.1
+onnx==1.22.0
+#onnxruntime-gpu[cuda,cudnn]==1.27.0 ; platform_system == "Windows"
+#onnxruntime-gpu==1.27.0 ; platform_system != "Windows"
+#nvidia-cublas==13.6.0.2 ; platform_system != "Windows"
+#nvidia-cuda-nvrtc==13.3.33 ; platform_system != "Windows"
+#nvidia-cuda-runtime==13.3.29 ; platform_system != "Windows"
+#nvidia-cudnn-cu13==9.25.0.15 ; platform_system != "Windows"
+#nvidia-cufft==12.3.0.29 ; platform_system != "Windows"
+#nvidia-curand==10.4.3.29 ; platform_system != "Windows"
+#nvidia-nvjitlink==13.3.33 ; platform_system != "Windows"
 opencv-python==5.0.0.93
+packaging==26.2
 pillow==12.3.0
+protobuf==7.35.1
 PyWavelets==1.9.0
+scikit-learn==1.9.0
 scipy==1.18.0
 Send2Trash==2.1.0
+setuptools==83.0.0
+threadpoolctl==3.6.0
+typing_extensions==4.16.0
+wheel==0.47.0
+rawpy==0.27.0

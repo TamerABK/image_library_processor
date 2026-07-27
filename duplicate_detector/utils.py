@@ -11,6 +11,8 @@ import imagehash
 import numpy as np
 from PIL import Image
 
+from image_loader import default_image_loader
+
 from .config import DetectorConfig
 
 
@@ -54,14 +56,17 @@ def load_pil(path: Path) -> Image.Image:
     """
     Load an image using Pillow.
     """
-    return Image.open(path)
+    image = default_image_loader.load_pil_for_hashing(path)
+    if image is None:
+        raise ValueError(f"Could not open image: {path}")
+    return image
 
 
 def load_cv(path: Path):
     """
     Load an image using OpenCV.
     """
-    return cv2.imread(str(path), cv2.IMREAD_COLOR)
+    return default_image_loader.load_for_scan(path)
 
 
 # ---------------------------------------------------------------------------

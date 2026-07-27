@@ -39,6 +39,8 @@ class DuplicateDetector:
         self,
         folder: str | Path,
         progress_callback: ProgressCallback | None = None,
+        file_extensions: tuple[str, ...] | None = None,
+        orientation_filter: str | None = None,
     ) -> list[DuplicateGroup]:
 
         def index_progress(done: int, total: int) -> None:
@@ -52,6 +54,8 @@ class DuplicateDetector:
         photos = self._indexer.index(
             folder,
             index_progress,
+            file_extensions=file_extensions,
+            orientation_filter=orientation_filter,
         )
 
         if len(photos) < 2:
