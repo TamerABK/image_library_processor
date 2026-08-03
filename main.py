@@ -10,6 +10,20 @@ from pathlib import Path
 _WINDOWS_DLL_DIRECTORIES: list[object] = []
 
 
+def _application_roots() -> list[Path]:
+    roots: list[Path] = [Path(__file__).resolve().parent]
+
+    if getattr(sys, "frozen", False):
+        frozen_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+        exe_root = Path(sys.executable).resolve().parent
+
+        for candidate in (frozen_root, exe_root):
+            if candidate not in roots:
+                roots.append(candidate)
+
+    return roots
+
+
 def _site_package_roots() -> list[Path]:
     roots: list[Path] = []
 
@@ -76,6 +90,11 @@ def _preload_windows_nvidia_shared_libraries() -> None:
         return
 
     candidate_directories: list[Path] = []
+
+    for root in _application_roots():
+        bundled_gpu_runtime = root / "gpu_runtime_dll"
+        if bundled_gpu_runtime.exists() and bundled_gpu_runtime not in candidate_directories:
+            candidate_directories.append(bundled_gpu_runtime)
 
     for root in _site_package_roots():
         for direct_child in (

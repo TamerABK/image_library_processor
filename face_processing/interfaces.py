@@ -3,28 +3,36 @@ from pathlib import Path
 
 import numpy as np
 
-from .models import DetectedFace, EmbeddedFace, Match, Person, StoredEmbedding, RecognizedFace, UnknownCluster
+from .models import (
+    DetectedFace,
+    EmbeddedFace,
+    FaceAnalysisResult,
+    Match,
+    Person,
+    RecognizedFace,
+    StoredEmbedding,
+    UnknownCluster,
+)
 
 
 class FaceDetector(ABC):
-
     @abstractmethod
     def detect(
         self,
         image: np.ndarray,
         path: Path,
     ) -> list[DetectedFace]:
-        pass
+        ...
+
 
 class FaceEmbedder(ABC):
-
     @abstractmethod
     def embed(
-            self,
-            image: np.ndarray,
-            faces: list[DetectedFace],
+        self,
+        image: np.ndarray,
+        faces: list[DetectedFace],
     ) -> list[EmbeddedFace]:
-        pass
+        ...
 
     @abstractmethod
     def embed_requests(
@@ -35,7 +43,6 @@ class FaceEmbedder(ABC):
 
 
 class FaceDatabase(ABC):
-
     @abstractmethod
     def contains_people(self) -> bool:
         ...
@@ -78,14 +85,12 @@ class FaceDatabase(ABC):
         ...
 
 
-
 class EmbeddingSimilarity(ABC):
-
     @abstractmethod
     def score(
-            self,
-            embedding1: np.ndarray,
-            embedding2: np.ndarray,
+        self,
+        embedding1: np.ndarray,
+        embedding2: np.ndarray,
     ) -> float:
         """
         Higher is better.
@@ -94,9 +99,9 @@ class EmbeddingSimilarity(ABC):
 
     @abstractmethod
     def distance(
-            self,
-            embedding1: np.ndarray,
-            embedding2: np.ndarray,
+        self,
+        embedding1: np.ndarray,
+        embedding2: np.ndarray,
     ) -> float:
         """
         Lower is better.
@@ -115,7 +120,6 @@ class EmbeddingSimilarity(ABC):
 
 
 class FaceRecognizer(ABC):
-
     @abstractmethod
     def recognize(
         self,
@@ -123,8 +127,8 @@ class FaceRecognizer(ABC):
     ) -> tuple[list[RecognizedFace], list[EmbeddedFace]]:
         ...
 
-class FaceClusterer(ABC):
 
+class FaceClusterer(ABC):
     @abstractmethod
     def cluster(
         self,
@@ -132,16 +136,26 @@ class FaceClusterer(ABC):
     ) -> list[UnknownCluster]:
         ...
 
-class FacePreviewRenderer:
 
+class FacePreviewRenderer:
     def render(
         self,
         face: EmbeddedFace,
     ) -> np.ndarray:
         ...
 
-class FaceQualityAssessor(ABC):
 
+class FaceAnalyzer(ABC):
+    @abstractmethod
+    def analyze(
+        self,
+        image: np.ndarray,
+        face: DetectedFace,
+    ) -> FaceAnalysisResult:
+        ...
+
+
+class FaceQualityAssessor(ABC):
     @abstractmethod
     def score(
         self,

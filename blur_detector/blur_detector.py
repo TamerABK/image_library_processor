@@ -290,18 +290,3 @@ class BlurDetector:
             )
         except Exception:
             return
-
-
-
-
-if __name__=="__main__":
-    detector = BlurDetector()
-
-    result = detector.detect("/home/tamer/PycharmProjects/image_deduplicator/data/sharp.jpeg")
-
-    print(f"Laplacian      : {result.laplacian:.2f}")
-    print(f"Sobel          : {result.sobel:.2f}")
-    print(f"Local Contrast : {result.local_contrast:.2f}")
-
-    print(f"Final Score    : {result.final_score:.3f}")
-    print(f"Status         : {result.status}")

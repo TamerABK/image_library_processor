@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .interfaces import EmbeddingSimilarity
+from face_processing.interfaces import EmbeddingSimilarity
 
 
 @dataclass(slots=True)

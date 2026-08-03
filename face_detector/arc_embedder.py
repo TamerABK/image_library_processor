@@ -5,9 +5,10 @@ from typing import Any, Callable
 import cv2
 import numpy as np
 
+from face_processing.interfaces import FaceEmbedder
+from face_processing.models import DetectedFace, EmbeddedFace
+
 from .face_aligner import FaceAligner
-from .interfaces import FaceEmbedder
-from .models import DetectedFace, EmbeddedFace
 from .onnx_runtime import (
     create_inference_session,
     create_session_options,
@@ -92,6 +93,7 @@ class ArcFaceEmbedder(FaceEmbedder):
                     confidence=face.confidence,
                     landmarks=face.landmarks,
                     embedding=embedding,
+                    analysis=face.analysis,
                 )
             )
         return embedded

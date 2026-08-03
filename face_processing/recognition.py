@@ -1,12 +1,8 @@
 from .interfaces import FaceDatabase
-from .models import (
-    EmbeddedFace,
-    RecognizedFace,
-)
+from .models import EmbeddedFace, RecognizedFace
 
 
 class DefaultFaceRecognizer:
-
     def __init__(
         self,
         database: FaceDatabase,
@@ -22,7 +18,6 @@ class DefaultFaceRecognizer:
         list[RecognizedFace],
         list[EmbeddedFace],
     ]:
-
         recognized = []
         unknown = []
 
@@ -30,15 +25,9 @@ class DefaultFaceRecognizer:
             return [], faces
 
         for face in faces:
+            match = self._database.find_nearest_embedding(face.embedding)
 
-            match = self._database.find_nearest_embedding(
-                face.embedding,
-            )
-
-            if (
-                match is None
-                or match.score < self._threshold
-            ):
+            if match is None or match.score < self._threshold:
                 unknown.append(face)
                 continue
 
@@ -50,6 +39,7 @@ class DefaultFaceRecognizer:
                     embedding=face.embedding,
                     person_id=match.person_id,
                     path=face.path,
+                    analysis=face.analysis,
                 )
             )
 

@@ -4,8 +4,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .interfaces import EmbeddingSimilarity, FaceDatabase
-from .models import Match, Person, StoredEmbedding
+from face_processing.interfaces import EmbeddingSimilarity, FaceDatabase
+from face_processing.models import Match, Person, StoredEmbedding
 
 
 class SQLiteFaceDatabase(FaceDatabase):

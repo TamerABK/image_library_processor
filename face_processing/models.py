@@ -3,6 +3,8 @@ from pathlib import Path
 
 import numpy as np
 
+from face_analyzer.models import EyeState, FaceAnalysisResult, HeadPose
+
 
 @dataclass(slots=True)
 class DetectedFace:
@@ -10,18 +12,19 @@ class DetectedFace:
     confidence: float
     landmarks: np.ndarray
     path: Path
-    
+    index: int | None = None
+    analysis: FaceAnalysisResult | None = None
+
+
 @dataclass(slots=True)
 class EmbeddedFace:
-
     bbox: tuple[int, int, int, int]
-
     confidence: float
-
     landmarks: np.ndarray
-
     embedding: np.ndarray
     path: Path
+    analysis: FaceAnalysisResult | None = None
+
 
 @dataclass(slots=True)
 class RecognizedFace:
@@ -31,6 +34,7 @@ class RecognizedFace:
     embedding: np.ndarray
     person_id: int
     path: Path
+    analysis: FaceAnalysisResult | None = None
 
 
 @dataclass(slots=True)
@@ -39,6 +43,7 @@ class UnknownCluster:
     faces: list[EmbeddedFace]
     representative: EmbeddedFace
     preview: np.ndarray | None
+
 
 @dataclass(slots=True)
 class KnownPerson:
@@ -53,11 +58,11 @@ class KnownPersonResult:
     name: str
     photos: list[Path]
 
+
 @dataclass(slots=True)
 class FaceProcessorResult:
     known_people: list[KnownPersonResult]
     unknown_clusters: list[UnknownCluster]
-
 
 
 @dataclass(slots=True)
@@ -76,5 +81,4 @@ class StoredEmbedding:
 @dataclass(slots=True)
 class Match:
     person_id: int
-
     score: float

@@ -1,8 +1,9 @@
 from collections import defaultdict, deque
 
-from .interfaces import EmbeddingSimilarity, FaceClusterer
-from .models import EmbeddedFace, UnknownCluster
 import numpy as np
+
+from face_processing.interfaces import EmbeddingSimilarity, FaceClusterer
+from face_processing.models import EmbeddedFace, UnknownCluster
 
 
 class ConnectedComponentFaceClusterer(FaceClusterer):

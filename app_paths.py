@@ -12,7 +12,7 @@ def resource_root() -> Path:
 
 
 def model_path(filename: str) -> Path:
-    return resource_root() / "omnx_models" / filename
+    return resource_root() / "onnx_models" / filename
 
 
 def app_data_root() -> Path:

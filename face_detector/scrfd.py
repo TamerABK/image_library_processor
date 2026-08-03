@@ -5,14 +5,13 @@
 # @Function      :
 
 from __future__ import division
-import datetime
 import numpy as np
 import onnx
 import onnxruntime
 import os
 import os.path as osp
 import cv2
-import sys
+import warnings
 
 
 def softmax(z):
@@ -150,7 +149,10 @@ class SCRFD:
         input_size = kwargs.get('input_size', None)
         if input_size is not None:
             if self.input_size is not None:
-                print('warning: det_size is already set in scrfd model, ignore')
+                warnings.warn(
+                    'det_size is already set in scrfd model; ignoring input_size',
+                    stacklevel=2,
+                )
             else:
                 self.input_size = input_size
 
@@ -324,35 +326,3 @@ def get_scrfd(name, download=False, root='~/.insightface/models', **kwargs):
 
 def scrfd_2p5gkps(**kwargs):
     return get_scrfd("2p5gkps", download=True, **kwargs)
-
-
-if __name__ == '__main__':
-    import glob
-
-    detector = SCRFD(model_file='./det.onnx')
-    detector.prepare(-1)
-    img_paths = ['tests/data/t1.jpg']
-    for img_path in img_paths:
-        img = cv2.imread(img_path)
-
-        for _ in range(1):
-            ta = datetime.datetime.now()
-            # bboxes, kpss = detector.detect(img, 0.5, input_size = (640, 640))
-            bboxes, kpss = detector.detect(img, 0.5)
-            tb = datetime.datetime.now()
-            print('all cost:', (tb - ta).total_seconds() * 1000)
-        print(img_path, bboxes.shape)
-        if kpss is not None:
-            print(kpss.shape)
-        for i in range(bboxes.shape[0]):
-            bbox = bboxes[i]
-            x1, y1, x2, y2, score = bbox.astype(np.int)
-            cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
-            if kpss is not None:
-                kps = kpss[i]
-                for kp in kps:
-                    kp = kp.astype(np.int)
-                    cv2.circle(img, tuple(kp), 1, (0, 0, 255), 2)
-        filename = img_path.split('/')[-1]
-        print('output:', filename)
-        cv2.imwrite('./outputs/%s' % filename, img)

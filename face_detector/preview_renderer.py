@@ -3,14 +3,13 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from face_processing.interfaces import FacePreviewRenderer as FacePreviewRendererProtocol
+from face_processing.models import EmbeddedFace
 from image_loader import default_image_loader
-
-from .interfaces import FacePreviewRenderer
-from .models import EmbeddedFace
 
 
 @dataclass(slots=True)
-class FacePreviewRenderer(FacePreviewRenderer):
+class FacePreviewRenderer(FacePreviewRendererProtocol):
     output_size: int = 256
     padding_factor: float = 2.0
     circle_color: tuple[int, int, int] = (0, 255, 0)

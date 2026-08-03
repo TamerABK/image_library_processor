@@ -19,17 +19,18 @@ from blur_detector.blur_detector import BlurDetector
 from duplicate_detector.config import DetectorConfig
 from duplicate_detector.duplicate_detector import DuplicateDetector
 from duplicate_detector.models import DuplicateGroup
+from face_analyzer.default_face_analyzer import DefaultFaceAnalyzer
 from face_detector.arc_embedder import ArcFaceEmbedder
 from face_detector.connected_face_clusterer import ConnectedComponentFaceClusterer
 from face_detector.cosine_similarity import CosineEmbeddingSimilarity
 from face_detector.face_aligner import FaceAligner
 from face_detector.face_database_sqlite import SQLiteFaceDatabase
-from face_detector.interfaces import FaceDatabase, FaceDetector
-from face_detector.models import DetectedFace
-from face_detector.face_processor import FaceProcessor
 from face_detector.preview_renderer import FacePreviewRenderer
-from face_detector.face_recognizer import DefaultFaceRecognizer
 from face_detector.scrfd_face_detector import SCRFDFaceDetector
+from face_processing.interfaces import FaceDatabase, FaceDetector
+from face_processing.models import DetectedFace
+from face_processing.processor import FaceProcessor
+from face_processing.recognition import DefaultFaceRecognizer
 from image_file_utils import discover_supported_extensions, normalize_extensions
 
 from .models import (
@@ -68,6 +69,7 @@ class _FaceScanTimingCollector:
         self._lock = threading.Lock()
         self.load_seconds = 0.0
         self.detect_seconds = 0.0
+        self.analyze_seconds = 0.0
         self.embed_seconds = 0.0
         self.align_seconds = 0.0
         self.embed_preprocess_seconds = 0.0
@@ -76,8 +78,10 @@ class _FaceScanTimingCollector:
         self.loaded_image_count = 0
         self.failed_load_count = 0
         self.detect_call_count = 0
+        self.analyze_call_count = 0
         self.embed_call_count = 0
         self.detected_face_count = 0
+        self.analyzed_face_count = 0
         self.embedded_face_count = 0
 
     def record_load(self, seconds: float, success: bool) -> None:
@@ -92,6 +96,12 @@ class _FaceScanTimingCollector:
             self.detect_seconds += seconds
             self.detect_call_count += 1
             self.detected_face_count += face_count
+
+    def record_analyze(self, seconds: float, face_count: int) -> None:
+        with self._lock:
+            self.analyze_seconds += seconds
+            self.analyze_call_count += 1
+            self.analyzed_face_count += face_count
 
     def record_embed(self, seconds: float, face_count: int) -> None:
         with self._lock:
@@ -119,6 +129,7 @@ class _FaceScanTimingCollector:
         with self._lock:
             load_seconds = self.load_seconds
             detect_seconds = self.detect_seconds
+            analyze_seconds = self.analyze_seconds
             embed_seconds = self.embed_seconds
             align_seconds = self.align_seconds
             embed_preprocess_seconds = self.embed_preprocess_seconds
@@ -127,17 +138,25 @@ class _FaceScanTimingCollector:
             loaded_image_count = self.loaded_image_count
             failed_load_count = self.failed_load_count
             detect_call_count = self.detect_call_count
+            analyze_call_count = self.analyze_call_count
             embed_call_count = self.embed_call_count
             detected_face_count = self.detected_face_count
+            analyzed_face_count = self.analyzed_face_count
             embedded_face_count = self.embedded_face_count
 
         other_seconds = max(
             0.0,
-            total_seconds - init_seconds - load_seconds - detect_seconds - embed_seconds,
+            total_seconds
+            - init_seconds
+            - load_seconds
+            - detect_seconds
+            - analyze_seconds
+            - embed_seconds,
         )
         category_seconds = {
             "load": load_seconds,
             "detect": detect_seconds,
+            "analyze": analyze_seconds,
             "embed": embed_seconds,
             "init": init_seconds,
             "other": other_seconds,
@@ -156,6 +175,8 @@ class _FaceScanTimingCollector:
             "load_pct": pct(load_seconds),
             "detect_seconds": round(detect_seconds, 4),
             "detect_pct": pct(detect_seconds),
+            "analyze_seconds": round(analyze_seconds, 4),
+            "analyze_pct": pct(analyze_seconds),
             "embed_seconds": round(embed_seconds, 4),
             "embed_pct": pct(embed_seconds),
             "align_seconds": round(align_seconds, 4),
@@ -173,8 +194,10 @@ class _FaceScanTimingCollector:
             "loaded_image_count": loaded_image_count,
             "failed_load_count": failed_load_count,
             "detect_call_count": detect_call_count,
+            "analyze_call_count": analyze_call_count,
             "embed_call_count": embed_call_count,
             "detected_face_count": detected_face_count,
+            "analyzed_face_count": analyzed_face_count,
             "embedded_face_count": embedded_face_count,
         }
 
@@ -233,6 +256,19 @@ class _TimedFaceProcessor(FaceProcessor):
         if collector is not None:
             collector.record_embed(embed_elapsed, len(embedded))
         return embedded
+
+    def _analyze_faces(
+        self,
+        image: np.ndarray,
+        faces: list[DetectedFace],
+    ) -> list[DetectedFace]:
+        collector = self._timing_collector
+        analyze_started = time.perf_counter()
+        analyzed = super()._analyze_faces(image, faces)
+        analyze_elapsed = time.perf_counter() - analyze_started
+        if collector is not None and self._analyzer is not None and faces:
+            collector.record_analyze(analyze_elapsed, len(analyzed))
+        return analyzed
 
     def runtime_info(self) -> dict[str, Any]:
         info = {
@@ -953,10 +989,16 @@ class PhotoCleanerViewModel:
         if self._face_processor is None:
             detector_model = model_path("scrfd_10g_bnkps.onnx")
             embedder_model = model_path("glintr100.onnx")
+            eye_state_model = model_path("open_closed_eye.onnx")
+            head_pose_model = model_path("sixdrepnet.onnx")
             database_path = app_data_path("face_embeddings.sqlite3")
 
             detector = SCRFDFaceDetector(model_path=detector_model)
             embedder = ArcFaceEmbedder(model_path=embedder_model, aligner=FaceAligner())
+            analyzer = DefaultFaceAnalyzer(
+                eye_state_model_path=eye_state_model,
+                head_pose_model_path=head_pose_model,
+            )
             similarity = CosineEmbeddingSimilarity()
             self._face_database = SQLiteFaceDatabase(database_path, similarity)
             recognizer = DefaultFaceRecognizer(self._face_database, similarity.default_threshold)
@@ -968,6 +1010,7 @@ class PhotoCleanerViewModel:
             self._face_processor = _TimedFaceProcessor(
                 detector=detector,
                 embedder=embedder,
+                analyzer=analyzer,
                 recognizer=recognizer,
                 clusterer=clusterer,
                 database=self._face_database,

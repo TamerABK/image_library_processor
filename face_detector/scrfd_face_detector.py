@@ -3,8 +3,8 @@ from typing import Any
 
 import numpy as np
 
-from .interfaces import FaceDetector
-from .models import DetectedFace
+from face_processing.interfaces import FaceDetector
+from face_processing.models import DetectedFace
 from .onnx_runtime import (
     create_session_options,
     get_available_providers,
@@ -91,6 +91,8 @@ class SCRFDFaceDetector(FaceDetector):
                     bbox=bbox,
                     confidence=float(score),
                     landmarks=np.asarray(kps, dtype=np.float32),
+                    index=None,
+                    analysis=None,
                 )
             )
 

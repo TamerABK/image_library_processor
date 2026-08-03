@@ -2,7 +2,7 @@ import os
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -11,12 +11,14 @@ import numpy as np
 from image_file_utils import find_supported_files
 from image_loader import default_image_loader
 
-from .face_scan_cache import FaceScanCache
+from .cache import FaceScanCache, ImageFaceAnalysisCache
 from .interfaces import (
+    FaceAnalyzer,
     FaceClusterer,
+    FaceDatabase,
     FaceDetector,
+    FaceEmbedder,
     FaceRecognizer,
-    FaceDatabase, FaceEmbedder
 )
 from .models import (
     DetectedFace,
@@ -28,7 +30,6 @@ from .models import (
 
 
 class FaceProcessor:
-
     SUPPORTED_EXTENSIONS = default_image_loader.supported_extensions()
 
     def __init__(
@@ -38,6 +39,7 @@ class FaceProcessor:
         recognizer: FaceRecognizer,
         clusterer: FaceClusterer,
         database: FaceDatabase,
+        analyzer: FaceAnalyzer | None = None,
         worker_factory: Callable[[], FaceDetector] | None = None,
         max_workers: int | None = None,
         embed_batch_size: int = 64,
@@ -47,11 +49,13 @@ class FaceProcessor:
         self._recognizer = recognizer
         self._clusterer = clusterer
         self._database = database
+        self._analyzer = analyzer
         self._worker_factory = worker_factory
         self._max_workers = max_workers
         self._embed_batch_size = max(1, embed_batch_size)
         self._thread_local = threading.local()
         self._cache = FaceScanCache()
+        self._analysis_cache = ImageFaceAnalysisCache()
 
     def scan_folder(
         self,
@@ -61,16 +65,11 @@ class FaceProcessor:
         orientation_filter: str | None = None,
         known_people_only: bool = False,
     ) -> FaceProcessorResult:
-
         folder = Path(folder)
 
         known_faces = []
         unknown_faces: list[EmbeddedFace] = []
-        cache_signature = (
-            self._database.cache_signature()
-            if known_people_only
-            else None
-        )
+        cache_signature = self._database.cache_signature() if known_people_only else None
 
         image_files = find_supported_files(
             folder,
@@ -108,18 +107,24 @@ class FaceProcessor:
                 stat.st_mtime_ns,
                 include_unknown_faces=not known_people_only,
                 database_signature=cache_signature,
+                require_analysis=self._analyzer is not None,
             )
 
             if cached_faces is not None:
+                if self._analyzer is not None:
+                    self._store_face_analysis_from_embedded(
+                        normalized_path,
+                        stat.st_size,
+                        stat.st_mtime_ns,
+                        cached_faces,
+                    )
                 processed_results[index] = self._classify_faces(cached_faces)
                 completed += 1
                 if progress_callback:
                     progress_callback(completed, total_files)
                 continue
 
-            pending.append(
-                (index, normalized_path, stat.st_size, stat.st_mtime_ns)
-            )
+            pending.append((index, normalized_path, stat.st_size, stat.st_mtime_ns))
 
         max_workers = self._resolve_max_workers(len(pending))
         pending_detected: dict[int, _PendingDetectedImage] = {}
@@ -174,23 +179,38 @@ class FaceProcessor:
             detected_faces: list[DetectedFace],
         ) -> None:
             if image is None or not detected_faces:
-                detected_image = _PendingDetectedImage(
-                    index=index,
-                    path=path,
-                    file_size=file_size,
-                    mtime_ns=mtime_ns,
-                    detected_faces=[],
-                    embedded_faces=[],
+                if image is not None:
+                    self._store_face_analysis(
+                        path,
+                        file_size,
+                        mtime_ns,
+                        [],
+                    )
+                finalize_detected_image(
+                    _PendingDetectedImage(
+                        index=index,
+                        path=path,
+                        file_size=file_size,
+                        mtime_ns=mtime_ns,
+                        detected_faces=[],
+                        embedded_faces=[],
+                    )
                 )
-                finalize_detected_image(detected_image)
                 return
 
+            analyzed_faces = self._analyze_faces(image, detected_faces)
+            self._store_face_analysis(
+                path,
+                file_size,
+                mtime_ns,
+                analyzed_faces,
+            )
             pending_detected[index] = _PendingDetectedImage(
                 index=index,
                 path=path,
                 file_size=file_size,
                 mtime_ns=mtime_ns,
-                detected_faces=detected_faces,
+                detected_faces=analyzed_faces,
                 embedded_faces=[],
             )
             pending_face_requests.extend(
@@ -199,7 +219,7 @@ class FaceProcessor:
                     image=image,
                     face=face,
                 )
-                for face in detected_faces
+                for face in analyzed_faces
             )
             flush_face_requests()
 
@@ -237,13 +257,9 @@ class FaceProcessor:
         if known_people_only:
             unknown_clusters = []
         else:
-            unknown_clusters = self._clusterer.cluster(
-                unknown_faces,
-            )
+            unknown_clusters = self._clusterer.cluster(unknown_faces)
 
-        people = self._group_known_people(
-            known_faces,
-        )
+        people = self._group_known_people(known_faces)
 
         if progress_callback:
             progress_callback(total_files, total_files)
@@ -277,6 +293,25 @@ class FaceProcessor:
         detector = self._get_worker_detector()
         return image, self._detect_faces(detector, image, path)
 
+    def _analyze_faces(
+        self,
+        image: np.ndarray,
+        faces: list[DetectedFace],
+    ) -> list[DetectedFace]:
+        if self._analyzer is None or not faces:
+            return faces
+
+        analyzed_faces: list[DetectedFace] = []
+        for face_index, face in enumerate(faces):
+            face_with_index = replace(face, index=face_index)
+            try:
+                analysis = self._analyzer.analyze(image, face_with_index)
+            except Exception:
+                analyzed_faces.append(face_with_index)
+                continue
+            analyzed_faces.append(replace(face_with_index, analysis=analysis))
+        return analyzed_faces
+
     def _embed_requests(
         self,
         face_requests: list["_PendingFaceRequest"],
@@ -303,6 +338,7 @@ class FaceProcessor:
         mtime_ns: int,
         include_unknown_faces: bool,
         database_signature: str | None,
+        require_analysis: bool,
     ) -> list[EmbeddedFace] | None:
         try:
             return self._cache.get(
@@ -311,6 +347,7 @@ class FaceProcessor:
                 mtime_ns,
                 include_unknown_faces=include_unknown_faces,
                 database_signature=database_signature,
+                require_analysis=require_analysis,
             )
         except Exception:
             return None
@@ -345,6 +382,50 @@ class FaceProcessor:
         except Exception:
             return
 
+    def _store_face_analysis(
+        self,
+        path: Path,
+        file_size: int,
+        mtime_ns: int,
+        faces: list[DetectedFace],
+    ) -> None:
+        try:
+            metadata = default_image_loader.read_metadata(path)
+            self._analysis_cache.put(
+                path,
+                file_size,
+                mtime_ns,
+                faces,
+                width=metadata.width if metadata is not None else None,
+                height=metadata.height if metadata is not None else None,
+                is_raw=metadata.is_raw if metadata is not None else None,
+            )
+        except Exception:
+            return
+
+    def _store_face_analysis_from_embedded(
+        self,
+        path: Path,
+        file_size: int,
+        mtime_ns: int,
+        faces: list[EmbeddedFace],
+    ) -> None:
+        self._store_face_analysis(
+            path,
+            file_size,
+            mtime_ns,
+            [
+                DetectedFace(
+                    bbox=face.bbox,
+                    confidence=face.confidence,
+                    landmarks=face.landmarks,
+                    path=face.path,
+                    analysis=face.analysis,
+                )
+                for face in faces
+            ],
+        )
+
     @staticmethod
     def _faces_for_cache(
         faces: list[EmbeddedFace],
@@ -361,13 +442,12 @@ class FaceProcessor:
                 landmarks=face.landmarks,
                 embedding=face.embedding,
                 path=face.path,
+                analysis=face.analysis,
             )
             for face in recognized_faces
         ]
 
-    def _get_worker_detector(
-        self,
-    ) -> FaceDetector:
+    def _get_worker_detector(self) -> FaceDetector:
         if self._worker_factory is None:
             return self._detector
 
@@ -393,22 +473,17 @@ class FaceProcessor:
 
     def _group_known_people(
         self,
-        faces,
+        faces: list[RecognizedFace],
     ) -> list[KnownPersonResult]:
-
         grouped = defaultdict(set)
 
         for face in faces:
-
             grouped[face.person_id].add(face.path)
 
         results = []
 
         for person_id, photos in grouped.items():
-
-            person = self._database.get_person(
-                person_id,
-            )
+            person = self._database.get_person(person_id)
 
             if person is None:
                 continue
@@ -422,7 +497,7 @@ class FaceProcessor:
             )
 
         results.sort(
-            key=lambda p: len(p.photos),
+            key=lambda person_result: len(person_result.photos),
             reverse=True,
         )
 
@@ -431,8 +506,8 @@ class FaceProcessor:
 
 @dataclass(slots=True)
 class _ProcessedImageResult:
-    recognized: list
-    unknown: list
+    recognized: list[RecognizedFace]
+    unknown: list[EmbeddedFace]
 
 
 @dataclass(slots=True)
