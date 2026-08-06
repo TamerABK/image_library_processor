@@ -19,6 +19,10 @@ class ResultGroup:
     title: str
     items: list[ResultItem]
     group_type: str = "default"
+    representative_path: Path | None = None
+    subtitle: str = ""
+    metadata_lines: tuple[str, ...] = ()
+    cohesion_text: str = ""
 
 
 @dataclass(slots=True)
@@ -49,6 +53,21 @@ class AppState:
     known_people_only: bool = False
     auto_export_faces: bool = False
     mode: str = "duplicates"
+    vibe_preset: str = "Balanced Scenes"
+    available_vibe_presets: tuple[str, ...] = (
+        "Session",
+        "Balanced Scenes",
+        "Tight Scenes",
+    )
+    vibe_include_people: bool = True
+    vibe_include_color: bool = True
+    vibe_include_composition: bool = True
+    vibe_show_advanced: bool = False
+    vibe_session_gap_minutes: str = "30"
+    vibe_minimum_similarity: str = "0.68"
+    vibe_minimum_cohesion: str = "0.70"
+    vibe_maximum_group_size: str = "40"
+    vibe_batch_size: str = "16"
     status: str = "Choose a folder to start."
     count_text: str = ""
     elapsed_text: str = "Elapsed: 00:00"
@@ -56,13 +75,16 @@ class AppState:
     face_group_label: str = ""
     face_group_labels: tuple[str, ...] = ()
     show_face_options: bool = False
+    show_vibe_options: bool = False
     show_face_selector: bool = False
     show_pagination: bool = False
     can_show_previous_page: bool = False
     can_show_next_page: bool = False
     can_scan: bool = True
+    can_cancel: bool = False
     can_delete: bool = False
     can_export: bool = False
+    can_export_vibe_debug: bool = False
     progress_mode: str = "determinate"
     progress_value: int = 0
     progress_max: int = 100
@@ -87,11 +109,15 @@ class ScanResultMessage:
     mode: str
     results: list[ResultGroup]
     known_people_only: bool
+    summary: str | None = None
+    warning: str | None = None
+    debug_payload: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
 class ScanErrorMessage:
     message: str
+    canceled: bool = False
 
 
 BackgroundMessage: TypeAlias = (

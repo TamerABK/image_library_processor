@@ -7,6 +7,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from scan_controls import CancellationToken
+
 from .candidate_generator import CandidateGenerator
 from .config import DetectorConfig
 from .indexer import ImageIndexer
@@ -41,6 +43,7 @@ class DuplicateDetector:
         progress_callback: ProgressCallback | None = None,
         file_extensions: tuple[str, ...] | None = None,
         orientation_filter: str | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> list[DuplicateGroup]:
 
         def index_progress(done: int, total: int) -> None:
@@ -56,6 +59,7 @@ class DuplicateDetector:
             index_progress,
             file_extensions=file_extensions,
             orientation_filter=orientation_filter,
+            cancellation_token=cancellation_token,
         )
 
         if len(photos) < 2:
@@ -71,7 +75,10 @@ class DuplicateDetector:
         for pair in self._generator.generate(
                 photos,
                 progress_callback,
+                cancellation_token=cancellation_token,
         ):
+            if cancellation_token is not None:
+                cancellation_token.raise_if_canceled()
 
             if self._verifier.verify(pair):
                 uf.union(

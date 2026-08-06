@@ -10,6 +10,7 @@ import numpy as np
 
 from image_file_utils import find_supported_files
 from image_loader import default_image_loader
+from scan_controls import CancellationToken
 
 from .cache import FaceScanCache, ImageFaceAnalysisCache
 from .interfaces import (
@@ -64,6 +65,7 @@ class FaceProcessor:
         file_extensions: tuple[str, ...] | None = None,
         orientation_filter: str | None = None,
         known_people_only: bool = False,
+        cancellation_token: CancellationToken | None = None,
     ) -> FaceProcessorResult:
         folder = Path(folder)
 
@@ -87,6 +89,8 @@ class FaceProcessor:
         completed = 0
 
         for index, path in enumerate(image_files):
+            if cancellation_token is not None:
+                cancellation_token.raise_if_canceled()
             normalized_path = path.resolve()
 
             try:
@@ -132,6 +136,8 @@ class FaceProcessor:
 
         def finalize_detected_image(detected_image: "_PendingDetectedImage") -> None:
             nonlocal completed
+            if cancellation_token is not None:
+                cancellation_token.raise_if_canceled()
             processed_result = self._classify_faces(detected_image.embedded_faces)
             self._store_cached_faces(
                 detected_image.path,
@@ -154,6 +160,8 @@ class FaceProcessor:
             while pending_face_requests and (
                 force or len(pending_face_requests) >= self._embed_batch_size
             ):
+                if cancellation_token is not None:
+                    cancellation_token.raise_if_canceled()
                 batch_size = min(self._embed_batch_size, len(pending_face_requests))
                 batch = pending_face_requests[:batch_size]
                 del pending_face_requests[:batch_size]
@@ -225,6 +233,8 @@ class FaceProcessor:
 
         if max_workers == 1:
             for index, path, file_size, mtime_ns in pending:
+                if cancellation_token is not None:
+                    cancellation_token.raise_if_canceled()
                 image, detected_faces = self._load_and_detect(path)
                 consume_detected_image(index, path, file_size, mtime_ns, image, detected_faces)
         else:
@@ -240,6 +250,8 @@ class FaceProcessor:
                 }
 
                 for future in as_completed(futures):
+                    if cancellation_token is not None:
+                        cancellation_token.raise_if_canceled()
                     index, path, file_size, mtime_ns = futures[future]
                     image, detected_faces = future.result()
                     consume_detected_image(index, path, file_size, mtime_ns, image, detected_faces)

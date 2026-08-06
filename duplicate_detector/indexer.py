@@ -12,6 +12,7 @@ import imagehash
 
 from image_file_utils import find_supported_files
 from image_loader import default_image_loader
+from scan_controls import CancellationToken
 
 from .cache import DuplicatePhotoCache
 from .config import DetectorConfig
@@ -47,6 +48,7 @@ class ImageIndexer:
         progress_callback: ProgressCallback | None = None,
         file_extensions: tuple[str, ...] | None = None,
         orientation_filter: str | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> list[PhotoInfo]:
         """
         Index every supported image inside a folder.
@@ -75,6 +77,8 @@ class ImageIndexer:
             completed = 0
 
             for future in as_completed(futures):
+                if cancellation_token is not None:
+                    cancellation_token.raise_if_canceled()
 
                 photo = future.result()
 

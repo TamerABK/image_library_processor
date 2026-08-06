@@ -18,6 +18,7 @@ class PhotoCleanerViewCallbacks:
     browse_folder: Callable[[], None]
     refresh_file_types: Callable[[], None]
     start_scan: Callable[[], None]
+    cancel_scan: Callable[[], None]
     mode_changed: Callable[[], None]
     face_group_selected: Callable[[], None]
     show_previous_page: Callable[[], None]
@@ -25,10 +26,12 @@ class PhotoCleanerViewCallbacks:
     item_selection_changed: Callable[[Path, bool], None]
     delete_selected: Callable[[], None]
     export_selected: Callable[[], None]
+    export_vibe_debug: Callable[[], None]
 
 
 class PhotoCleanerView:
     thumbnail_size = (128, 128)
+    group_thumbnail_size = (112, 112)
     card_min_width = 220
     full_image_max_size = (1600, 1200)
     confirmation_preview_size = (520, 520)
@@ -48,6 +51,16 @@ class PhotoCleanerView:
         self.known_people_only_var = tk.BooleanVar(value=False)
         self.auto_export_faces_var = tk.BooleanVar(value=False)
         self.mode_var = tk.StringVar(value="duplicates")
+        self.vibe_preset_var = tk.StringVar(value="Balanced Scenes")
+        self.vibe_include_people_var = tk.BooleanVar(value=True)
+        self.vibe_include_color_var = tk.BooleanVar(value=True)
+        self.vibe_include_composition_var = tk.BooleanVar(value=True)
+        self.vibe_show_advanced_var = tk.BooleanVar(value=False)
+        self.vibe_session_gap_var = tk.StringVar(value="30")
+        self.vibe_minimum_similarity_var = tk.StringVar(value="0.58")
+        self.vibe_minimum_cohesion_var = tk.StringVar(value="0.60")
+        self.vibe_maximum_group_size_var = tk.StringVar(value="80")
+        self.vibe_batch_size_var = tk.StringVar(value="16")
         self.status_var = tk.StringVar(value="Choose a folder to start.")
         self.count_var = tk.StringVar(value="")
         self.elapsed_var = tk.StringVar(value="Elapsed: 00:00")
@@ -58,7 +71,7 @@ class PhotoCleanerView:
         self._is_applying_selection_update = False
         self._selection_vars: dict[Path, tk.BooleanVar] = {}
         self._selection_state: dict[Path, bool] = {}
-        self._thumbnails: dict[Path, ImageTk.PhotoImage] = {}
+        self._thumbnails: dict[tuple[Path, tuple[int, int]], ImageTk.PhotoImage] = {}
         self._render_groups: list[ResultGroup] = []
         self._shown_preview_items: list[PreviewItem] = []
         self._relayout_after_id: str | None = None
@@ -100,6 +113,36 @@ class PhotoCleanerView:
     def current_mode(self) -> str:
         return self.mode_var.get()
 
+    def current_vibe_preset(self) -> str:
+        return self.vibe_preset_var.get()
+
+    def current_vibe_include_people(self) -> bool:
+        return self.vibe_include_people_var.get()
+
+    def current_vibe_include_color(self) -> bool:
+        return self.vibe_include_color_var.get()
+
+    def current_vibe_include_composition(self) -> bool:
+        return self.vibe_include_composition_var.get()
+
+    def current_vibe_show_advanced(self) -> bool:
+        return self.vibe_show_advanced_var.get()
+
+    def current_vibe_session_gap_minutes(self) -> str:
+        return self.vibe_session_gap_var.get()
+
+    def current_vibe_minimum_similarity(self) -> str:
+        return self.vibe_minimum_similarity_var.get()
+
+    def current_vibe_minimum_cohesion(self) -> str:
+        return self.vibe_minimum_cohesion_var.get()
+
+    def current_vibe_maximum_group_size(self) -> str:
+        return self.vibe_maximum_group_size_var.get()
+
+    def current_vibe_batch_size(self) -> str:
+        return self.vibe_batch_size_var.get()
+
     def current_known_people_only(self) -> bool:
         return self.known_people_only_var.get()
 
@@ -121,6 +164,16 @@ class PhotoCleanerView:
             self.known_people_only_var.set(state.known_people_only)
             self.auto_export_faces_var.set(state.auto_export_faces)
             self.mode_var.set(state.mode)
+            self.vibe_preset_var.set(state.vibe_preset)
+            self.vibe_include_people_var.set(state.vibe_include_people)
+            self.vibe_include_color_var.set(state.vibe_include_color)
+            self.vibe_include_composition_var.set(state.vibe_include_composition)
+            self.vibe_show_advanced_var.set(state.vibe_show_advanced)
+            self.vibe_session_gap_var.set(state.vibe_session_gap_minutes)
+            self.vibe_minimum_similarity_var.set(state.vibe_minimum_similarity)
+            self.vibe_minimum_cohesion_var.set(state.vibe_minimum_cohesion)
+            self.vibe_maximum_group_size_var.set(state.vibe_maximum_group_size)
+            self.vibe_batch_size_var.set(state.vibe_batch_size)
             self.status_var.set(state.status)
             self.count_var.set(state.count_text)
             self.elapsed_var.set(state.elapsed_text)
@@ -129,6 +182,7 @@ class PhotoCleanerView:
             self.file_type_combo.configure(values=state.available_file_types)
             self.orientation_combo.configure(values=state.available_orientations)
             self.face_group_combo.configure(values=state.face_group_labels)
+            self.vibe_preset_combo.configure(values=state.available_vibe_presets)
         finally:
             self._is_applying_state = False
 
@@ -136,6 +190,16 @@ class PhotoCleanerView:
             self.face_options_frame.grid()
         else:
             self.face_options_frame.grid_remove()
+
+        if state.show_vibe_options:
+            self.vibe_options_frame.grid()
+        else:
+            self.vibe_options_frame.grid_remove()
+
+        if state.show_vibe_options and state.vibe_show_advanced:
+            self.vibe_advanced_frame.grid()
+        else:
+            self.vibe_advanced_frame.grid_remove()
 
         if state.show_face_selector:
             self.face_selector_frame.grid()
@@ -148,8 +212,12 @@ class PhotoCleanerView:
             self.pagination_frame.grid_remove()
 
         self.scan_button.configure(state="normal" if state.can_scan else "disabled")
+        self.cancel_button.configure(state="normal" if state.can_cancel else "disabled")
         self.delete_button.configure(state="normal" if state.can_delete else "disabled")
         self.export_button.configure(state="normal" if state.can_export else "disabled")
+        self.export_vibe_debug_button.configure(
+            state="normal" if state.can_export_vibe_debug else "disabled"
+        )
         self.prev_page_button.configure(
             state="normal" if state.can_show_previous_page else "disabled"
         )
@@ -198,8 +266,52 @@ class PhotoCleanerView:
             group_frame.grid(row=row, column=0, sticky="ew", pady=(0, 12))
             group_frame.columnconfigure(0, weight=1)
 
+            content_row = 0
+            if group.representative_path is not None or group.subtitle or group.metadata_lines or group.cohesion_text:
+                summary_frame = ttk.Frame(group_frame)
+                summary_frame.grid(row=content_row, column=0, sticky="ew", pady=(0, 10))
+                summary_frame.columnconfigure(1, weight=1)
+
+                if group.representative_path is not None:
+                    representative_thumbnail = self._load_thumbnail(
+                        group.representative_path,
+                        size=self.group_thumbnail_size,
+                    )
+                    if representative_thumbnail is not None:
+                        ttk.Label(summary_frame, image=representative_thumbnail).grid(
+                            row=0,
+                            column=0,
+                            rowspan=max(1, 1 + len(group.metadata_lines)),
+                            sticky="nw",
+                            padx=(0, 12),
+                        )
+
+                summary_text = ttk.Frame(summary_frame)
+                summary_text.grid(row=0, column=1, sticky="ew")
+                if group.subtitle:
+                    ttk.Label(summary_text, text=group.subtitle, justify="left").grid(
+                        row=0,
+                        column=0,
+                        sticky="w",
+                    )
+                for line_index, line in enumerate(group.metadata_lines, start=1):
+                    ttk.Label(summary_text, text=line, justify="left").grid(
+                        row=line_index,
+                        column=0,
+                        sticky="w",
+                        pady=(2 if line_index == 1 else 0, 0),
+                    )
+                if group.cohesion_text:
+                    ttk.Label(summary_text, text=group.cohesion_text, foreground="#1d4ed8").grid(
+                        row=len(group.metadata_lines) + 1,
+                        column=0,
+                        sticky="w",
+                        pady=(4, 0),
+                    )
+                content_row += 1
+
             items_frame = ttk.Frame(group_frame)
-            items_frame.grid(row=0, column=0, sticky="ew")
+            items_frame.grid(row=content_row, column=0, sticky="ew")
 
             group_columns = min(columns, len(group.items))
             for column in range(group_columns):
@@ -263,6 +375,21 @@ class PhotoCleanerView:
         if title is None:
             return filedialog.askdirectory()
         return filedialog.askdirectory(title=title)
+
+    def ask_save_path(
+        self,
+        *,
+        title: str,
+        initialfile: str,
+        defaultextension: str = ".json",
+        filetypes: tuple[tuple[str, str], ...] = (("JSON files", "*.json"), ("All files", "*.*")),
+    ) -> str:
+        return filedialog.asksaveasfilename(
+            title=title,
+            initialfile=initialfile,
+            defaultextension=defaultextension,
+            filetypes=filetypes,
+        )
 
     def confirm_delete(self, count: int) -> bool:
         return messagebox.askyesno(
@@ -551,16 +678,22 @@ class PhotoCleanerView:
         ).grid(row=0, column=1, padx=(12, 0))
         ttk.Radiobutton(
             mode_frame,
+            text="Vibe groups",
+            value="vibe",
+            variable=self.mode_var,
+        ).grid(row=0, column=2, padx=(12, 0))
+        ttk.Radiobutton(
+            mode_frame,
             text="Blurry photos",
             value="blurry",
             variable=self.mode_var,
-        ).grid(row=0, column=2, padx=(12, 0))
+        ).grid(row=0, column=3, padx=(12, 0))
         ttk.Radiobutton(
             mode_frame,
             text="Facial recognition",
             value="faces",
             variable=self.mode_var,
-        ).grid(row=0, column=3, padx=(12, 0))
+        ).grid(row=0, column=4, padx=(12, 0))
         self.mode_var.trace_add("write", self._on_mode_changed)
 
         self.face_options_frame = ttk.Frame(controls)
@@ -577,11 +710,106 @@ class PhotoCleanerView:
         ).grid(row=1, column=0, sticky="w", pady=(6, 0))
         self.face_options_frame.grid_remove()
 
+        self.vibe_options_frame = ttk.LabelFrame(
+            controls,
+            text="Vibe Grouping",
+            padding=12,
+        )
+        self.vibe_options_frame.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        self.vibe_options_frame.columnconfigure(1, weight=1)
+
+        preset_label_frame = ttk.Frame(self.vibe_options_frame)
+        preset_label_frame.grid(row=0, column=0, sticky="w")
+        ttk.Label(preset_label_frame, text="Preset").grid(row=0, column=0, sticky="w")
+        info_label = ttk.Label(preset_label_frame, text="?", foreground="#1d4ed8", cursor="question_arrow")
+        info_label.grid(row=0, column=1, padx=(6, 0), sticky="w")
+        _Tooltip(
+            info_label,
+            "Groups photos that share a moment, people, setting, or visual mood.\n"
+            "Unlike Near Duplicates, photos can be visually different and still belong\n"
+            "to the same Vibe Group.",
+        )
+
+        self.vibe_preset_combo = ttk.Combobox(
+            self.vibe_options_frame,
+            textvariable=self.vibe_preset_var,
+            state="readonly",
+            values=(self.vibe_preset_var.get(),),
+            width=24,
+        )
+        self.vibe_preset_combo.grid(row=0, column=1, sticky="w", padx=(8, 8))
+        self.vibe_preset_combo.bind("<<ComboboxSelected>>", lambda _event: self._callbacks.mode_changed())
+
+        preset_actions = ttk.Frame(self.vibe_options_frame)
+        preset_actions.grid(row=0, column=2, sticky="e")
+        ttk.Button(preset_actions, text="Reset", command=self._reset_vibe_defaults).grid(
+            row=0,
+            column=0,
+            sticky="e",
+        )
+
+        toggles = ttk.Frame(self.vibe_options_frame)
+        toggles.grid(row=1, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        ttk.Checkbutton(
+            toggles,
+            text="Use known people",
+            variable=self.vibe_include_people_var,
+            command=self._callbacks.mode_changed,
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Checkbutton(
+            toggles,
+            text="Use color and mood",
+            variable=self.vibe_include_color_var,
+            command=self._callbacks.mode_changed,
+        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
+        ttk.Checkbutton(
+            toggles,
+            text="Use composition",
+            variable=self.vibe_include_composition_var,
+            command=self._callbacks.mode_changed,
+        ).grid(row=0, column=2, sticky="w", padx=(12, 0))
+        ttk.Checkbutton(
+            toggles,
+            text="Advanced",
+            variable=self.vibe_show_advanced_var,
+            command=self._callbacks.mode_changed,
+        ).grid(row=0, column=3, sticky="w", padx=(12, 0))
+
+        self.vibe_advanced_frame = ttk.Frame(self.vibe_options_frame)
+        self.vibe_advanced_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+
+        advanced_fields = (
+            ("Session gap (min)", self.vibe_session_gap_var, 0),
+            ("Min pair similarity", self.vibe_minimum_similarity_var, 1),
+            ("Min cohesion", self.vibe_minimum_cohesion_var, 2),
+            ("Max group size", self.vibe_maximum_group_size_var, 3),
+            ("Batch size", self.vibe_batch_size_var, 4),
+        )
+        for label_text, variable, column in advanced_fields:
+            field = ttk.Frame(self.vibe_advanced_frame)
+            field.grid(row=0, column=column, sticky="w", padx=(0, 10))
+            ttk.Label(field, text=label_text).grid(row=0, column=0, sticky="w")
+            entry = ttk.Entry(field, textvariable=variable, width=10)
+            entry.grid(row=1, column=0, sticky="w", pady=(4, 0))
+            entry.bind("<FocusOut>", lambda _event: self._callbacks.mode_changed())
+            entry.bind("<Return>", lambda _event: self._callbacks.mode_changed())
+
+        self.vibe_options_frame.grid_remove()
+        self.vibe_advanced_frame.grid_remove()
+
         actions = ttk.Frame(controls)
-        actions.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        actions.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(12, 0))
 
         self.scan_button = ttk.Button(actions, text="Scan folder", command=self._callbacks.start_scan)
         self.scan_button.grid(row=0, column=0, sticky="w")
+
+        self.cancel_button = ttk.Button(
+            actions,
+            text="Cancel",
+            command=self._callbacks.cancel_scan,
+            state="disabled",
+        )
+        self.cancel_button.grid(row=0, column=1, sticky="w", padx=(10, 0))
 
         self.delete_button = ttk.Button(
             actions,
@@ -589,7 +817,7 @@ class PhotoCleanerView:
             command=self._callbacks.delete_selected,
             state="disabled",
         )
-        self.delete_button.grid(row=0, column=1, sticky="w", padx=(10, 0))
+        self.delete_button.grid(row=0, column=2, sticky="w", padx=(10, 0))
 
         self.export_button = ttk.Button(
             actions,
@@ -597,7 +825,15 @@ class PhotoCleanerView:
             command=self._callbacks.export_selected,
             state="disabled",
         )
-        self.export_button.grid(row=0, column=2, sticky="w", padx=(10, 0))
+        self.export_button.grid(row=0, column=3, sticky="w", padx=(10, 0))
+
+        self.export_vibe_debug_button = ttk.Button(
+            actions,
+            text="Export Vibe Debug",
+            command=self._callbacks.export_vibe_debug,
+            state="disabled",
+        )
+        self.export_vibe_debug_button.grid(row=0, column=4, sticky="w", padx=(10, 0))
 
         status = ttk.Frame(self.root, padding=(12, 0, 12, 8))
         status.grid(row=1, column=0, sticky="ew")
@@ -681,6 +917,19 @@ class PhotoCleanerView:
             return
         self._callbacks.mode_changed()
 
+    def _reset_vibe_defaults(self) -> None:
+        self.vibe_preset_var.set("Balanced Scenes")
+        self.vibe_include_people_var.set(True)
+        self.vibe_include_color_var.set(True)
+        self.vibe_include_composition_var.set(True)
+        self.vibe_show_advanced_var.set(False)
+        self.vibe_session_gap_var.set("30")
+        self.vibe_minimum_similarity_var.set("0.68")
+        self.vibe_minimum_cohesion_var.set("0.70")
+        self.vibe_maximum_group_size_var.set("40")
+        self.vibe_batch_size_var.set("16")
+        self._callbacks.mode_changed()
+
     def _clear_results(self) -> None:
         self._thumbnails.clear()
         for child in self.results_frame.winfo_children():
@@ -755,19 +1004,28 @@ class PhotoCleanerView:
                 pady=(4, 0),
             )
 
-    def _load_thumbnail(self, path: Path) -> ImageTk.PhotoImage | None:
-        if path in self._thumbnails:
-            return self._thumbnails[path]
+    def _load_thumbnail(
+        self,
+        path: Path,
+        *,
+        size: tuple[int, int] | None = None,
+    ) -> ImageTk.PhotoImage | None:
+        if size is None:
+            size = self.thumbnail_size
+
+        cache_key = (path, size)
+        if cache_key in self._thumbnails:
+            return self._thumbnails[cache_key]
 
         try:
             with Image.open(path) as image:
-                image.draft("RGB", self.thumbnail_size)
+                image.draft("RGB", size)
                 image = ImageOps.exif_transpose(image)
                 if image.mode not in ("RGB", "RGBA"):
                     image = image.convert("RGB")
-                image.thumbnail(self.thumbnail_size, Image.Resampling.BILINEAR)
+                image.thumbnail(size, Image.Resampling.BILINEAR)
                 thumbnail = ImageTk.PhotoImage(image)
-                self._thumbnails[path] = thumbnail
+                self._thumbnails[cache_key] = thumbnail
                 return thumbnail
         except Exception:
             return None
@@ -1104,3 +1362,40 @@ class PhotoCleanerView:
 
     def _sync_scroll_region(self, _event: tk.Event | None) -> None:
         self.results_canvas.configure(scrollregion=self.results_canvas.bbox("all"))
+
+
+class _Tooltip:
+    def __init__(self, widget: tk.Widget, text: str) -> None:
+        self._widget = widget
+        self._text = text
+        self._tooltip: tk.Toplevel | None = None
+        widget.bind("<Enter>", self._show, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+
+    def _show(self, _event: tk.Event) -> None:
+        if self._tooltip is not None or not self._text:
+            return
+
+        tooltip = tk.Toplevel(self._widget)
+        tooltip.wm_overrideredirect(True)
+        tooltip.attributes("-topmost", True)
+
+        label = ttk.Label(
+            tooltip,
+            text=self._text,
+            justify="left",
+            relief="solid",
+            borderwidth=1,
+            padding=8,
+        )
+        label.grid(row=0, column=0, sticky="nsew")
+
+        x = self._widget.winfo_rootx() + 18
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 8
+        tooltip.geometry(f"+{x}+{y}")
+        self._tooltip = tooltip
+
+    def _hide(self, _event: tk.Event) -> None:
+        if self._tooltip is not None and self._tooltip.winfo_exists():
+            self._tooltip.destroy()
+        self._tooltip = None

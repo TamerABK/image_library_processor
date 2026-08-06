@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Iterator
 
+from scan_controls import CancellationToken
+
 from .config import DetectorConfig
 from .models import CandidatePair, PhotoInfo, ProgressPhase
 from .utils import hamming_distance
@@ -37,6 +39,7 @@ class CandidateGenerator:
         self,
         photos: list[PhotoInfo],
         progress_callback: ProgressCallback | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> Iterator[CandidatePair]:
         """
         Lazily yield candidate duplicate pairs.
@@ -51,6 +54,8 @@ class CandidateGenerator:
         count = len(ordered)
 
         for i in range(count - 1):
+            if cancellation_token is not None:
+                cancellation_token.raise_if_canceled()
 
             left = ordered[i]
 

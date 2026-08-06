@@ -9,6 +9,7 @@ import numpy as np
 
 from image_file_utils import find_supported_files
 from image_loader import default_image_loader
+from scan_controls import CancellationToken
 
 from .cache import BlurScanCache
 
@@ -155,6 +156,7 @@ class BlurDetector:
             progress_callback: Callable[[int, int], None] | None = None,
             file_extensions: tuple[str, ...] | None = None,
             orientation_filter: str | None = None,
+            cancellation_token: CancellationToken | None = None,
     ) -> List[BlurScanResult]:
         folder = Path(folder_path)
 
@@ -179,6 +181,8 @@ class BlurDetector:
         pending_metadata: dict[Path, tuple[int | None, int | None, bool | None]] = {}
 
         for path in paths:
+            if cancellation_token is not None:
+                cancellation_token.raise_if_canceled()
             normalized_path = path.resolve()
 
             try:
@@ -228,6 +232,8 @@ class BlurDetector:
             }
 
             for future in as_completed(futures):
+                if cancellation_token is not None:
+                    cancellation_token.raise_if_canceled()
                 path, result = future.result()
                 if result is not None:
                     file_size, mtime_ns = pending_meta[path]

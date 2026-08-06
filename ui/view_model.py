@@ -7,9 +7,10 @@ import shutil
 import threading
 import time
 from collections import OrderedDict
+from datetime import datetime, timezone
 from pathlib import Path
 from queue import Empty, Queue
-from typing import Any
+from typing import Any, Callable
 
 import cv2
 import numpy as np
@@ -19,19 +20,20 @@ from blur_detector.blur_detector import BlurDetector
 from duplicate_detector.config import DetectorConfig
 from duplicate_detector.duplicate_detector import DuplicateDetector
 from duplicate_detector.models import DuplicateGroup
-from face_analyzer.default_face_analyzer import DefaultFaceAnalyzer
-from face_detector.arc_embedder import ArcFaceEmbedder
 from face_detector.connected_face_clusterer import ConnectedComponentFaceClusterer
 from face_detector.cosine_similarity import CosineEmbeddingSimilarity
 from face_detector.face_aligner import FaceAligner
 from face_detector.face_database_sqlite import SQLiteFaceDatabase
 from face_detector.preview_renderer import FacePreviewRenderer
-from face_detector.scrfd_face_detector import SCRFDFaceDetector
 from face_processing.interfaces import FaceDatabase, FaceDetector
 from face_processing.models import DetectedFace
 from face_processing.processor import FaceProcessor
 from face_processing.recognition import DefaultFaceRecognizer
+from grouping.models import VibeGroupingResult
+from grouping.vibe import VibeGroupingPreset, VibeGroupingProcessor, preset_config
+from grouping.vibe.config import VibeGroupingConfig
 from image_file_utils import discover_supported_extensions, normalize_extensions
+from scan_controls import CancellationToken, ScanCancelledError
 
 from .models import (
     AppState,
@@ -298,7 +300,13 @@ class PhotoCleanerViewModel:
     portrait_orientation_label = "Portrait only"
     results_page_size = 48
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        duplicate_detector_factory: Callable[[], DuplicateDetector] | None = None,
+        blur_detector_factory: Callable[[], BlurDetector] | None = None,
+        vibe_processor_factory: Callable[[VibeGroupingConfig], VibeGroupingProcessor] | None = None,
+    ) -> None:
         self.state = AppState(
             file_type=self.all_file_types_label,
             available_file_types=(self.all_file_types_label,),
@@ -308,14 +316,28 @@ class PhotoCleanerViewModel:
                 self.landscape_orientation_label,
                 self.portrait_orientation_label,
             ),
+            available_vibe_presets=tuple(
+                preset.display_name
+                for preset in (
+                    VibeGroupingPreset.SESSION,
+                    VibeGroupingPreset.BALANCED_SCENES,
+                    VibeGroupingPreset.TIGHT_SCENES,
+                )
+            ),
         )
 
         self._queue: Queue[BackgroundMessage] = Queue()
         self._scan_thread: threading.Thread | None = None
+        self._cancellation_token: CancellationToken | None = None
         self._scan_start_time: float | None = None
         self._last_progress_percent = -1
         self._results: list[ResultGroup] = []
         self._selection_state: dict[Path, bool] = {}
+        self._duplicate_detector_factory = duplicate_detector_factory or DuplicateDetector
+        self._blur_detector_factory = blur_detector_factory or BlurDetector
+        self._vibe_processor_factory = vibe_processor_factory or (
+            lambda config: VibeGroupingProcessor(config)
+        )
         self._face_processor: _TimedFaceProcessor | None = None
         self._face_database: FaceDatabase | None = None
         self._face_groups: list[ResultGroup] = []
@@ -323,6 +345,8 @@ class PhotoCleanerViewModel:
         self._active_face_group_index: int | None = None
         self._named_unknown_faces: dict[int, ConfirmedUnknownPerson] = {}
         self._latest_face_result: Any = None
+        self._latest_vibe_debug_payload: dict[str, Any] | None = None
+        self._latest_vibe_folder: Path | None = None
         self._unknown_face_preview_renderer = FacePreviewRenderer()
         self._results_page_index = 0
         self._supported_file_types = self._collect_supported_file_types()
@@ -346,6 +370,36 @@ class PhotoCleanerViewModel:
 
     def set_auto_export_faces(self, auto_export_faces: bool) -> None:
         self.state.auto_export_faces = auto_export_faces
+
+    def set_vibe_preset(self, preset: str) -> None:
+        self.state.vibe_preset = preset or "Balanced Scenes"
+
+    def set_vibe_include_people(self, enabled: bool) -> None:
+        self.state.vibe_include_people = enabled
+
+    def set_vibe_include_color(self, enabled: bool) -> None:
+        self.state.vibe_include_color = enabled
+
+    def set_vibe_include_composition(self, enabled: bool) -> None:
+        self.state.vibe_include_composition = enabled
+
+    def set_vibe_show_advanced(self, show_advanced: bool) -> None:
+        self.state.vibe_show_advanced = show_advanced
+
+    def set_vibe_session_gap_minutes(self, value: str) -> None:
+        self.state.vibe_session_gap_minutes = value.strip() or self.state.vibe_session_gap_minutes
+
+    def set_vibe_minimum_similarity(self, value: str) -> None:
+        self.state.vibe_minimum_similarity = value.strip() or self.state.vibe_minimum_similarity
+
+    def set_vibe_minimum_cohesion(self, value: str) -> None:
+        self.state.vibe_minimum_cohesion = value.strip() or self.state.vibe_minimum_cohesion
+
+    def set_vibe_maximum_group_size(self, value: str) -> None:
+        self.state.vibe_maximum_group_size = value.strip() or self.state.vibe_maximum_group_size
+
+    def set_vibe_batch_size(self, value: str) -> None:
+        self.state.vibe_batch_size = value.strip() or self.state.vibe_batch_size
 
     def set_orientation(self, orientation: str) -> None:
         if orientation in self.state.available_orientations:
@@ -396,15 +450,23 @@ class PhotoCleanerViewModel:
             return "Choose a valid folder to scan."
 
         self.refresh_file_types(folder)
+        if self.state.mode == "vibe":
+            try:
+                self._current_vibe_config()
+            except Exception as exc:
+                return f"Invalid vibe settings: {exc}"
         self._reset_results()
         self.state.can_scan = False
         self.state.can_delete = False
         self.state.can_export = False
+        self.state.can_export_vibe_debug = False
+        self.state.can_cancel = True
         self.state.progress_mode = "indeterminate"
         self.state.progress_value = 0
         self.state.progress_max = 100
         self._last_progress_percent = -1
         self._scan_start_time = time.monotonic()
+        self._cancellation_token = CancellationToken()
         self.refresh_elapsed()
 
         mode = self.state.mode
@@ -416,11 +478,25 @@ class PhotoCleanerViewModel:
 
         self._scan_thread = threading.Thread(
             target=self._scan_worker,
-            args=(folder, mode, file_extensions, orientation_filter, known_people_only),
+            args=(
+                folder,
+                mode,
+                file_extensions,
+                orientation_filter,
+                known_people_only,
+                self._cancellation_token,
+            ),
             daemon=True,
         )
         self._scan_thread.start()
         return None
+
+    def cancel_scan(self) -> None:
+        if self._cancellation_token is None:
+            return
+        self._cancellation_token.cancel()
+        self.state.status = "Canceling scan..."
+        self.state.can_cancel = False
 
     def poll_background_message(self) -> BackgroundMessage | None:
         try:
@@ -452,14 +528,25 @@ class PhotoCleanerViewModel:
         if message.phase == "scanning":
             self.state.status = f"Scanning {target} {message.done}/{message.total}"
         else:
+            phase_label = message.phase.replace("_", " ").title()
             self.state.status = (
-                f"Scanning {target}: {message.phase.title()} {message.done}/{message.total}"
+                f"Scanning {target}: {phase_label} {message.done}/{message.total}"
             )
 
     def handle_unknown_faces_message(self, message: UnknownFacesMessage) -> None:
         self._latest_face_result = message.face_result
 
     def handle_scan_result_message(self, message: ScanResultMessage) -> None:
+        if message.mode == "vibe":
+            self._latest_vibe_debug_payload = (
+                None if message.debug_payload is None else dict(message.debug_payload)
+            )
+            input_folder = None if message.debug_payload is None else message.debug_payload.get("input_folder")
+            self._latest_vibe_folder = None if not input_folder else Path(str(input_folder))
+        else:
+            self._latest_vibe_debug_payload = None
+            self._latest_vibe_folder = None
+
         results = message.results
         if message.mode == "faces" and self._latest_face_result is not None:
             results = self._build_face_results(self._latest_face_result)
@@ -470,6 +557,8 @@ class PhotoCleanerViewModel:
             self._clear_face_groups()
             if message.mode == "duplicates":
                 self.finish_scan("No near duplicates found.")
+            elif message.mode == "vibe":
+                self.finish_scan(message.summary or "No vibe groups found.")
             elif message.mode == "blurry":
                 self.finish_scan("No blurry photos found.")
             elif message.known_people_only:
@@ -488,16 +577,22 @@ class PhotoCleanerViewModel:
             self._update_results_view_state()
 
         if message.mode == "duplicates":
-            self.finish_scan(f"Found {len(results)} duplicate groups with {total_items} photos.")
+            self.finish_scan(
+                message.summary or f"Found {len(results)} duplicate groups with {total_items} photos."
+            )
+        elif message.mode == "vibe":
+            self.finish_scan(
+                message.summary or f"Found {len(results)} vibe groups with {total_items} photos."
+            )
         elif message.mode == "blurry":
-            self.finish_scan(f"Found {total_items} blurry photos.")
+            self.finish_scan(message.summary or f"Found {total_items} blurry photos.")
         elif message.known_people_only:
-            self.finish_scan(f"Found {total_items} photos for known people.")
+            self.finish_scan(message.summary or f"Found {total_items} photos for known people.")
         else:
-            self.finish_scan(f"Found {total_items} photos grouped by face.")
+            self.finish_scan(message.summary or f"Found {total_items} photos grouped by face.")
 
     def handle_scan_error_message(self, message: ScanErrorMessage) -> None:
-        self.finish_scan(message.message)
+        self.finish_scan("Scan canceled." if message.canceled else message.message)
 
     def refresh_elapsed(self, final: bool = False) -> bool:
         if self._scan_start_time is None:
@@ -513,9 +608,11 @@ class PhotoCleanerViewModel:
         self.state.progress_max = 100
         self._last_progress_percent = -1
         self.state.can_scan = True
+        self.state.can_cancel = False
         self.state.status = status
         self.refresh_elapsed(final=True)
         self._scan_start_time = None
+        self._cancellation_token = None
         self._update_action_state()
 
     def current_page_groups(self) -> list[ResultGroup]:
@@ -623,6 +720,33 @@ class PhotoCleanerViewModel:
                 errors.append(f"{source_path.name}: {exc}")
 
         return ExportResult(exported_count=exported_count, errors=errors)
+
+    def can_export_vibe_debug(self) -> bool:
+        return (
+            self.state.mode == "vibe"
+            and self._latest_vibe_debug_payload is not None
+            and self._scan_start_time is None
+        )
+
+    def suggest_vibe_debug_filename(self) -> str:
+        folder_name = "vibe"
+        if self._latest_vibe_folder is not None:
+            folder_name = self._latest_vibe_folder.name or folder_name
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        return f"{folder_name}_vibe_debug_{timestamp}.json"
+
+    def export_vibe_debug(self, output_path: str | Path) -> Path:
+        if self._latest_vibe_debug_payload is None:
+            raise ValueError("No vibe debug data is available to export.")
+
+        path = Path(output_path).expanduser()
+        payload = dict(self._latest_vibe_debug_payload)
+        payload["exported_at_utc"] = datetime.now(timezone.utc).isoformat()
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        return path
 
     def export_face_groups(self, dest_dir: str) -> ExportResult:
         base_dir = Path(dest_dir)
@@ -739,12 +863,16 @@ class PhotoCleanerViewModel:
         file_extensions: tuple[str, ...] | None,
         orientation_filter: str | None,
         known_people_only: bool,
+        cancellation_token: CancellationToken | None,
     ) -> None:
         try:
+            debug_payload: dict[str, Any] | None = None
             if mode == "duplicates":
-                detector = DuplicateDetector()
+                detector = self._duplicate_detector_factory()
 
                 def progress_callback(phase: Any, done: int, total: int) -> None:
+                    if cancellation_token is not None:
+                        cancellation_token.raise_if_canceled()
                     self._queue.put(
                         ScanProgressMessage(
                             mode=mode,
@@ -760,12 +888,17 @@ class PhotoCleanerViewModel:
                     progress_callback,
                     file_extensions=file_extensions,
                     orientation_filter=orientation_filter,
+                    cancellation_token=cancellation_token,
                 )
                 results = self._build_duplicate_results(groups)
+                summary = f"Found {len(results)} duplicate groups with {sum(len(group.items) for group in results)} photos."
+                warning = None
             elif mode == "blurry":
-                detector = BlurDetector()
+                detector = self._blur_detector_factory()
 
                 def progress_callback(done: int, total: int) -> None:
+                    if cancellation_token is not None:
+                        cancellation_token.raise_if_canceled()
                     self._queue.put(
                         ScanProgressMessage(
                             mode=mode,
@@ -781,10 +914,60 @@ class PhotoCleanerViewModel:
                     progress_callback,
                     file_extensions=file_extensions,
                     orientation_filter=orientation_filter,
+                    cancellation_token=cancellation_token,
                 )
                 results = self._build_blurry_results(blur_results)
+                summary = f"Found {sum(len(group.items) for group in results)} blurry photos."
+                warning = None
+            elif mode == "vibe":
+                processor = self._vibe_processor_factory(self._current_vibe_config())
+
+                def progress_callback(phase: str, done: int, total: int | None) -> None:
+                    if cancellation_token is not None:
+                        cancellation_token.raise_if_canceled()
+                    self._queue.put(
+                        ScanProgressMessage(
+                            mode=mode,
+                            phase=phase,
+                            done=done,
+                            total=total,
+                            known_people_only=known_people_only,
+                        )
+                    )
+
+                vibe_result = processor.scan_folder(
+                    folder,
+                    file_extensions=file_extensions,
+                    orientation_filter=orientation_filter,
+                    progress_callback=progress_callback,
+                    cancellation_token=cancellation_token,
+                )
+                results = self._build_vibe_results(vibe_result)
+                total_grouped = sum(len(group.items) for group in results if group.group_type != "vibe_ungrouped")
+                summary_parts = [
+                    f"Found {len(vibe_result.groups)} vibe group(s)",
+                ]
+                if vibe_result.ungrouped_paths:
+                    summary_parts.append(f"{len(vibe_result.ungrouped_paths)} ungrouped photo(s)")
+                summary = " with ".join(summary_parts) + f" across {total_grouped + len(vibe_result.ungrouped_paths)} photo(s)."
+                warning_lines: list[str] = []
+                if vibe_result.errors:
+                    warning_lines.append(f"{len(vibe_result.errors)} image(s) could not be analyzed.")
+                if vibe_result.used_fallback_embedder:
+                    warning_lines.append(
+                        "The optional ONNX vibe model is not installed, so grouping used the built-in visual fallback embedder."
+                    )
+                warning = "\n".join(warning_lines) if warning_lines else None
+                debug_payload = self._build_vibe_debug_payload(
+                    folder=folder,
+                    vibe_result=vibe_result,
+                    summary=summary,
+                    warning=warning,
+                )
             else:
                 def progress_callback(done: int, total: int) -> None:
+                    if cancellation_token is not None:
+                        cancellation_token.raise_if_canceled()
                     self._queue.put(
                         ScanProgressMessage(
                             mode=mode,
@@ -810,6 +993,7 @@ class PhotoCleanerViewModel:
                         file_extensions=file_extensions,
                         orientation_filter=orientation_filter,
                         known_people_only=known_people_only,
+                        cancellation_token=cancellation_token,
                     )
                 except Exception as exc:
                     error_message = str(exc)
@@ -829,22 +1013,31 @@ class PhotoCleanerViewModel:
                     )
                 if known_people_only:
                     results = self._build_face_results(face_result)
+                    summary = f"Found {sum(len(group.items) for group in results)} photos for known people."
                 else:
                     results = []
                     self._queue.put(UnknownFacesMessage(face_result=face_result))
+                    summary = "Found photos grouped by face."
+                warning = None
 
             self._queue.put(
                 ScanResultMessage(
                     mode=mode,
                     results=results,
                     known_people_only=known_people_only,
+                    summary=summary,
+                    warning=warning,
+                    debug_payload=debug_payload,
                 )
             )
+        except ScanCancelledError as exc:
+            self._queue.put(ScanErrorMessage(message=str(exc), canceled=True))
         except Exception as exc:
             self._queue.put(ScanErrorMessage(message=str(exc)))
 
     def _apply_mode_state(self) -> None:
         self.state.show_face_options = self.state.mode == "faces"
+        self.state.show_vibe_options = self.state.mode == "vibe"
 
     @classmethod
     def _collect_supported_file_types(cls) -> tuple[str, ...]:
@@ -853,6 +1046,7 @@ class PhotoCleanerViewModel:
                 set(BlurDetector.supported_extensions)
                 | set(FaceProcessor.SUPPORTED_EXTENSIONS)
                 | set(DetectorConfig().supported_extensions)
+                | set(VibeGroupingProcessor.supported_extensions)
             )
         )
 
@@ -860,6 +1054,8 @@ class PhotoCleanerViewModel:
     def _supported_file_types_for_mode(mode: str) -> tuple[str, ...]:
         if mode == "duplicates":
             return DetectorConfig().supported_extensions
+        if mode == "vibe":
+            return VibeGroupingProcessor.supported_extensions
         if mode == "blurry":
             return BlurDetector.supported_extensions
         return FaceProcessor.SUPPORTED_EXTENSIONS
@@ -868,6 +1064,8 @@ class PhotoCleanerViewModel:
     def _scan_target_label(mode: str, known_people_only: bool = False) -> str:
         if mode == "duplicates":
             return "near duplicates"
+        if mode == "vibe":
+            return "vibe groups"
         if mode == "blurry":
             return "blurry photos"
         if known_people_only:
@@ -877,6 +1075,18 @@ class PhotoCleanerViewModel:
     @staticmethod
     def _compute_progress_percent(mode: str, phase: str, done: int, total: int) -> int:
         clamped_done = min(max(done, 0), total)
+        if mode == "vibe":
+            ranges = {
+                "loading_visual_features": (0, 44),
+                "analyzing_actions_and_scenes": (44, 58),
+                "detecting_scene_changes": (58, 70),
+                "building_scene_groups": (70, 86),
+                "checking_group_coherence": (86, 92),
+                "choosing_previews": (92, 97),
+                "finalizing_results": (97, 100),
+            }
+            start, end = ranges.get(phase, (0, 100))
+            return start + int((clamped_done / total) * max(end - start, 1))
         if mode != "duplicates":
             return int((clamped_done / total) * 100)
         if phase == "indexing":
@@ -923,6 +1133,73 @@ class PhotoCleanerViewModel:
         if not items:
             return []
         return [ResultGroup(title=f"Blurry photos ({len(items)})", items=items)]
+
+    def _build_vibe_results(self, vibe_result: VibeGroupingResult) -> list[ResultGroup]:
+        results: list[ResultGroup] = []
+        for index, group in enumerate(vibe_result.groups, start=1):
+            ordered_items: list[ResultItem] = []
+            features_for_group = list(group.image_paths)
+            for position, path_text in enumerate(features_for_group, start=1):
+                path = Path(path_text)
+                ordered_items.append(
+                    ResultItem(
+                        path=path,
+                        title=path.name,
+                        detail=self._format_vibe_item_detail(path, group),
+                        recommended_delete=False,
+                    )
+                )
+
+            metadata_lines = [
+                f"{len(group.image_paths)} photo(s)",
+            ]
+            time_range = self._format_vibe_time_range(group.start_timestamp, group.end_timestamp)
+            if time_range:
+                metadata_lines.append(time_range)
+            if group.recognized_person_names:
+                metadata_lines.append(
+                    "People: " + ", ".join(group.recognized_person_names[:3]) + (
+                        "" if len(group.recognized_person_names) <= 3 else f" +{len(group.recognized_person_names) - 3}"
+                    )
+                )
+            if group.metadata.get("duplicate_subgroup_count"):
+                metadata_lines.append(
+                    f"Near-duplicate sets: {group.metadata['duplicate_subgroup_count']}"
+                )
+
+            title = group.label or f"Vibe group {index}"
+            results.append(
+                ResultGroup(
+                    title=title,
+                    items=ordered_items,
+                    group_type="vibe",
+                    representative_path=Path(group.representative_path),
+                    subtitle=f"Group {index}",
+                    metadata_lines=tuple(metadata_lines),
+                    cohesion_text=f"Cohesion {group.cohesion_score:.2f}",
+                )
+            )
+
+        if vibe_result.ungrouped_paths:
+            ungrouped_items = [
+                ResultItem(
+                    path=Path(path_text),
+                    title=Path(path_text).name,
+                    detail="Ungrouped",
+                    recommended_delete=False,
+                )
+                for path_text in vibe_result.ungrouped_paths
+            ]
+            results.append(
+                ResultGroup(
+                    title=f"Ungrouped ({len(ungrouped_items)} photo(s))",
+                    items=ungrouped_items,
+                    group_type="vibe_ungrouped",
+                    subtitle="Images that did not fit a confident vibe cluster",
+                    metadata_lines=("Review or keep these as standalone images.",),
+                )
+            )
+        return results
 
     def _build_face_results(self, face_result: Any) -> list[ResultGroup]:
         grouped_people: OrderedDict[int, tuple[str, OrderedDict[Path, ResultItem]]] = OrderedDict()
@@ -987,6 +1264,10 @@ class PhotoCleanerViewModel:
 
     def _init_face_processor(self) -> _TimedFaceProcessor:
         if self._face_processor is None:
+            from face_analyzer.default_face_analyzer import DefaultFaceAnalyzer
+            from face_detector.arc_embedder import ArcFaceEmbedder
+            from face_detector.scrfd_face_detector import SCRFDFaceDetector
+
             detector_model = model_path("scrfd_10g_bnkps.onnx")
             embedder_model = model_path("glintr100.onnx")
             eye_state_model = model_path("open_closed_eye.onnx")
@@ -1096,6 +1377,10 @@ class PhotoCleanerViewModel:
                         title=title,
                         items=group.items[group_start:group_end],
                         group_type=group.group_type,
+                        representative_path=group.representative_path,
+                        subtitle=group.subtitle,
+                        metadata_lines=group.metadata_lines,
+                        cohesion_text=group.cohesion_text,
                     )
                 )
 
@@ -1163,6 +1448,7 @@ class PhotoCleanerViewModel:
         export_enabled = bool(selected and total)
         self.state.can_delete = delete_enabled
         self.state.can_export = export_enabled
+        self.state.can_export_vibe_debug = self.can_export_vibe_debug()
 
     def _reset_results(self) -> None:
         self._results = []
@@ -1170,12 +1456,61 @@ class PhotoCleanerViewModel:
         self._clear_face_groups()
         self._named_unknown_faces.clear()
         self._latest_face_result = None
+        self._latest_vibe_debug_payload = None
+        self._latest_vibe_folder = None
         self._results_page_index = 0
         self.state.page_label = ""
         self.state.show_pagination = False
         self.state.can_show_previous_page = False
         self.state.can_show_next_page = False
         self._update_action_state()
+
+    def _build_vibe_debug_payload(
+        self,
+        *,
+        folder: Path,
+        vibe_result: VibeGroupingResult,
+        summary: str,
+        warning: str | None,
+    ) -> dict[str, Any]:
+        return {
+            "source": "gui_app",
+            "input_folder": str(folder.resolve()),
+            "summary": summary,
+            "warning": warning,
+            "provider": vibe_result.provider,
+            "used_fallback_embedder": vibe_result.used_fallback_embedder,
+            "cache_hits": vibe_result.cache_hits,
+            "cache_misses": vibe_result.cache_misses,
+            "model_fingerprint": vibe_result.model_fingerprint,
+            "config_snapshot": vibe_result.config_snapshot,
+            "stage_timings": vibe_result.stage_timings,
+            "groups": [
+                {
+                    "group_id": group.group_id,
+                    "label": group.label,
+                    "representative_path": group.representative_path,
+                    "image_paths": list(group.image_paths),
+                    "recognized_person_ids": list(group.recognized_person_ids),
+                    "recognized_person_names": list(group.recognized_person_names),
+                    "start_timestamp": group.start_timestamp,
+                    "end_timestamp": group.end_timestamp,
+                    "cohesion_score": group.cohesion_score,
+                    "metadata": group.metadata,
+                }
+                for group in vibe_result.groups
+            ],
+            "ungrouped_paths": list(vibe_result.ungrouped_paths),
+            "errors": [
+                {
+                    "path": error.path,
+                    "message": error.message,
+                    "fatal": error.fatal,
+                }
+                for error in vibe_result.errors
+            ],
+            "diagnostics": vibe_result.diagnostics,
+        }
 
     @staticmethod
     def _safe_group_folder_name(title: str) -> str:
@@ -1202,6 +1537,60 @@ class PhotoCleanerViewModel:
             if not candidate.exists() and not candidate.is_symlink():
                 return candidate
             counter += 1
+
+    def _current_vibe_config(self) -> VibeGroupingConfig:
+        preset_name = (self.state.vibe_preset or "Balanced Scenes").strip().lower()
+        preset = VibeGroupingPreset.BALANCED_SCENES
+        if preset_name == "session":
+            preset = VibeGroupingPreset.SESSION
+        elif preset_name == "tight scenes":
+            preset = VibeGroupingPreset.TIGHT_SCENES
+
+        overrides: dict[str, object] = {
+            "include_people": self.state.vibe_include_people,
+            "include_color": self.state.vibe_include_color,
+            "include_composition": self.state.vibe_include_composition,
+        }
+        if self.state.vibe_show_advanced:
+            overrides.update(
+                {
+                    "session_gap_seconds": int(float(self.state.vibe_session_gap_minutes) * 60),
+                    "minimum_pair_similarity": float(self.state.vibe_minimum_similarity),
+                    "minimum_group_cohesion": float(self.state.vibe_minimum_cohesion),
+                    "maximum_group_size": int(self.state.vibe_maximum_group_size),
+                    "batch_size": int(self.state.vibe_batch_size),
+                }
+            )
+        return preset_config(preset, **overrides)
+
+    @staticmethod
+    def _format_vibe_item_detail(path: Path, group: Any) -> str:
+        parts = ["Vibe group member"]
+        if group.metadata.get("duplicate_subgroup_count"):
+            parts.append("Near-duplicate subgroups available")
+        parts.append(path.suffix.lower().lstrip(".").upper() or "Image")
+        return " • ".join(parts)
+
+    @staticmethod
+    def _format_vibe_time_range(
+        start_timestamp: float | None,
+        end_timestamp: float | None,
+    ) -> str | None:
+        if start_timestamp is None and end_timestamp is None:
+            return None
+        if start_timestamp is None:
+            return f"Ends {PhotoCleanerViewModel._format_timestamp(end_timestamp)}"
+        if end_timestamp is None or abs(end_timestamp - start_timestamp) < 1.0:
+            return PhotoCleanerViewModel._format_timestamp(start_timestamp)
+        start_text = PhotoCleanerViewModel._format_timestamp(start_timestamp)
+        end_text = PhotoCleanerViewModel._format_timestamp(end_timestamp)
+        return f"{start_text} -> {end_text}"
+
+    @staticmethod
+    def _format_timestamp(timestamp: float | None) -> str:
+        if timestamp is None:
+            return "Unknown time"
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     @staticmethod
     def _format_elapsed(seconds: int) -> str:

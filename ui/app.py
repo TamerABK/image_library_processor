@@ -15,6 +15,7 @@ class PhotoCleanerApp:
                 browse_folder=self._browse_folder,
                 refresh_file_types=self._refresh_file_types,
                 start_scan=self._start_scan,
+                cancel_scan=self._cancel_scan,
                 mode_changed=self._on_mode_changed,
                 face_group_selected=self._on_face_group_selected,
                 show_previous_page=self._show_previous_page,
@@ -22,6 +23,7 @@ class PhotoCleanerApp:
                 item_selection_changed=self._on_item_selection_changed,
                 delete_selected=self._delete_selected,
                 export_selected=self._export_selected,
+                export_vibe_debug=self._export_vibe_debug,
             )
         )
         self._poll_after_id: str | None = None
@@ -50,6 +52,16 @@ class PhotoCleanerApp:
         self.view_model.set_known_people_only(self.view.current_known_people_only())
         self.view_model.set_auto_export_faces(self.view.current_auto_export_faces())
         self.view_model.set_orientation(self.view.current_orientation())
+        self.view_model.set_vibe_preset(self.view.current_vibe_preset())
+        self.view_model.set_vibe_include_people(self.view.current_vibe_include_people())
+        self.view_model.set_vibe_include_color(self.view.current_vibe_include_color())
+        self.view_model.set_vibe_include_composition(self.view.current_vibe_include_composition())
+        self.view_model.set_vibe_show_advanced(self.view.current_vibe_show_advanced())
+        self.view_model.set_vibe_session_gap_minutes(self.view.current_vibe_session_gap_minutes())
+        self.view_model.set_vibe_minimum_similarity(self.view.current_vibe_minimum_similarity())
+        self.view_model.set_vibe_minimum_cohesion(self.view.current_vibe_minimum_cohesion())
+        self.view_model.set_vibe_maximum_group_size(self.view.current_vibe_maximum_group_size())
+        self.view_model.set_vibe_batch_size(self.view.current_vibe_batch_size())
         self._sync_view()
 
     def _start_scan(self) -> None:
@@ -60,6 +72,10 @@ class PhotoCleanerApp:
             return
         self._schedule_elapsed_update()
         self.view.clear_results()
+        self._sync_view()
+
+    def _cancel_scan(self) -> None:
+        self.view_model.cancel_scan()
         self._sync_view()
 
     def _on_face_group_selected(self) -> None:
@@ -122,6 +138,28 @@ class PhotoCleanerApp:
                 f"Exported {result.exported_count} photo(s) to {export_dir}",
             )
 
+    def _export_vibe_debug(self) -> None:
+        if not self.view_model.can_export_vibe_debug():
+            return
+
+        output_path = self.view.ask_save_path(
+            title="Export vibe debug JSON",
+            initialfile=self.view_model.suggest_vibe_debug_filename(),
+        )
+        if not output_path:
+            return
+
+        try:
+            written_path = self.view_model.export_vibe_debug(output_path)
+        except Exception as exc:
+            self.view.show_error("Export failed", f"Could not export vibe debug JSON:\n\n{exc}")
+            return
+
+        self.view.show_info(
+            "Export complete",
+            f"Saved vibe debug JSON to {written_path}",
+        )
+
     def _schedule_poll(self) -> None:
         self._poll_after_id = self.view.schedule(100, self._poll_background_messages)
 
@@ -152,6 +190,8 @@ class PhotoCleanerApp:
                 if isinstance(message, ScanResultMessage):
                     self.view_model.handle_scan_result_message(message)
                     self._render_results()
+                    if message.warning:
+                        self.view.show_warning("Scan warning", message.warning)
                     if message.mode == "faces" and self.view_model.state.auto_export_faces:
                         self._auto_export_faces()
                     continue
@@ -159,7 +199,8 @@ class PhotoCleanerApp:
                 if isinstance(message, ScanErrorMessage):
                     self.view_model.handle_scan_error_message(message)
                     self._sync_view()
-                    self.view.show_error("Scan failed", message.message)
+                    if not message.canceled:
+                        self.view.show_error("Scan failed", message.message)
         finally:
             self._schedule_poll()
 
@@ -182,6 +223,16 @@ class PhotoCleanerApp:
         self.view_model.set_mode(self.view.current_mode())
         self.view_model.set_known_people_only(self.view.current_known_people_only())
         self.view_model.set_auto_export_faces(self.view.current_auto_export_faces())
+        self.view_model.set_vibe_preset(self.view.current_vibe_preset())
+        self.view_model.set_vibe_include_people(self.view.current_vibe_include_people())
+        self.view_model.set_vibe_include_color(self.view.current_vibe_include_color())
+        self.view_model.set_vibe_include_composition(self.view.current_vibe_include_composition())
+        self.view_model.set_vibe_show_advanced(self.view.current_vibe_show_advanced())
+        self.view_model.set_vibe_session_gap_minutes(self.view.current_vibe_session_gap_minutes())
+        self.view_model.set_vibe_minimum_similarity(self.view.current_vibe_minimum_similarity())
+        self.view_model.set_vibe_minimum_cohesion(self.view.current_vibe_minimum_cohesion())
+        self.view_model.set_vibe_maximum_group_size(self.view.current_vibe_maximum_group_size())
+        self.view_model.set_vibe_batch_size(self.view.current_vibe_batch_size())
 
     def _sync_view(self) -> None:
         self.view.sync_state(self.view_model.state)

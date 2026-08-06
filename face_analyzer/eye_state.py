@@ -110,7 +110,9 @@ class OpenClosedEyeOnnxEstimator:
         self,
         *,
         source_eye_crop: np.ndarray,
+        side_name: str | None = None,
     ) -> tuple[EyeMeasurement, EyeInferenceDebug | None]:
+        _ = side_name
         if source_eye_crop.size == 0:
             return EyeMeasurement.unknown(AssessmentStatus.INVALID_INPUT), None
 
