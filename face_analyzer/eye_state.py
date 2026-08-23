@@ -30,6 +30,18 @@ class EyeInferenceDebug:
     raw_outputs_rgb: tuple[np.ndarray, ...]
 
 
+@dataclass(frozen=True)
+class _PendingEyeInference:
+    face_position: int
+    side: str
+    tensor: np.ndarray
+    resolution_confidence: float
+    exposure_confidence: float
+    contrast_confidence: float
+    source_width: int
+    source_height: int
+
+
 class OpenClosedEyeOnnxEstimator:
     """Open Model Zoo open-closed-eye-0001 adapter.
 
@@ -97,6 +109,112 @@ class OpenClosedEyeOnnxEstimator:
 
         return self._combine_eye_measurements(left=left, right=right)
 
+    def estimate_many(
+        self,
+        image: np.ndarray,
+        faces: Sequence[DetectedFace],
+        *,
+        head_poses: Sequence[HeadPose],
+        face_indices: Sequence[int | None] | None = None,
+    ) -> list[EyeState]:
+        faces = list(faces)
+        head_poses = list(head_poses)
+        if len(faces) != len(head_poses):
+            raise ValueError("faces and head_poses must have the same length.")
+        if not faces:
+            return []
+
+        if self._debug_output_dir is not None:
+            if face_indices is None:
+                face_indices = [getattr(face, "index", None) for face in faces]
+            return [
+                self.estimate(
+                    image,
+                    face,
+                    head_pose=head_pose,
+                    face_index=face_index,
+                )
+                for face, head_pose, face_index in zip(faces, head_poses, face_indices)
+            ]
+
+        per_face_measurements: list[dict[str, EyeMeasurement]] = [
+            {} for _ in faces
+        ]
+        pending_requests: list[_PendingEyeInference] = []
+
+        for face_position, (face, head_pose) in enumerate(zip(faces, head_poses)):
+            _, _, face_width, face_height = normalize_bbox(face.bbox)
+            if min(face_width, face_height) < self._config.minimum_reliable_face_size:
+                unknown = EyeMeasurement.unknown(AssessmentStatus.FACE_TOO_SMALL)
+                per_face_measurements[face_position]["left"] = unknown
+                per_face_measurements[face_position]["right"] = unknown
+                continue
+
+            if self._pose_is_too_extreme(head_pose):
+                unknown = EyeMeasurement.unknown(AssessmentStatus.POSE_TOO_EXTREME)
+                per_face_measurements[face_position]["left"] = unknown
+                per_face_measurements[face_position]["right"] = unknown
+                continue
+
+            crops = extract_level_eye_crops(
+                image,
+                face.landmarks,
+                width_ratio=self._config.eye_crop_width_ratio,
+                height_ratio=self._config.eye_crop_height_ratio,
+            )
+            if crops is None:
+                unknown = EyeMeasurement.unknown(AssessmentStatus.LANDMARKS_MISSING)
+                per_face_measurements[face_position]["left"] = unknown
+                per_face_measurements[face_position]["right"] = unknown
+                continue
+
+            for side, source_eye_crop in (("left", crops[0]), ("right", crops[1])):
+                immediate, request = self._prepare_inference_request(source_eye_crop)
+                if immediate is not None:
+                    per_face_measurements[face_position][side] = immediate
+                    continue
+                if request is None:
+                    per_face_measurements[face_position][side] = EyeMeasurement.unknown(
+                        AssessmentStatus.MODEL_ERROR
+                    )
+                    continue
+                pending_requests.append(
+                    _PendingEyeInference(
+                        face_position=face_position,
+                        side=side,
+                        tensor=request.tensor,
+                        resolution_confidence=request.resolution_confidence,
+                        exposure_confidence=request.exposure_confidence,
+                        contrast_confidence=request.contrast_confidence,
+                        source_width=request.source_width,
+                        source_height=request.source_height,
+                    )
+                )
+
+        if pending_requests:
+            raw_outputs = self._run_pending_requests(pending_requests)
+            for request, raw_output in zip(pending_requests, raw_outputs):
+                per_face_measurements[request.face_position][request.side] = (
+                    self._measurement_from_output(
+                        raw_output,
+                        resolution_confidence=request.resolution_confidence,
+                        exposure_confidence=request.exposure_confidence,
+                        contrast_confidence=request.contrast_confidence,
+                        source_width=request.source_width,
+                        source_height=request.source_height,
+                    )
+                )
+
+        eye_states: list[EyeState] = []
+        for measurements in per_face_measurements:
+            left = measurements.get("left")
+            right = measurements.get("right")
+            if left is None or right is None:
+                eye_states.append(EyeState.unknown(AssessmentStatus.MODEL_ERROR))
+                continue
+            eye_states.append(self._combine_eye_measurements(left=left, right=right))
+        return eye_states
+
     def _pose_is_too_extreme(self, pose: HeadPose) -> bool:
         return bool(
             pose.yaw_degrees is not None
@@ -162,46 +280,30 @@ class OpenClosedEyeOnnxEstimator:
             source_eye_crop,
             convert_to_rgb=False,
         )
-        _, tensor_rgb = self._prepare_model_input(
-            source_eye_crop,
-            convert_to_rgb=True,
-        )
-
         raw_outputs_bgr = tuple(
             np.asarray(output)
             for output in self._run_model_outputs(tensor_bgr)
         )
-        raw_outputs_rgb = tuple(
-            np.asarray(output)
-            for output in self._run_model_outputs(tensor_rgb)
-        )
+        raw_outputs_rgb: tuple[np.ndarray, ...] = ()
+        if self._debug_output_dir is not None:
+            _, tensor_rgb = self._prepare_model_input(
+                source_eye_crop,
+                convert_to_rgb=True,
+            )
+            raw_outputs_rgb = tuple(
+                np.asarray(output)
+                for output in self._run_model_outputs(tensor_rgb)
+            )
 
         if not raw_outputs_bgr or np.asarray(raw_outputs_bgr[0]).size < 2:
             return EyeMeasurement.unknown(AssessmentStatus.MODEL_ERROR), None
 
-        open_probability, closed_probability, _ = (
-            self._interpret_output(np.asarray(raw_outputs_bgr[0]).reshape(-1)[:2])
-        )
-
-        model_margin_confidence = abs(open_probability - closed_probability)
-        confidence = clamp01(
-            0.24 * resolution_confidence
-            + 0.22 * exposure_confidence
-            + 0.20 * contrast_confidence
-            + 0.34 * model_margin_confidence
-        )
-        label, status = self._classify_prediction(
-            open_probability=open_probability,
-            closed_probability=closed_probability,
-            confidence=confidence,
-        )
-
         return (
-            EyeMeasurement(
-                open_probability=open_probability,
-                label=label,
-                confidence=confidence,
-                status=status,
+            self._measurement_from_output(
+                np.asarray(raw_outputs_bgr[0]),
+                resolution_confidence=resolution_confidence,
+                exposure_confidence=exposure_confidence,
+                contrast_confidence=contrast_confidence,
                 source_width=source_width,
                 source_height=source_height,
             ),
@@ -328,6 +430,129 @@ class OpenClosedEyeOnnxEstimator:
             return EyeLabel.CLOSED, AssessmentStatus.ASSESSED
 
         return EyeLabel.UNCERTAIN, AssessmentStatus.LOW_CONFIDENCE
+
+    def _measurement_from_output(
+        self,
+        raw_output: np.ndarray,
+        *,
+        resolution_confidence: float,
+        exposure_confidence: float,
+        contrast_confidence: float,
+        source_width: int,
+        source_height: int,
+    ) -> EyeMeasurement:
+        open_probability, closed_probability, _ = (
+            self._interpret_output(np.asarray(raw_output).reshape(-1)[:2])
+        )
+
+        model_margin_confidence = abs(open_probability - closed_probability)
+        confidence = clamp01(
+            0.24 * resolution_confidence
+            + 0.22 * exposure_confidence
+            + 0.20 * contrast_confidence
+            + 0.34 * model_margin_confidence
+        )
+        label, status = self._classify_prediction(
+            open_probability=open_probability,
+            closed_probability=closed_probability,
+            confidence=confidence,
+        )
+        return EyeMeasurement(
+            open_probability=open_probability,
+            label=label,
+            confidence=confidence,
+            status=status,
+            source_width=source_width,
+            source_height=source_height,
+        )
+
+    def _prepare_inference_request(
+        self,
+        source_eye_crop: np.ndarray,
+    ) -> tuple[EyeMeasurement | None, _PendingEyeInference | None]:
+        if source_eye_crop.size == 0:
+            return EyeMeasurement.unknown(AssessmentStatus.INVALID_INPUT), None
+
+        source_height, source_width = source_eye_crop.shape[:2]
+        resolution_confidence, exposure_confidence, contrast_confidence = (
+            self._estimate_crop_quality_components(source_eye_crop)
+        )
+        crop_quality_confidence = clamp01(
+            0.36 * resolution_confidence
+            + 0.32 * exposure_confidence
+            + 0.32 * contrast_confidence
+        )
+
+        if (
+            source_width < self._config.eye_source_min_width
+            or source_height < self._config.eye_source_min_height
+            or crop_quality_confidence < self._config.eye_low_signal_confidence_threshold
+        ):
+            return (
+                EyeMeasurement(
+                    open_probability=None,
+                    label=EyeLabel.UNCERTAIN,
+                    confidence=crop_quality_confidence,
+                    status=AssessmentStatus.LOW_CONFIDENCE,
+                    source_width=source_width,
+                    source_height=source_height,
+                ),
+                None,
+            )
+
+        _model_input_image, tensor_bgr = self._prepare_model_input(
+            source_eye_crop,
+            convert_to_rgb=False,
+        )
+        return None, _PendingEyeInference(
+            face_position=-1,
+            side="",
+            tensor=tensor_bgr,
+            resolution_confidence=resolution_confidence,
+            exposure_confidence=exposure_confidence,
+            contrast_confidence=contrast_confidence,
+            source_width=source_width,
+            source_height=source_height,
+        )
+
+    def _run_pending_requests(
+        self,
+        pending_requests: Sequence[_PendingEyeInference],
+    ) -> list[np.ndarray]:
+        if not pending_requests:
+            return []
+
+        if self._supports_batch_inference():
+            try:
+                batch = np.concatenate(
+                    [request.tensor for request in pending_requests],
+                    axis=0,
+                )
+                raw_outputs = self._run_model_outputs(batch)
+                primary_output = np.asarray(raw_outputs[0])
+                if primary_output.ndim == 1:
+                    primary_output = primary_output.reshape(1, -1)
+                elif primary_output.ndim > 2:
+                    primary_output = primary_output.reshape(primary_output.shape[0], -1)
+                return [
+                    np.asarray(primary_output[index]).reshape(-1)
+                    for index in range(len(pending_requests))
+                ]
+            except Exception:
+                pass
+
+        outputs: list[np.ndarray] = []
+        for request in pending_requests:
+            raw_outputs = self._run_model_outputs(request.tensor)
+            outputs.append(np.asarray(raw_outputs[0]).reshape(-1))
+        return outputs
+
+    def _supports_batch_inference(self) -> bool:
+        input_shape = getattr(getattr(self._model, "input", None), "shape", None)
+        if not input_shape:
+            return False
+        batch_dim = input_shape[0]
+        return not isinstance(batch_dim, int) or batch_dim != 1
 
     def _combine_eye_measurements(
         self,

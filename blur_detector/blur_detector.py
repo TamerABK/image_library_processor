@@ -2,11 +2,13 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_compl
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import time
 from typing import Callable, List
 
 import cv2
 import numpy as np
 
+from automatic_scan.perf import get_active_profiler
 from image_file_utils import find_supported_files
 from image_loader import default_image_loader
 from scan_controls import CancellationToken
@@ -79,6 +81,44 @@ class BlurDetector:
 
         if gray is None:
             raise ValueError(f"Could not open image: {image_path}")
+
+        return self.detect_gray(gray, path=Path(image_path))
+
+    def detect_image(
+        self,
+        image_bgr: np.ndarray,
+        *,
+        path: Path | None = None,
+    ) -> BlurResult:
+        convert_started = time.perf_counter()
+        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+        profiler = get_active_profiler()
+        if profiler is not None:
+            profiler.record_grayscale_conversion(
+                path,
+                time.perf_counter() - convert_started,
+            )
+        return self.detect_gray(gray, path=path)
+
+    def detect_gray(
+        self,
+        gray: np.ndarray,
+        *,
+        path: Path | None = None,
+    ) -> BlurResult:
+        if max(gray.shape[:2]) > self.max_dimension:
+            resize_started = time.perf_counter()
+            scale = self.max_dimension / max(gray.shape[:2])
+            gray = cv2.resize(
+                gray,
+                None,
+                fx=scale,
+                fy=scale,
+                interpolation=cv2.INTER_AREA,
+            )
+            profiler = get_active_profiler()
+            if profiler is not None:
+                profiler.record_resize(path, time.perf_counter() - resize_started)
 
         lap_score = self._laplacian(gray)
         sobel_score = self._sobel(gray)

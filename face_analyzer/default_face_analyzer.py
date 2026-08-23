@@ -144,6 +144,130 @@ class DefaultFaceAnalyzer(FaceAnalyzer):
         face: DetectedFace,
     ) -> FaceAnalysisResult:
         validate_image(image)
+        head_pose = self._safe_head_pose(image, face)
+        eye_state = self._safe_eye_state(
+            image,
+            face,
+            head_pose=head_pose,
+        )
+        return self._build_analysis(
+            image,
+            face,
+            head_pose=head_pose,
+            eye_state=eye_state,
+        )
+
+    def analyze_many(
+        self,
+        image: np.ndarray,
+        faces: Sequence[DetectedFace],
+    ) -> list[FaceAnalysisResult]:
+        validate_image(image)
+        faces = list(faces)
+        if not faces:
+            return []
+
+        head_poses = self._head_poses_for_faces(image, faces)
+        eye_states = self._eye_states_for_faces(image, faces, head_poses)
+        return [
+            self._build_analysis(
+                image,
+                face,
+                head_pose=head_pose,
+                eye_state=eye_state,
+            )
+            for face, head_pose, eye_state in zip(faces, head_poses, eye_states)
+        ]
+
+    def _safe_head_pose(
+        self,
+        image: np.ndarray,
+        face: DetectedFace,
+    ) -> HeadPose:
+        try:
+            return self._head_pose_estimator.estimate(image, face)
+        except (ValueError, RuntimeError, cv2.error):
+            return HeadPose.unknown(
+                AssessmentStatus.MODEL_ERROR,
+                source=type(self._head_pose_estimator).__name__,
+            )
+
+    def _safe_eye_state(
+        self,
+        image: np.ndarray,
+        face: DetectedFace,
+        *,
+        head_pose: HeadPose,
+    ) -> EyeState:
+        if self._eye_estimator is None:
+            return EyeState.unknown(AssessmentStatus.NOT_CONFIGURED)
+        try:
+            return self._eye_estimator.estimate(
+                image,
+                face,
+                head_pose=head_pose,
+                face_index=getattr(face, "index", None),
+            )
+        except (ValueError, RuntimeError, cv2.error):
+            return EyeState.unknown(AssessmentStatus.MODEL_ERROR)
+
+    def _head_poses_for_faces(
+        self,
+        image: np.ndarray,
+        faces: Sequence[DetectedFace],
+    ) -> list[HeadPose]:
+        estimate_many = getattr(self._head_pose_estimator, "estimate_many", None)
+        if callable(estimate_many):
+            try:
+                poses = list(estimate_many(image, faces))
+                if len(poses) == len(faces):
+                    return poses
+            except Exception:
+                pass
+        return [self._safe_head_pose(image, face) for face in faces]
+
+    def _eye_states_for_faces(
+        self,
+        image: np.ndarray,
+        faces: Sequence[DetectedFace],
+        head_poses: Sequence[HeadPose],
+    ) -> list[EyeState]:
+        if self._eye_estimator is None:
+            return [EyeState.unknown(AssessmentStatus.NOT_CONFIGURED) for _face in faces]
+
+        estimate_many = getattr(self._eye_estimator, "estimate_many", None)
+        if callable(estimate_many):
+            try:
+                eye_states = list(
+                    estimate_many(
+                        image,
+                        faces,
+                        head_poses=head_poses,
+                        face_indices=[getattr(face, "index", None) for face in faces],
+                    )
+                )
+                if len(eye_states) == len(faces):
+                    return eye_states
+            except Exception:
+                pass
+
+        return [
+            self._safe_eye_state(
+                image,
+                face,
+                head_pose=head_pose,
+            )
+            for face, head_pose in zip(faces, head_poses)
+        ]
+
+    def _build_analysis(
+        self,
+        image: np.ndarray,
+        face: DetectedFace,
+        *,
+        head_pose: HeadPose,
+        eye_state: EyeState,
+    ) -> FaceAnalysisResult:
         image_height, image_width = image.shape[:2]
 
         geometry = calculate_geometry(
@@ -163,13 +287,7 @@ class DefaultFaceAnalyzer(FaceAnalyzer):
             alignment_confidence=alignment_confidence,
         )
 
-        head_pose = self._safe_head_pose(image, face)
         pose = _pose_quality(head_pose, config=self._config)
-        eye_state = self._safe_eye_state(
-            image,
-            face,
-            head_pose=head_pose,
-        )
         eyes, eye_weight = self._eye_metric(
             eye_state=eye_state,
             head_pose=head_pose,
@@ -238,38 +356,6 @@ class DefaultFaceAnalyzer(FaceAnalyzer):
                 eye_state=eye_state,
             ),
         )
-
-    def _safe_head_pose(
-        self,
-        image: np.ndarray,
-        face: DetectedFace,
-    ) -> HeadPose:
-        try:
-            return self._head_pose_estimator.estimate(image, face)
-        except (ValueError, RuntimeError, cv2.error):
-            return HeadPose.unknown(
-                AssessmentStatus.MODEL_ERROR,
-                source=type(self._head_pose_estimator).__name__,
-            )
-
-    def _safe_eye_state(
-        self,
-        image: np.ndarray,
-        face: DetectedFace,
-        *,
-        head_pose: HeadPose,
-    ) -> EyeState:
-        if self._eye_estimator is None:
-            return EyeState.unknown(AssessmentStatus.NOT_CONFIGURED)
-        try:
-            return self._eye_estimator.estimate(
-                image,
-                face,
-                head_pose=head_pose,
-                face_index=getattr(face, "index", None),
-            )
-        except (ValueError, RuntimeError, cv2.error):
-            return EyeState.unknown(AssessmentStatus.MODEL_ERROR)
 
     def _selection_score(
         self,

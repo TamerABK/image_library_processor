@@ -46,12 +46,18 @@ class SixDRepNetOnnxEstimator:
 
     def __init__(
         self,
-        model_path: str | Path,
+        model_path: str | Path | None,
         *,
         providers: Sequence[Provider] | None = None,
         crop_expansion: float = 1.25,
+        model: OnnxModel | None = None,
     ) -> None:
-        self._model = OnnxModel(model_path, providers=providers)
+        if model is None:
+            if model_path is None:
+                raise ValueError("model_path is required when model is not provided.")
+            self._model = OnnxModel(model_path, providers=providers)
+        else:
+            self._model = model
         self._crop_expansion = max(1.0, crop_expansion)
 
         shape = self._model.input.shape
@@ -92,6 +98,64 @@ class SixDRepNetOnnxEstimator:
             source="sixdrepnet_onnx",
         )
 
+    def estimate_many(
+        self,
+        image: np.ndarray,
+        faces: Sequence[DetectedFace],
+    ) -> list[HeadPose]:
+        faces = list(faces)
+        if not faces:
+            return []
+
+        bgr_image = ensure_bgr(image)
+        poses: list[HeadPose | None] = [None] * len(faces)
+        pending_indices: list[int] = []
+        pending_tensors: list[np.ndarray] = []
+        pending_dimensions: list[int] = []
+
+        for index, face in enumerate(faces):
+            crop = extract_square_crop(
+                bgr_image,
+                face.bbox,
+                expansion=self._crop_expansion,
+            )
+            if crop.size == 0:
+                poses[index] = HeadPose.unknown(AssessmentStatus.INVALID_INPUT)
+                continue
+
+            source_minimum_dimension = min(crop.shape[:2])
+            if source_minimum_dimension < 40:
+                poses[index] = HeadPose.unknown(AssessmentStatus.FACE_TOO_SMALL)
+                continue
+
+            pending_indices.append(index)
+            pending_tensors.append(self._preprocess(crop))
+            pending_dimensions.append(source_minimum_dimension)
+
+        if pending_tensors:
+            try:
+                batch = np.concatenate(pending_tensors, axis=0)
+                outputs = np.asarray(self._model.run(batch)[0], dtype=np.float64)
+                if outputs.ndim == 1:
+                    outputs = outputs.reshape(1, -1)
+                elif outputs.ndim == 2 and len(pending_indices) == 1:
+                    outputs = outputs.reshape(1, *outputs.shape)
+            except Exception:
+                return [self.estimate(image, face) for face in faces]
+
+            for output_index, face_index in enumerate(pending_indices):
+                poses[face_index] = self._pose_from_output(
+                    outputs[output_index],
+                    source_minimum_dimension=pending_dimensions[output_index],
+                )
+
+        return [
+            pose
+            if pose is not None
+            else HeadPose.unknown(AssessmentStatus.MODEL_ERROR, source="sixdrepnet_onnx")
+            for pose in poses
+        ]
+
     def _preprocess(self, crop: np.ndarray) -> np.ndarray:
         rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
 
@@ -108,6 +172,30 @@ class SixDRepNetOnnxEstimator:
             tensor - np.asarray([0.485, 0.456, 0.406], dtype=np.float32)
         ) / np.asarray([0.229, 0.224, 0.225], dtype=np.float32)
         return np.transpose(tensor, (2, 0, 1))[None, ...]
+
+    def _pose_from_output(
+        self,
+        output: np.ndarray,
+        *,
+        source_minimum_dimension: int,
+    ) -> HeadPose:
+        rotation = self._rotation_matrix(np.asarray(output, dtype=np.float64).squeeze())
+        if rotation is None:
+            return HeadPose.unknown(
+                AssessmentStatus.MODEL_ERROR,
+                source="sixdrepnet_onnx",
+            )
+
+        pitch, yaw, roll = self._euler_xyz(rotation)
+        confidence = smoothstep(48.0, 128.0, float(source_minimum_dimension))
+        return HeadPose(
+            yaw_degrees=float(math.degrees(yaw)),
+            pitch_degrees=float(math.degrees(pitch)),
+            roll_degrees=float(math.degrees(roll)),
+            confidence=clamp01(confidence),
+            status=AssessmentStatus.ASSESSED,
+            source="sixdrepnet_onnx",
+        )
 
     @staticmethod
     def _rotation_matrix(output: np.ndarray) -> np.ndarray | None:

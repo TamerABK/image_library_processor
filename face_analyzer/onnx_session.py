@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import time
 from typing import Any, Sequence
 
 import numpy as np
 
-try:
-    import onnxruntime as ort
-except ImportError:  # Allows importing the package before ORT is installed.
-    ort = None  # type: ignore[assignment]
+from automatic_scan.perf import get_active_profiler
+from face_detector.onnx_runtime import ort
 
 
 Provider = str | tuple[str, dict[str, Any]]
@@ -52,6 +51,7 @@ class OnnxModel:
         if not selected:
             selected = ["CPUExecutionProvider"]
 
+        session_started = time.perf_counter()
         self.session = ort.InferenceSession(
             str(model_path),
             sess_options=options,
@@ -59,15 +59,36 @@ class OnnxModel:
         )
         self.input = self.session.get_inputs()[0]
         self.outputs = self.session.get_outputs()
+        profiler = get_active_profiler()
+        if profiler is not None:
+            provider_name = self.session.get_providers()[0] if self.session.get_providers() else None
+            profiler.record_model_session_creation(
+                self.model_path.stem,
+                time.perf_counter() - session_started,
+                provider=provider_name,
+            )
 
     def run(self, tensor: np.ndarray) -> list[np.ndarray]:
         return self.run_all_outputs(tensor)
 
     def run_all_outputs(self, tensor: np.ndarray) -> list[np.ndarray]:
-        return self.session.run(
+        contiguous = np.ascontiguousarray(tensor)
+        started = time.perf_counter()
+        outputs = self.session.run(
             None,
-            {self.input.name: np.ascontiguousarray(tensor)},
+            {self.input.name: contiguous},
         )
+        profiler = get_active_profiler()
+        if profiler is not None:
+            batch_size = int(contiguous.shape[0]) if contiguous.ndim >= 1 else 1
+            provider_name = self.session.get_providers()[0] if self.session.get_providers() else None
+            profiler.record_model_call(
+                self.model_path.stem,
+                batch_size=batch_size,
+                inference_seconds=time.perf_counter() - started,
+                provider=provider_name,
+            )
+        return outputs
 
     def metadata_report(self) -> dict[str, Any]:
         metadata = self.session.get_modelmeta()

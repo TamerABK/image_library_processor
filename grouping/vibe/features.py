@@ -5,13 +5,11 @@ import json
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
-from PIL import ExifTags, Image, ImageOps
 
 from face_detector.cosine_similarity import CosineEmbeddingSimilarity
 from face_detector.face_database_sqlite import SQLiteFaceDatabase
@@ -28,13 +26,6 @@ from .embedder import VibeEmbedder
 
 
 LOGGER = logging.getLogger(__name__)
-
-_EXIF_DATETIME_TAGS = (
-    36867,  # DateTimeOriginal
-    36868,  # DateTimeDigitized
-    306,  # DateTime
-)
-
 
 @dataclass(frozen=True, slots=True)
 class ExtractionSummary:
@@ -380,8 +371,13 @@ class VibeFeatureExtractor:
         metadata = default_image_loader.read_metadata(path)
         width = metadata.width if metadata is not None else int(decoded_image.shape[1])
         height = metadata.height if metadata is not None else int(decoded_image.shape[0])
-
-        capture_timestamp, timestamp_source = _read_capture_timestamp(path, fallback_mtime_ns=mtime_ns)
+        capture_timestamp = None
+        timestamp_source = "filesystem"
+        if metadata is not None and metadata.capture_timestamp is not None:
+            capture_timestamp = metadata.capture_timestamp
+            timestamp_source = metadata.timestamp_source
+        else:
+            capture_timestamp = mtime_ns / 1_000_000_000
         recognized_person_ids: list[str] = []
         recognized_person_names: list[str] = []
         analysis_faces = self._analysis_cache.get(path, file_size, mtime_ns) or []
@@ -466,60 +462,15 @@ class VibeFeatureExtractor:
         return ids, names, quality_score
 
     def _load_preview_image(self, path: Path) -> np.ndarray | None:
-        if path.suffix.lower() in RAW_EXTENSIONS:
-            return default_image_loader.load_for_scan(path, max_dimension=self._decode_dimension)
-
-        try:
-            with Image.open(path) as image:
-                image = ImageOps.exif_transpose(image)
-                if image.mode != "RGB":
-                    image = image.convert("RGB")
-                image.thumbnail((self._decode_dimension, self._decode_dimension), Image.Resampling.LANCZOS)
-                rgb = np.asarray(image, dtype=np.uint8)
-        except Exception:
-            return None
-        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        return default_image_loader.load_for_scan(
+            path,
+            max_dimension=self._decode_dimension,
+        )
 
 
 def _read_capture_timestamp(path: Path, *, fallback_mtime_ns: int) -> tuple[float | None, str]:
-    if path.suffix.lower() not in RAW_EXTENSIONS:
-        try:
-            with Image.open(path) as image:
-                image_exif = image.getexif()
-                for tag_id in _EXIF_DATETIME_TAGS:
-                    value = image_exif.get(tag_id)
-                    parsed = _parse_exif_datetime(value)
-                    if parsed is not None:
-                        return parsed, "exif"
-        except Exception:
-            pass
-
     fallback_seconds = fallback_mtime_ns / 1_000_000_000
     return fallback_seconds, "filesystem"
-
-
-def _parse_exif_datetime(raw_value: object) -> float | None:
-    if raw_value is None:
-        return None
-    if isinstance(raw_value, bytes):
-        try:
-            raw_value = raw_value.decode("utf-8", errors="ignore")
-        except Exception:
-            return None
-    if not isinstance(raw_value, str):
-        return None
-
-    value = raw_value.strip()
-    if not value:
-        return None
-
-    for fmt in ("%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-        try:
-            parsed = datetime.strptime(value, fmt)
-        except ValueError:
-            continue
-        return parsed.replace(tzinfo=timezone.utc).timestamp()
-    return None
 
 
 def _compute_color_features(image_bgr: np.ndarray) -> tuple[np.ndarray, dict[str, float]]:

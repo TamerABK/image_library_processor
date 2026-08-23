@@ -7,10 +7,10 @@
 from __future__ import division
 import numpy as np
 import onnx
-import onnxruntime
 import os
 import os.path as osp
 import cv2
+import time
 import warnings
 
 
@@ -74,11 +74,12 @@ def distance2kps(points, distance, max_shape=None):
 
 class SCRFD:
     def __init__(self, model_file=None, session=None, session_options=None, providers=None):
-        import onnxruntime
+        from .onnx_runtime import ort as onnxruntime
         self.model_file = model_file
         self.session = session
         self.taskname = 'detection'
         self.batched = False
+        self._timing_callback = None
         if self.session is None:
             assert self.model_file is not None
             assert osp.exists(self.model_file)
@@ -91,6 +92,9 @@ class SCRFD:
         self.nms_thresh = 0.4
         self.det_thresh = 0.5
         self._init_vars()
+
+    def set_timing_callback(self, callback):
+        self._timing_callback = callback
 
     def _init_vars(self):
         input_cfg = self.session.get_inputs()[0]
@@ -161,14 +165,25 @@ class SCRFD:
         bboxes_list = []
         kpss_list = []
         input_size = tuple(img.shape[0:2][::-1])
-        blob = cv2.dnn.blobFromImage(img, 1.0 / self.input_std, input_size,
-                                     (self.input_mean, self.input_mean, self.input_mean), swapRB=True)
+        preprocess_started = time.perf_counter()
+        blob = cv2.dnn.blobFromImage(
+            img,
+            1.0 / self.input_std,
+            input_size,
+            (self.input_mean, self.input_mean, self.input_mean),
+            swapRB=True,
+        )
+        self._record_timing("detect_blob_from_image", time.perf_counter() - preprocess_started)
+
+        inference_started = time.perf_counter()
         net_outs = self.session.run(self.output_names, {self.input_name: blob})
+        self._record_timing("detect_session_run", time.perf_counter() - inference_started)
 
         input_height = blob.shape[2]
         input_width = blob.shape[3]
         fmc = self.fmc
         for idx, stride in enumerate(self._feat_stride_fpn):
+            stride_started = time.perf_counter()
             # If model support batch dim, take first output
             if self.batched:
                 scores = net_outs[idx][0]
@@ -226,12 +241,17 @@ class SCRFD:
                 kpss = kpss.reshape((kpss.shape[0], -1, 2))
                 pos_kpss = kpss[pos_inds]
                 kpss_list.append(pos_kpss)
+            self._record_timing(
+                f"detect_stride_{stride}_decode",
+                time.perf_counter() - stride_started,
+            )
         return scores_list, bboxes_list, kpss_list
 
     def detect(self, img, input_size=None, max_num=0, metric='default'):
         assert input_size is not None or self.input_size is not None
         input_size = self.input_size if input_size is None else input_size
 
+        resize_started = time.perf_counter()
         im_ratio = float(img.shape[0]) / img.shape[1]
         model_ratio = float(input_size[1]) / input_size[0]
         if im_ratio > model_ratio:
@@ -244,18 +264,29 @@ class SCRFD:
         resized_img = cv2.resize(img, (new_width, new_height))
         det_img = np.zeros((input_size[1], input_size[0], 3), dtype=np.uint8)
         det_img[:new_height, :new_width, :] = resized_img
+        self._record_timing("detect_resize_and_pad", time.perf_counter() - resize_started)
 
         scores_list, bboxes_list, kpss_list = self.forward(det_img, self.det_thresh)
 
+        stack_started = time.perf_counter()
         scores = np.vstack(scores_list)
         scores_ravel = scores.ravel()
         order = scores_ravel.argsort()[::-1]
         bboxes = np.vstack(bboxes_list) / det_scale
         if self.use_kps:
             kpss = np.vstack(kpss_list) / det_scale
+        self._record_timing("detect_stack_and_sort", time.perf_counter() - stack_started)
+
+        nms_prep_started = time.perf_counter()
         pre_det = np.hstack((bboxes, scores)).astype(np.float32, copy=False)
         pre_det = pre_det[order, :]
+        self._record_timing("detect_prepare_nms_input", time.perf_counter() - nms_prep_started)
+
+        nms_started = time.perf_counter()
         keep = self.nms(pre_det)
+        self._record_timing("detect_nms", time.perf_counter() - nms_started)
+
+        finalize_started = time.perf_counter()
         det = pre_det[keep, :]
         if self.use_kps:
             kpss = kpss[order, :, :]
@@ -281,6 +312,7 @@ class SCRFD:
             det = det[bindex, :]
             if kpss is not None:
                 kpss = kpss[bindex, :]
+        self._record_timing("detect_finalize_outputs", time.perf_counter() - finalize_started)
         return det, kpss
 
     def nms(self, dets):
@@ -312,6 +344,10 @@ class SCRFD:
             order = order[inds + 1]
 
         return keep
+
+    def _record_timing(self, phase, seconds):
+        if self._timing_callback is not None:
+            self._timing_callback(phase, seconds)
 
 
 def get_scrfd(name, download=False, root='~/.insightface/models', **kwargs):

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeAlias
 
+from automatic_scan.models import AutomaticScanResult
+
 
 @dataclass(slots=True)
 class ResultItem:
@@ -12,6 +14,7 @@ class ResultItem:
     detail: str
     recommended_delete: bool = False
     person_id: int | None = None
+    badge_text: str = ""
 
 
 @dataclass(slots=True)
@@ -52,7 +55,28 @@ class AppState:
     )
     known_people_only: bool = False
     auto_export_faces: bool = False
-    mode: str = "duplicates"
+    mode: str = "automatic"
+    keepers_per_duplicate_group: str = "1"
+    available_keeper_counts: tuple[str, ...] = ("1", "2", "3", "4", "5")
+    blur_policy: str = "Automatic"
+    available_blur_policies: tuple[str, ...] = (
+        "Automatic",
+        "Review borderline photos",
+        "Do not exclude blur automatically",
+    )
+    face_quality_preset: str = "Balanced"
+    available_face_quality_presets: tuple[str, ...] = (
+        "Relaxed",
+        "Balanced",
+        "Strict",
+    )
+    hard_exclude_dark_faces: bool = False
+    execution_provider: str = "Automatic"
+    available_execution_providers: tuple[str, ...] = (
+        "Automatic",
+        "CPU",
+        "GPU",
+    )
     vibe_preset: str = "Balanced Scenes"
     available_vibe_presets: tuple[str, ...] = (
         "Session",
@@ -74,15 +98,23 @@ class AppState:
     page_label: str = ""
     face_group_label: str = ""
     face_group_labels: tuple[str, ...] = ()
+    result_tabs: tuple[str, ...] = ()
+    current_result_tab: str = "Scenes"
     show_face_options: bool = False
     show_vibe_options: bool = False
+    show_automatic_options: bool = True
     show_face_selector: bool = False
+    show_result_tabs: bool = False
+    show_unknown_review: bool = False
+    unknown_review_label: str = ""
     show_pagination: bool = False
     can_show_previous_page: bool = False
     can_show_next_page: bool = False
     can_scan: bool = True
     can_cancel: bool = False
     can_delete: bool = False
+    can_restore: bool = False
+    can_keep: bool = False
     can_export: bool = False
     can_export_vibe_debug: bool = False
     progress_mode: str = "determinate"
@@ -112,6 +144,7 @@ class ScanResultMessage:
     summary: str | None = None
     warning: str | None = None
     debug_payload: dict[str, Any] | None = None
+    automatic_result: AutomaticScanResult | None = None
 
 
 @dataclass(slots=True)
@@ -142,6 +175,7 @@ class UnknownFacePrompt:
 class DeleteResult:
     deleted_count: int
     errors: list[str]
+    needs_rescan: bool = False
 
 
 @dataclass(slots=True)

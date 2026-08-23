@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 
 from app_paths import app_data_path
+from automatic_scan.perf import InstrumentedSqliteConnection, get_active_profiler
 
 
 UNIFIED_CACHE_DB_FILENAME = "image_analysis_cache.sqlite3"
@@ -41,7 +43,15 @@ class SharedImageCacheDatabase:
             )
 
     def connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self._db_path, timeout=30)
+        started = time.perf_counter()
+        connection = sqlite3.connect(
+            self._db_path,
+            timeout=30,
+            factory=InstrumentedSqliteConnection,
+        )
+        profiler = get_active_profiler()
+        if profiler is not None:
+            profiler.record_database_connect(time.perf_counter() - started)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA journal_mode = WAL")

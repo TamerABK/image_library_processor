@@ -1,9 +1,32 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Any, Sequence
 
-import onnxruntime as ort
+from automatic_scan.perf import get_active_profiler
+
+_TORCH_PRELOAD_ATTEMPTED = False
+
+
+def preload_onnxruntime_dependencies() -> None:
+    global _TORCH_PRELOAD_ATTEMPTED
+    if _TORCH_PRELOAD_ATTEMPTED:
+        return
+    _TORCH_PRELOAD_ATTEMPTED = True
+
+    try:
+        import torch  # noqa: F401
+    except Exception:
+        return
+
+
+preload_onnxruntime_dependencies()
+
+try:
+    import onnxruntime as ort
+except ImportError:
+    ort = None  # type: ignore[assignment]
 
 
 DEFAULT_PREFERRED_PROVIDERS = (
@@ -17,6 +40,8 @@ DEFAULT_PREFERRED_PROVIDERS = (
 
 
 def _resolve_runtime_attribute(name: str) -> Any:
+    if ort is None:
+        return None
     candidate = getattr(ort, name, None)
     if candidate is not None:
         return candidate
@@ -75,6 +100,11 @@ def select_providers(
 
 
 def create_session_options() -> Any:
+    if ort is None:
+        raise RuntimeError(
+            "onnxruntime is not installed or could not be imported. "
+            "Install a compatible onnxruntime package for this system."
+        )
     session_options_type = _resolve_runtime_attribute("SessionOptions")
     if session_options_type is None:
         raise AttributeError(
@@ -99,11 +129,16 @@ def create_inference_session(
     session_options: Any | None = None,
     providers: Sequence[str] | None = None,
 ) -> ort.InferenceSession:
+    if ort is None:
+        raise RuntimeError(
+            "onnxruntime is not installed or could not be imported. "
+            "Install a compatible onnxruntime package for this system."
+        )
     session_options = session_options or create_session_options()
 
     provider_candidates: list[list[str] | None] = []
     if providers is not None:
-        provider_candidates.append(list(providers))
+        provider_candidates.append(select_providers(providers))
     else:
         provider_candidates.append(select_providers())
 
@@ -124,17 +159,27 @@ def create_inference_session(
         attempted.add(candidate_key)
 
         try:
+            started = time.perf_counter()
             if candidate is None:
-                return ort.InferenceSession(
+                session = ort.InferenceSession(
                     str(model_path),
                     sess_options=session_options,
                 )
-
-            return ort.InferenceSession(
-                str(model_path),
-                sess_options=session_options,
-                providers=candidate,
-            )
+            else:
+                session = ort.InferenceSession(
+                    str(model_path),
+                    sess_options=session_options,
+                    providers=candidate,
+                )
+            profiler = get_active_profiler()
+            if profiler is not None:
+                provider_name = session.get_providers()[0] if session.get_providers() else None
+                profiler.record_model_session_creation(
+                    Path(model_path).stem,
+                    time.perf_counter() - started,
+                    provider=provider_name,
+                )
+            return session
         except Exception as exc:
             last_error = exc
 

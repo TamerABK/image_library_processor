@@ -17,6 +17,10 @@ class PhotoCleanerApp:
                 start_scan=self._start_scan,
                 cancel_scan=self._cancel_scan,
                 mode_changed=self._on_mode_changed,
+                result_tab_changed=self._on_result_tab_changed,
+                restore_selected=self._restore_selected,
+                keep_selected=self._keep_selected,
+                review_unknown_people=self._review_unknown_people,
                 face_group_selected=self._on_face_group_selected,
                 show_previous_page=self._show_previous_page,
                 show_next_page=self._show_next_page,
@@ -49,6 +53,19 @@ class PhotoCleanerApp:
 
     def _on_mode_changed(self) -> None:
         self.view_model.set_mode(self.view.current_mode())
+        self.view_model.set_keepers_per_duplicate_group(
+            self.view.current_keepers_per_duplicate_group()
+        )
+        self.view_model.set_blur_policy(self.view.current_blur_policy())
+        self.view_model.set_face_quality_preset(
+            self.view.current_face_quality_preset()
+        )
+        self.view_model.set_hard_exclude_dark_faces(
+            self.view.current_hard_exclude_dark_faces()
+        )
+        self.view_model.set_execution_provider(
+            self.view.current_execution_provider()
+        )
         self.view_model.set_known_people_only(self.view.current_known_people_only())
         self.view_model.set_auto_export_faces(self.view.current_auto_export_faces())
         self.view_model.set_orientation(self.view.current_orientation())
@@ -63,6 +80,10 @@ class PhotoCleanerApp:
         self.view_model.set_vibe_maximum_group_size(self.view.current_vibe_maximum_group_size())
         self.view_model.set_vibe_batch_size(self.view.current_vibe_batch_size())
         self._sync_view()
+
+    def _on_result_tab_changed(self) -> None:
+        self.view_model.set_result_tab(self.view.current_result_tab())
+        self._render_results()
 
     def _start_scan(self) -> None:
         self._sync_inputs_from_view()
@@ -97,11 +118,40 @@ class PhotoCleanerApp:
         self.view.update_selection_state(self.view_model.selection_state_snapshot())
         self._sync_view()
 
+    def _restore_selected(self) -> None:
+        if not self.view_model.restore_selected():
+            return
+        self._start_scan()
+
+    def _keep_selected(self) -> None:
+        if not self.view_model.keep_selected():
+            return
+        self._start_scan()
+
+    def _review_unknown_people(self) -> None:
+        renamed_any = False
+        for cluster in self.view_model.current_unknown_clusters():
+            try:
+                prompt = self.view_model.build_unknown_face_prompt_for_automatic_cluster(cluster)
+            except Exception as exc:
+                self.view.show_error("Unknown people", f"Could not prepare cluster review:\n\n{exc}")
+                continue
+            chosen_name = self.view.prompt_unknown_face(prompt)
+            if not chosen_name:
+                continue
+            self.view_model.apply_unknown_face_name(prompt, chosen_name)
+            renamed_any = True
+        if renamed_any:
+            self._start_scan()
+
     def _delete_selected(self) -> None:
         selected_count = self.view_model.selected_item_count()
         if not selected_count:
             return
-        if not self.view.confirm_delete(selected_count):
+        if not self.view.confirm_delete(
+            selected_count,
+            message=self.view_model.deletion_review_text(),
+        ):
             return
 
         result = self.view_model.delete_selected()
@@ -112,7 +162,10 @@ class PhotoCleanerApp:
                 "Some files could not be deleted:\n\n" + "\n".join(result.errors),
             )
         else:
-            self.view.show_info("Deleted", f"Deleted {result.deleted_count} photo(s).")
+            title = "Moved to Trash" if self.view_model.state.mode == "automatic" else "Deleted"
+            self.view.show_info(title, f"Processed {result.deleted_count} photo(s).")
+        if result.needs_rescan:
+            self._start_scan()
 
     def _export_selected(self) -> None:
         if not self.view_model.selected_paths():
@@ -142,8 +195,13 @@ class PhotoCleanerApp:
         if not self.view_model.can_export_vibe_debug():
             return
 
+        export_title = (
+            "Export automatic diagnostics JSON"
+            if self.view_model.state.mode == "automatic"
+            else "Export vibe debug JSON"
+        )
         output_path = self.view.ask_save_path(
-            title="Export vibe debug JSON",
+            title=export_title,
             initialfile=self.view_model.suggest_vibe_debug_filename(),
         )
         if not output_path:
@@ -152,12 +210,12 @@ class PhotoCleanerApp:
         try:
             written_path = self.view_model.export_vibe_debug(output_path)
         except Exception as exc:
-            self.view.show_error("Export failed", f"Could not export vibe debug JSON:\n\n{exc}")
+            self.view.show_error("Export failed", f"Could not export diagnostics JSON:\n\n{exc}")
             return
 
         self.view.show_info(
             "Export complete",
-            f"Saved vibe debug JSON to {written_path}",
+            f"Saved diagnostics JSON to {written_path}",
         )
 
     def _schedule_poll(self) -> None:
@@ -221,6 +279,19 @@ class PhotoCleanerApp:
         self.view_model.set_file_type(self.view.current_file_type())
         self.view_model.set_orientation(self.view.current_orientation())
         self.view_model.set_mode(self.view.current_mode())
+        self.view_model.set_keepers_per_duplicate_group(
+            self.view.current_keepers_per_duplicate_group()
+        )
+        self.view_model.set_blur_policy(self.view.current_blur_policy())
+        self.view_model.set_face_quality_preset(
+            self.view.current_face_quality_preset()
+        )
+        self.view_model.set_hard_exclude_dark_faces(
+            self.view.current_hard_exclude_dark_faces()
+        )
+        self.view_model.set_execution_provider(
+            self.view.current_execution_provider()
+        )
         self.view_model.set_known_people_only(self.view.current_known_people_only())
         self.view_model.set_auto_export_faces(self.view.current_auto_export_faces())
         self.view_model.set_vibe_preset(self.view.current_vibe_preset())

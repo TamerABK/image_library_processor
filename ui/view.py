@@ -20,6 +20,10 @@ class PhotoCleanerViewCallbacks:
     start_scan: Callable[[], None]
     cancel_scan: Callable[[], None]
     mode_changed: Callable[[], None]
+    result_tab_changed: Callable[[], None]
+    restore_selected: Callable[[], None]
+    keep_selected: Callable[[], None]
+    review_unknown_people: Callable[[], None]
     face_group_selected: Callable[[], None]
     show_previous_page: Callable[[], None]
     show_next_page: Callable[[], None]
@@ -50,7 +54,12 @@ class PhotoCleanerView:
         self.orientation_var = tk.StringVar(value="All pictures")
         self.known_people_only_var = tk.BooleanVar(value=False)
         self.auto_export_faces_var = tk.BooleanVar(value=False)
-        self.mode_var = tk.StringVar(value="duplicates")
+        self.mode_var = tk.StringVar(value="automatic")
+        self.keepers_var = tk.StringVar(value="1")
+        self.blur_policy_var = tk.StringVar(value="Automatic")
+        self.face_quality_preset_var = tk.StringVar(value="Balanced")
+        self.hard_exclude_dark_faces_var = tk.BooleanVar(value=False)
+        self.execution_provider_var = tk.StringVar(value="Automatic")
         self.vibe_preset_var = tk.StringVar(value="Balanced Scenes")
         self.vibe_include_people_var = tk.BooleanVar(value=True)
         self.vibe_include_color_var = tk.BooleanVar(value=True)
@@ -65,6 +74,7 @@ class PhotoCleanerView:
         self.count_var = tk.StringVar(value="")
         self.elapsed_var = tk.StringVar(value="Elapsed: 00:00")
         self.face_group_var = tk.StringVar(value="")
+        self.result_tab_var = tk.StringVar(value="Scenes")
         self.page_label_var = tk.StringVar(value="")
 
         self._is_applying_state = False
@@ -116,6 +126,21 @@ class PhotoCleanerView:
     def current_vibe_preset(self) -> str:
         return self.vibe_preset_var.get()
 
+    def current_keepers_per_duplicate_group(self) -> str:
+        return self.keepers_var.get()
+
+    def current_blur_policy(self) -> str:
+        return self.blur_policy_var.get()
+
+    def current_face_quality_preset(self) -> str:
+        return self.face_quality_preset_var.get()
+
+    def current_hard_exclude_dark_faces(self) -> bool:
+        return self.hard_exclude_dark_faces_var.get()
+
+    def current_execution_provider(self) -> str:
+        return self.execution_provider_var.get()
+
     def current_vibe_include_people(self) -> bool:
         return self.vibe_include_people_var.get()
 
@@ -155,6 +180,9 @@ class PhotoCleanerView:
     def current_face_group_label(self) -> str:
         return self.face_group_var.get()
 
+    def current_result_tab(self) -> str:
+        return self.result_tab_var.get()
+
     def sync_state(self, state: AppState) -> None:
         self._is_applying_state = True
         try:
@@ -164,6 +192,11 @@ class PhotoCleanerView:
             self.known_people_only_var.set(state.known_people_only)
             self.auto_export_faces_var.set(state.auto_export_faces)
             self.mode_var.set(state.mode)
+            self.keepers_var.set(state.keepers_per_duplicate_group)
+            self.blur_policy_var.set(state.blur_policy)
+            self.face_quality_preset_var.set(state.face_quality_preset)
+            self.hard_exclude_dark_faces_var.set(state.hard_exclude_dark_faces)
+            self.execution_provider_var.set(state.execution_provider)
             self.vibe_preset_var.set(state.vibe_preset)
             self.vibe_include_people_var.set(state.vibe_include_people)
             self.vibe_include_color_var.set(state.vibe_include_color)
@@ -178,13 +211,23 @@ class PhotoCleanerView:
             self.count_var.set(state.count_text)
             self.elapsed_var.set(state.elapsed_text)
             self.face_group_var.set(state.face_group_label)
+            self.result_tab_var.set(state.current_result_tab)
             self.page_label_var.set(state.page_label)
             self.file_type_combo.configure(values=state.available_file_types)
             self.orientation_combo.configure(values=state.available_orientations)
             self.face_group_combo.configure(values=state.face_group_labels)
+            self.keeper_count_combo.configure(values=state.available_keeper_counts)
+            self.blur_policy_combo.configure(values=state.available_blur_policies)
+            self.face_quality_combo.configure(values=state.available_face_quality_presets)
+            self.execution_provider_combo.configure(values=state.available_execution_providers)
             self.vibe_preset_combo.configure(values=state.available_vibe_presets)
         finally:
             self._is_applying_state = False
+
+        if state.show_automatic_options:
+            self.automatic_options_frame.grid()
+        else:
+            self.automatic_options_frame.grid_remove()
 
         if state.show_face_options:
             self.face_options_frame.grid()
@@ -206,17 +249,35 @@ class PhotoCleanerView:
         else:
             self.face_selector_frame.grid_remove()
 
+        if state.show_result_tabs:
+            self.result_tabs_frame.grid()
+        else:
+            self.result_tabs_frame.grid_remove()
+
         if state.show_pagination:
             self.pagination_frame.grid()
         else:
             self.pagination_frame.grid_remove()
 
+        self._sync_result_tabs(state)
         self.scan_button.configure(state="normal" if state.can_scan else "disabled")
         self.cancel_button.configure(state="normal" if state.can_cancel else "disabled")
+        self.restore_button.configure(state="normal" if state.can_restore else "disabled")
+        self.keep_button.configure(state="normal" if state.can_keep else "disabled")
         self.delete_button.configure(state="normal" if state.can_delete else "disabled")
+        self.delete_button.configure(
+            text="Review deletion" if state.mode == "automatic" else "Delete selected"
+        )
         self.export_button.configure(state="normal" if state.can_export else "disabled")
         self.export_vibe_debug_button.configure(
             state="normal" if state.can_export_vibe_debug else "disabled"
+        )
+        self.export_vibe_debug_button.configure(
+            text="Export diagnostics" if state.mode == "automatic" else "Export vibe debug"
+        )
+        self.unknown_review_button.configure(
+            text=state.unknown_review_label or "Unknown people to review",
+            state="normal" if state.show_unknown_review else "disabled",
         )
         self.prev_page_button.configure(
             state="normal" if state.can_show_previous_page else "disabled"
@@ -391,10 +452,11 @@ class PhotoCleanerView:
             filetypes=filetypes,
         )
 
-    def confirm_delete(self, count: int) -> bool:
+    def confirm_delete(self, count: int, message: str | None = None) -> bool:
         return messagebox.askyesno(
             "Confirm deletion",
-            f"Delete {count} selected photo(s)? This cannot be undone.",
+            message
+            or f"Delete {count} selected photo(s)? This cannot be undone.",
         )
 
     def prompt_export_type(self) -> str | None:
@@ -668,36 +730,143 @@ class PhotoCleanerView:
         self.orientation_combo.grid(row=2, column=1, sticky="ew", padx=(8, 8), pady=(10, 0))
 
         mode_frame = ttk.Frame(controls)
-        mode_frame.grid(row=3, column=0, columnspan=3, sticky="w", pady=(10, 0))
-        ttk.Label(mode_frame, text="Scan mode").grid(row=0, column=0, sticky="w")
+        mode_frame.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        mode_frame.columnconfigure(0, weight=1)
+        ttk.Label(mode_frame, text="Workflow").grid(row=0, column=0, sticky="w")
         ttk.Radiobutton(
             mode_frame,
+            text="Automatic Scan",
+            value="automatic",
+            variable=self.mode_var,
+        ).grid(row=0, column=1, padx=(12, 0), sticky="w")
+        self.mode_var.trace_add("write", self._on_mode_changed)
+
+        self.automatic_options_frame = ttk.LabelFrame(
+            controls,
+            text="Automatic Scan",
+            padding=12,
+        )
+        self.automatic_options_frame.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        for column in range(4):
+            self.automatic_options_frame.columnconfigure(column, weight=1)
+
+        automatic_fields = (
+            ("Keepers per duplicate group", "How many photos to keep from each near-duplicate burst.", self.keepers_var, "keeper"),
+            ("Blur handling", "Exclude only confidently blurry frames by default.", self.blur_policy_var, "blur"),
+            ("Face-quality strictness", "Exclude people photos only when important faces are clearly unusable.", self.face_quality_preset_var, "face_quality"),
+            ("Hardware acceleration", "Use GPU when available, with CPU fallback.", self.execution_provider_var, "provider"),
+        )
+        for column, (label_text, tooltip_text, variable, field_type) in enumerate(automatic_fields):
+            field = ttk.Frame(self.automatic_options_frame)
+            field.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 8, 0))
+            label_frame = ttk.Frame(field)
+            label_frame.grid(row=0, column=0, sticky="w")
+            ttk.Label(label_frame, text=label_text).grid(row=0, column=0, sticky="w")
+            info = ttk.Label(label_frame, text="?", foreground="#1d4ed8", cursor="question_arrow")
+            info.grid(row=0, column=1, padx=(6, 0))
+            _Tooltip(info, tooltip_text)
+            if field_type == "keeper":
+                self.keeper_count_combo = ttk.Combobox(
+                    field,
+                    textvariable=variable,
+                    state="readonly",
+                    values=(variable.get(),),
+                    width=10,
+                )
+                self.keeper_count_combo.grid(row=1, column=0, sticky="w", pady=(4, 0))
+                self.keeper_count_combo.bind("<<ComboboxSelected>>", lambda _event: self._callbacks.mode_changed())
+            elif field_type == "blur":
+                self.blur_policy_combo = ttk.Combobox(
+                    field,
+                    textvariable=variable,
+                    state="readonly",
+                    values=(variable.get(),),
+                    width=24,
+                )
+                self.blur_policy_combo.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+                self.blur_policy_combo.bind("<<ComboboxSelected>>", lambda _event: self._callbacks.mode_changed())
+            elif field_type == "face_quality":
+                self.face_quality_combo = ttk.Combobox(
+                    field,
+                    textvariable=variable,
+                    state="readonly",
+                    values=(variable.get(),),
+                    width=16,
+                )
+                self.face_quality_combo.grid(row=1, column=0, sticky="w", pady=(4, 0))
+                self.face_quality_combo.bind("<<ComboboxSelected>>", lambda _event: self._callbacks.mode_changed())
+            else:
+                self.execution_provider_combo = ttk.Combobox(
+                    field,
+                    textvariable=variable,
+                    state="readonly",
+                    values=(variable.get(),),
+                    width=12,
+                )
+                self.execution_provider_combo.grid(row=1, column=0, sticky="w", pady=(4, 0))
+                self.execution_provider_combo.bind("<<ComboboxSelected>>", lambda _event: self._callbacks.mode_changed())
+
+        dark_faces_frame = ttk.Frame(self.automatic_options_frame)
+        dark_faces_frame.grid(row=1, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        ttk.Checkbutton(
+            dark_faces_frame,
+            text="Hard exclude dark faces",
+            variable=self.hard_exclude_dark_faces_var,
+            command=self._callbacks.mode_changed,
+        ).grid(row=0, column=0, sticky="w")
+        dark_faces_info = ttk.Label(
+            dark_faces_frame,
+            text="?",
+            foreground="#1d4ed8",
+            cursor="question_arrow",
+        )
+        dark_faces_info.grid(row=0, column=1, sticky="w", padx=(6, 0))
+        _Tooltip(
+            dark_faces_info,
+            "Automatically reject people photos when every important face is underexposed.",
+        )
+
+        ttk.Label(
+            self.automatic_options_frame,
+            text="Manual scans are intended for advanced or targeted workflows. Automatic Scan is recommended for normal use.",
+            foreground="#4b5563",
+            wraplength=900,
+            justify="left",
+        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(10, 0))
+
+        self.manual_modes_frame = ttk.LabelFrame(
+            controls,
+            text="Advanced / Manual Scans",
+            padding=12,
+        )
+        self.manual_modes_frame.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        ttk.Radiobutton(
+            self.manual_modes_frame,
             text="Near duplicates",
             value="duplicates",
             variable=self.mode_var,
-        ).grid(row=0, column=1, padx=(12, 0))
+        ).grid(row=0, column=0, sticky="w")
         ttk.Radiobutton(
-            mode_frame,
+            self.manual_modes_frame,
             text="Vibe groups",
             value="vibe",
             variable=self.mode_var,
-        ).grid(row=0, column=2, padx=(12, 0))
+        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
         ttk.Radiobutton(
-            mode_frame,
+            self.manual_modes_frame,
             text="Blurry photos",
             value="blurry",
             variable=self.mode_var,
-        ).grid(row=0, column=3, padx=(12, 0))
+        ).grid(row=0, column=2, sticky="w", padx=(12, 0))
         ttk.Radiobutton(
-            mode_frame,
+            self.manual_modes_frame,
             text="Facial recognition",
             value="faces",
             variable=self.mode_var,
-        ).grid(row=0, column=4, padx=(12, 0))
-        self.mode_var.trace_add("write", self._on_mode_changed)
+        ).grid(row=0, column=3, sticky="w", padx=(12, 0))
 
         self.face_options_frame = ttk.Frame(controls)
-        self.face_options_frame.grid(row=4, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        self.face_options_frame.grid(row=6, column=0, columnspan=3, sticky="w", pady=(10, 0))
         ttk.Checkbutton(
             self.face_options_frame,
             text="Known people only",
@@ -715,7 +884,7 @@ class PhotoCleanerView:
             text="Vibe Grouping",
             padding=12,
         )
-        self.vibe_options_frame.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        self.vibe_options_frame.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         self.vibe_options_frame.columnconfigure(1, weight=1)
 
         preset_label_frame = ttk.Frame(self.vibe_options_frame)
@@ -798,7 +967,7 @@ class PhotoCleanerView:
         self.vibe_advanced_frame.grid_remove()
 
         actions = ttk.Frame(controls)
-        actions.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        actions.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(12, 0))
 
         self.scan_button = ttk.Button(actions, text="Scan folder", command=self._callbacks.start_scan)
         self.scan_button.grid(row=0, column=0, sticky="w")
@@ -811,13 +980,29 @@ class PhotoCleanerView:
         )
         self.cancel_button.grid(row=0, column=1, sticky="w", padx=(10, 0))
 
+        self.restore_button = ttk.Button(
+            actions,
+            text="Restore selected",
+            command=self._callbacks.restore_selected,
+            state="disabled",
+        )
+        self.restore_button.grid(row=0, column=2, sticky="w", padx=(10, 0))
+
+        self.keep_button = ttk.Button(
+            actions,
+            text="Keep selected",
+            command=self._callbacks.keep_selected,
+            state="disabled",
+        )
+        self.keep_button.grid(row=0, column=3, sticky="w", padx=(10, 0))
+
         self.delete_button = ttk.Button(
             actions,
             text="Delete selected",
             command=self._callbacks.delete_selected,
             state="disabled",
         )
-        self.delete_button.grid(row=0, column=2, sticky="w", padx=(10, 0))
+        self.delete_button.grid(row=0, column=4, sticky="w", padx=(10, 0))
 
         self.export_button = ttk.Button(
             actions,
@@ -825,7 +1010,7 @@ class PhotoCleanerView:
             command=self._callbacks.export_selected,
             state="disabled",
         )
-        self.export_button.grid(row=0, column=3, sticky="w", padx=(10, 0))
+        self.export_button.grid(row=0, column=5, sticky="w", padx=(10, 0))
 
         self.export_vibe_debug_button = ttk.Button(
             actions,
@@ -833,7 +1018,7 @@ class PhotoCleanerView:
             command=self._callbacks.export_vibe_debug,
             state="disabled",
         )
-        self.export_vibe_debug_button.grid(row=0, column=4, sticky="w", padx=(10, 0))
+        self.export_vibe_debug_button.grid(row=0, column=6, sticky="w", padx=(10, 0))
 
         status = ttk.Frame(self.root, padding=(12, 0, 12, 8))
         status.grid(row=1, column=0, sticky="ew")
@@ -850,10 +1035,26 @@ class PhotoCleanerView:
         results_outer.columnconfigure(0, weight=1)
         results_outer.rowconfigure(0, weight=0)
         results_outer.rowconfigure(1, weight=0)
-        results_outer.rowconfigure(2, weight=1)
+        results_outer.rowconfigure(2, weight=0)
+        results_outer.rowconfigure(3, weight=1)
+
+        self.result_tabs_frame = ttk.Frame(results_outer)
+        self.result_tabs_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.result_tabs_frame.columnconfigure(0, weight=1)
+        self.result_tabs_container = ttk.Frame(self.result_tabs_frame)
+        self.result_tabs_container.grid(row=0, column=0, sticky="w")
+        self.result_tab_var.trace_add("write", self._on_result_tab_changed)
+        self.unknown_review_button = ttk.Button(
+            self.result_tabs_frame,
+            text="Unknown people to review",
+            command=self._callbacks.review_unknown_people,
+            state="disabled",
+        )
+        self.unknown_review_button.grid(row=0, column=1, sticky="e")
+        self.result_tabs_frame.grid_remove()
 
         self.face_selector_frame = ttk.Frame(results_outer)
-        self.face_selector_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.face_selector_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         self.face_selector_frame.columnconfigure(1, weight=1)
 
         ttk.Label(self.face_selector_frame, text="Person").grid(row=0, column=0, sticky="w")
@@ -870,7 +1071,7 @@ class PhotoCleanerView:
         self.face_selector_frame.grid_remove()
 
         self.pagination_frame = ttk.Frame(results_outer)
-        self.pagination_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        self.pagination_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         self.pagination_frame.columnconfigure(1, weight=1)
 
         self.prev_page_button = ttk.Button(
@@ -895,10 +1096,10 @@ class PhotoCleanerView:
         self.pagination_frame.grid_remove()
 
         self.results_canvas = tk.Canvas(results_outer, highlightthickness=0)
-        self.results_canvas.grid(row=2, column=0, sticky="nsew")
+        self.results_canvas.grid(row=3, column=0, sticky="nsew")
 
         scrollbar = ttk.Scrollbar(results_outer, orient="vertical", command=self.results_canvas.yview)
-        scrollbar.grid(row=2, column=1, sticky="ns")
+        scrollbar.grid(row=3, column=1, sticky="ns")
         self.results_canvas.configure(yscrollcommand=scrollbar.set)
 
         self.results_frame = ttk.Frame(self.results_canvas)
@@ -916,6 +1117,22 @@ class PhotoCleanerView:
         if self._is_applying_state:
             return
         self._callbacks.mode_changed()
+
+    def _on_result_tab_changed(self, *_args: object) -> None:
+        if self._is_applying_state:
+            return
+        self._callbacks.result_tab_changed()
+
+    def _sync_result_tabs(self, state: AppState) -> None:
+        for child in self.result_tabs_container.winfo_children():
+            child.destroy()
+        for index, label in enumerate(state.result_tabs):
+            ttk.Radiobutton(
+                self.result_tabs_container,
+                text=label,
+                value=label,
+                variable=self.result_tab_var,
+            ).grid(row=0, column=index, sticky="w", padx=(0 if index == 0 else 8, 0))
 
     def _reset_vibe_defaults(self) -> None:
         self.vibe_preset_var.set("Balanced Scenes")
@@ -962,12 +1179,35 @@ class PhotoCleanerView:
             lambda _event, preview_index=shown_item_index: self._open_full_image(preview_index),
         )
 
-        ttk.Label(card, text=item.title, wraplength=180, justify="center").grid(
+        title_frame = ttk.Frame(card)
+        title_frame.grid(
             row=1,
             column=0,
             sticky="ew",
             pady=(8, 0),
         )
+        title_frame.columnconfigure(0, weight=1)
+        ttk.Label(
+            title_frame,
+            text=item.title,
+            wraplength=180 if not item.badge_text else 136,
+            justify="center",
+        ).grid(
+            row=0,
+            column=0,
+            sticky="ew",
+        )
+        if item.badge_text:
+            ttk.Label(
+                title_frame,
+                text=item.badge_text,
+                foreground="#1d4ed8",
+            ).grid(
+                row=0,
+                column=1,
+                sticky="e",
+                padx=(8, 0),
+            )
         ttk.Label(card, text=item.detail, wraplength=180, justify="center").grid(
             row=2,
             column=0,
@@ -991,7 +1231,11 @@ class PhotoCleanerView:
         var.trace_add("write", on_selection_change)
         self._selection_vars[item.path] = var
 
-        ttk.Checkbutton(card, text="Selected", variable=var).grid(
+        ttk.Checkbutton(
+            card,
+            text="Trash" if self.mode_var.get() == "automatic" else "Selected",
+            variable=var,
+        ).grid(
             row=3,
             column=0,
             pady=(8, 0),

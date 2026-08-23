@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
+import time
 from typing import Sequence
 
 import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
+from automatic_scan.perf import get_active_profiler
 from app_paths import model_path
 
 from .cache import compute_model_fingerprint
@@ -51,6 +53,8 @@ class OnnxVibeEmbedder(VibeEmbedder):
     def __init__(
         self,
         model_file: Path,
+        *,
+        providers: Sequence[str] | None = None,
     ) -> None:
         if not model_file.is_file():
             raise VibeModelNotFoundError(
@@ -65,7 +69,11 @@ class OnnxVibeEmbedder(VibeEmbedder):
             self._session = create_inference_session(
                 model_file,
                 session_options=session_options,
-                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+                providers=(
+                    list(providers)
+                    if providers is not None
+                    else ["CUDAExecutionProvider", "CPUExecutionProvider"]
+                ),
             )
         except Exception as exc:  # pragma: no cover - exercised by integration on real ORT
             raise VibeModelLoadError(f"Failed to load vibe model {model_file}: {exc}") from exc
@@ -111,15 +119,32 @@ class OnnxVibeEmbedder(VibeEmbedder):
         if not images:
             return np.zeros((0, self._embedding_dimension), dtype=np.float32)
 
+        preprocess_started = time.perf_counter()
         batch = np.stack([self._prepare(image) for image in images], axis=0)
+        preprocess_seconds = time.perf_counter() - preprocess_started
+        infer_started = time.perf_counter()
         outputs = self._session.run(
             [self._outputs[0].name],
             {self._input.name: np.ascontiguousarray(batch)},
         )[0]
+        infer_seconds = time.perf_counter() - infer_started
+        postprocess_started = time.perf_counter()
         embeddings = np.asarray(outputs, dtype=np.float32)
         if embeddings.ndim != 2:
             embeddings = embeddings.reshape(len(images), -1)
-        return _l2_normalize(embeddings)
+        normalized = _l2_normalize(embeddings)
+        postprocess_seconds = time.perf_counter() - postprocess_started
+        profiler = get_active_profiler()
+        if profiler is not None:
+            profiler.record_model_call(
+                "vibe_model",
+                batch_size=len(images),
+                preprocess_seconds=preprocess_seconds,
+                inference_seconds=infer_seconds,
+                postprocess_seconds=postprocess_seconds,
+                provider=self._provider,
+            )
+        return normalized
 
     def _prepare(self, image_bgr: np.ndarray) -> np.ndarray:
         rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
@@ -190,10 +215,14 @@ class FallbackVisualEmbedder(VibeEmbedder):
         return descriptor
 
 
-def load_embedder(config: VibeGroupingConfig) -> VibeEmbedder:
+def load_embedder(
+    config: VibeGroupingConfig,
+    *,
+    providers: Sequence[str] | None = None,
+) -> VibeEmbedder:
     candidate = model_path(config.semantic_model_filename)
     if candidate.is_file():
-        return OnnxVibeEmbedder(candidate)
+        return OnnxVibeEmbedder(candidate, providers=providers)
     if not config.allow_visual_fallback:
         raise VibeModelNotFoundError(
             f"Missing vibe model {candidate}. "

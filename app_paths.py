@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -16,6 +17,12 @@ def model_path(filename: str) -> Path:
 
 
 def app_data_root() -> Path:
+    override = os.environ.get("IMAGE_DEDUPLICATOR_APP_DATA_ROOT")
+    if override:
+        root = Path(override).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
     if getattr(sys, "frozen", False):
         root = Path(sys.executable).resolve().parent
     else:

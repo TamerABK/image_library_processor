@@ -14,7 +14,19 @@ from typing import Any, Callable
 
 import cv2
 import numpy as np
+from send2trash import send2trash
 
+from automatic_scan import (
+    AutomaticScanConfig,
+    AutomaticScanOrchestrator,
+    AutomaticScanResult,
+    AutomaticStateStore,
+    BlurPolicy,
+    ExecutionProvider,
+    FaceQualityPreset,
+    ManualOverrideKind,
+    VibeDetail,
+)
 from app_paths import app_data_path, model_path
 from blur_detector.blur_detector import BlurDetector
 from duplicate_detector.config import DetectorConfig
@@ -85,6 +97,7 @@ class _FaceScanTimingCollector:
         self.detected_face_count = 0
         self.analyzed_face_count = 0
         self.embedded_face_count = 0
+        self.detector_phase_seconds: dict[str, float] = {}
 
     def record_load(self, seconds: float, success: bool) -> None:
         with self._lock:
@@ -98,6 +111,12 @@ class _FaceScanTimingCollector:
             self.detect_seconds += seconds
             self.detect_call_count += 1
             self.detected_face_count += face_count
+
+    def record_detector_phase(self, phase: str, seconds: float) -> None:
+        with self._lock:
+            self.detector_phase_seconds[phase] = (
+                self.detector_phase_seconds.get(phase, 0.0) + seconds
+            )
 
     def record_analyze(self, seconds: float, face_count: int) -> None:
         with self._lock:
@@ -145,6 +164,7 @@ class _FaceScanTimingCollector:
             detected_face_count = self.detected_face_count
             analyzed_face_count = self.analyzed_face_count
             embedded_face_count = self.embedded_face_count
+            detector_phase_seconds = dict(self.detector_phase_seconds)
 
         other_seconds = max(
             0.0,
@@ -196,11 +216,24 @@ class _FaceScanTimingCollector:
             "loaded_image_count": loaded_image_count,
             "failed_load_count": failed_load_count,
             "detect_call_count": detect_call_count,
+            "detect_average_seconds": (
+                round(detect_seconds / detect_call_count, 6)
+                if detect_call_count > 0
+                else 0.0
+            ),
             "analyze_call_count": analyze_call_count,
             "embed_call_count": embed_call_count,
             "detected_face_count": detected_face_count,
             "analyzed_face_count": analyzed_face_count,
             "embedded_face_count": embedded_face_count,
+            "detector_phase_seconds": {
+                phase: round(seconds, 6)
+                for phase, seconds in sorted(detector_phase_seconds.items())
+            },
+            "detector_phase_pct": {
+                phase: pct(seconds)
+                for phase, seconds in sorted(detector_phase_seconds.items())
+            },
         }
 
 
@@ -211,6 +244,8 @@ class _TimedFaceProcessor(FaceProcessor):
         self._timing_lock = threading.Lock()
         if hasattr(self._embedder, "set_timing_callback"):
             self._embedder.set_timing_callback(self._record_embed_phase)
+        if hasattr(self._detector, "set_timing_callback"):
+            self._detector.set_timing_callback(self._record_detector_phase)
 
     def set_timing_collector(
         self,
@@ -292,6 +327,15 @@ class _TimedFaceProcessor(FaceProcessor):
         if collector is not None:
             collector.record_embed_phase(phase, seconds)
 
+    def _record_detector_phase(
+        self,
+        phase: str,
+        seconds: float,
+    ) -> None:
+        collector = self._timing_collector
+        if collector is not None:
+            collector.record_detector_phase(phase, seconds)
+
 
 class PhotoCleanerViewModel:
     all_file_types_label = "All supported"
@@ -348,6 +392,12 @@ class PhotoCleanerViewModel:
         self._latest_vibe_debug_payload: dict[str, Any] | None = None
         self._latest_vibe_folder: Path | None = None
         self._unknown_face_preview_renderer = FacePreviewRenderer()
+        self._automatic_state_store = AutomaticStateStore()
+        self._automatic_orchestrator = AutomaticScanOrchestrator(
+            state_store=self._automatic_state_store,
+        )
+        self._latest_automatic_result: AutomaticScanResult | None = None
+        self._automatic_result_tabs: dict[str, list[ResultGroup]] = {}
         self._results_page_index = 0
         self._supported_file_types = self._collect_supported_file_types()
         self._apply_mode_state()
@@ -364,6 +414,31 @@ class PhotoCleanerViewModel:
         self._apply_mode_state()
         self.refresh_file_types()
         self._update_action_state()
+
+    def set_keepers_per_duplicate_group(self, value: str) -> None:
+        self.state.keepers_per_duplicate_group = value.strip() or "1"
+
+    def set_blur_policy(self, value: str) -> None:
+        self.state.blur_policy = value.strip() or "Automatic"
+
+    def set_face_quality_preset(self, value: str) -> None:
+        self.state.face_quality_preset = value.strip() or "Balanced"
+
+    def set_hard_exclude_dark_faces(self, enabled: bool) -> None:
+        self.state.hard_exclude_dark_faces = bool(enabled)
+
+    def set_execution_provider(self, value: str) -> None:
+        self.state.execution_provider = value.strip() or "Automatic"
+
+    def set_result_tab(self, value: str) -> None:
+        if not value:
+            return
+        self.state.current_result_tab = value
+        if self.state.mode == "automatic" and self._automatic_result_tabs:
+            self._results = self._automatic_result_tabs.get(value, [])
+            self._results_page_index = 0
+            self._initialize_selection_state()
+            self._update_results_view_state()
 
     def set_known_people_only(self, known_people_only: bool) -> None:
         self.state.known_people_only = known_people_only
@@ -537,6 +612,35 @@ class PhotoCleanerViewModel:
         self._latest_face_result = message.face_result
 
     def handle_scan_result_message(self, message: ScanResultMessage) -> None:
+        if message.mode == "automatic" and message.automatic_result is not None:
+            self._latest_vibe_debug_payload = None
+            self._latest_vibe_folder = None
+            self._latest_automatic_result = message.automatic_result
+            self._automatic_result_tabs = self._build_automatic_result_tabs(
+                message.automatic_result,
+            )
+            self.state.result_tabs = tuple(self._automatic_result_tabs.keys())
+            persisted_tab = ""
+            if self.state.folder:
+                persisted_tab = self._automatic_state_store.load(self.state.folder).current_tab
+            if persisted_tab in self._automatic_result_tabs:
+                self.state.current_result_tab = persisted_tab
+            if self.state.current_result_tab not in self._automatic_result_tabs:
+                self.state.current_result_tab = "Scenes"
+            self.state.unknown_review_label = self._unknown_review_label(
+                message.automatic_result,
+            )
+            self._results = self._automatic_result_tabs.get(self.state.current_result_tab, [])
+            self._results_page_index = 0
+            self._initialize_selection_state()
+            self._update_results_view_state()
+            self._apply_mode_state()
+            self.finish_scan(
+                message.summary
+                or self._automatic_summary_text(message.automatic_result),
+            )
+            return
+
         if message.mode == "vibe":
             self._latest_vibe_debug_payload = (
                 None if message.debug_payload is None else dict(message.debug_payload)
@@ -640,10 +744,21 @@ class PhotoCleanerViewModel:
 
     def set_item_selected(self, path: Path, selected: bool) -> None:
         self._selection_state[path] = selected
+        if self.state.mode == "automatic" and self._latest_automatic_result is not None:
+            image = self._latest_automatic_result.image_map().get(str(path.resolve()))
+            if image is not None:
+                image.selected_for_deletion = selected
+                self._persist_automatic_state()
         self._update_action_state()
 
     def selected_item_count(self) -> int:
-        valid_paths = {item.path for item in self._iter_result_items()}
+        if self.state.mode == "automatic" and self._latest_automatic_result is not None:
+            valid_paths = {
+                Path(image.path)
+                for image in self._latest_automatic_result.all_images
+            }
+        else:
+            valid_paths = {item.path for item in self._iter_result_items()}
         return sum(
             1
             for path, selected in self._selection_state.items()
@@ -651,7 +766,13 @@ class PhotoCleanerViewModel:
         )
 
     def selected_paths(self) -> list[Path]:
-        valid_paths = {item.path for item in self._iter_result_items()}
+        if self.state.mode == "automatic" and self._latest_automatic_result is not None:
+            valid_paths = {
+                Path(image.path)
+                for image in self._latest_automatic_result.all_images
+            }
+        else:
+            valid_paths = {item.path for item in self._iter_result_items()}
         return [
             path
             for path in valid_paths
@@ -662,6 +783,36 @@ class PhotoCleanerViewModel:
         selected_paths = self.selected_paths()
         errors: list[str] = []
         deleted_paths: set[Path] = set()
+
+        if self.state.mode == "automatic":
+            for path in selected_paths:
+                try:
+                    send2trash(str(path))
+                    deleted_paths.add(path)
+                except FileNotFoundError:
+                    errors.append(f"Missing: {path}")
+                except OSError as exc:
+                    errors.append(f"{path}: {exc}")
+
+            if self._latest_automatic_result is not None:
+                succeeded = [str(path) for path in sorted(deleted_paths)]
+                failed = [
+                    str(path)
+                    for path in selected_paths
+                    if path not in deleted_paths
+                ]
+                folder_state = self._automatic_state_store.load(self.state.folder)
+                self._automatic_state_store.record_deletion_transaction(
+                    folder_state,
+                    paths=succeeded,
+                    failed_paths=failed,
+                )
+                self._automatic_state_store.save(folder_state)
+            return DeleteResult(
+                deleted_count=len(deleted_paths),
+                errors=errors,
+                needs_rescan=bool(deleted_paths),
+            )
 
         for path in selected_paths:
             try:
@@ -691,6 +842,47 @@ class PhotoCleanerViewModel:
             self._update_results_view_state()
 
         return DeleteResult(deleted_count=len(deleted_paths), errors=errors)
+
+    def restore_selected(self) -> bool:
+        if self.state.mode != "automatic" or self._latest_automatic_result is None:
+            return False
+        selected_paths = self.selected_paths()
+        if not selected_paths:
+            return False
+        image_map = self._latest_automatic_result.image_map()
+        changed = False
+        for path in selected_paths:
+            image = image_map.get(str(path.resolve()))
+            if image is None:
+                continue
+            image.selected_for_deletion = False
+            image.manually_restored = True
+            image.manually_kept = False
+            image.manual_override = ManualOverrideKind.RESTORE
+            changed = True
+        if changed:
+            self._persist_automatic_state()
+        return changed
+
+    def keep_selected(self) -> bool:
+        if self.state.mode != "automatic" or self._latest_automatic_result is None:
+            return False
+        selected_paths = self.selected_paths()
+        if not selected_paths:
+            return False
+        image_map = self._latest_automatic_result.image_map()
+        changed = False
+        for path in selected_paths:
+            image = image_map.get(str(path.resolve()))
+            if image is None:
+                continue
+            image.selected_for_deletion = False
+            image.manually_kept = True
+            image.manual_override = ManualOverrideKind.KEEP
+            changed = True
+        if changed:
+            self._persist_automatic_state()
+        return changed
 
     def export_selected(self, dest_dir: str, export_type: str) -> ExportResult:
         dest_path = Path(dest_dir)
@@ -723,24 +915,40 @@ class PhotoCleanerViewModel:
 
     def can_export_vibe_debug(self) -> bool:
         return (
-            self.state.mode == "vibe"
-            and self._latest_vibe_debug_payload is not None
+            (
+                (
+                    self.state.mode == "vibe"
+                    and self._latest_vibe_debug_payload is not None
+                )
+                or (
+                    self.state.mode == "automatic"
+                    and self._latest_automatic_result is not None
+                )
+            )
             and self._scan_start_time is None
         )
 
     def suggest_vibe_debug_filename(self) -> str:
-        folder_name = "vibe"
-        if self._latest_vibe_folder is not None:
-            folder_name = self._latest_vibe_folder.name or folder_name
+        folder_name = "scan"
+        if self.state.mode == "automatic" and self._latest_automatic_result is not None:
+            folder_name = Path(self._latest_automatic_result.folder).name or "automatic"
+        elif self._latest_vibe_folder is not None:
+            folder_name = self._latest_vibe_folder.name or "vibe"
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        return f"{folder_name}_vibe_debug_{timestamp}.json"
+        suffix = "automatic_diagnostics" if self.state.mode == "automatic" else "vibe_debug"
+        return f"{folder_name}_{suffix}_{timestamp}.json"
 
     def export_vibe_debug(self, output_path: str | Path) -> Path:
-        if self._latest_vibe_debug_payload is None:
-            raise ValueError("No vibe debug data is available to export.")
+        if self.state.mode == "automatic":
+            if self._latest_automatic_result is None:
+                raise ValueError("No automatic diagnostics are available to export.")
+            payload = self._latest_automatic_result.to_diagnostics_payload()
+        else:
+            if self._latest_vibe_debug_payload is None:
+                raise ValueError("No vibe debug data is available to export.")
+            payload = dict(self._latest_vibe_debug_payload)
 
         path = Path(output_path).expanduser()
-        payload = dict(self._latest_vibe_debug_payload)
         payload["exported_at_utc"] = datetime.now(timezone.utc).isoformat()
         path.write_text(
             json.dumps(payload, indent=2, sort_keys=True),
@@ -867,7 +1075,34 @@ class PhotoCleanerViewModel:
     ) -> None:
         try:
             debug_payload: dict[str, Any] | None = None
-            if mode == "duplicates":
+            if mode == "automatic":
+                automatic_config = self._current_automatic_config()
+
+                def progress_callback(phase: str, done: int, total: int | None) -> None:
+                    if cancellation_token is not None:
+                        cancellation_token.raise_if_canceled()
+                    safe_total = 0 if total is None else total
+                    self._queue.put(
+                        ScanProgressMessage(
+                            mode=mode,
+                            phase=phase,
+                            done=done,
+                            total=safe_total,
+                            known_people_only=False,
+                        )
+                    )
+
+                automatic_result = self._automatic_orchestrator.scan_folder(
+                    folder,
+                    automatic_config,
+                    progress_callback=progress_callback,
+                    cancellation_token=cancellation_token,
+                )
+                results = []
+                summary = self._automatic_summary_text(automatic_result)
+                warning_lines = [warning.message for warning in automatic_result.warnings[:5]]
+                warning = "\n".join(warning_lines) if warning_lines else None
+            elif mode == "duplicates":
                 detector = self._duplicate_detector_factory()
 
                 def progress_callback(phase: Any, done: int, total: int) -> None:
@@ -1028,6 +1263,7 @@ class PhotoCleanerViewModel:
                     summary=summary,
                     warning=warning,
                     debug_payload=debug_payload,
+                    automatic_result=automatic_result if mode == "automatic" else None,
                 )
             )
         except ScanCancelledError as exc:
@@ -1036,8 +1272,13 @@ class PhotoCleanerViewModel:
             self._queue.put(ScanErrorMessage(message=str(exc)))
 
     def _apply_mode_state(self) -> None:
+        self.state.show_automatic_options = self.state.mode == "automatic"
         self.state.show_face_options = self.state.mode == "faces"
         self.state.show_vibe_options = self.state.mode == "vibe"
+        self.state.show_result_tabs = self.state.mode == "automatic" and bool(self.state.result_tabs)
+        self.state.show_unknown_review = (
+            self.state.mode == "automatic" and bool(self.state.unknown_review_label)
+        )
 
     @classmethod
     def _collect_supported_file_types(cls) -> tuple[str, ...]:
@@ -1052,6 +1293,8 @@ class PhotoCleanerViewModel:
 
     @staticmethod
     def _supported_file_types_for_mode(mode: str) -> tuple[str, ...]:
+        if mode == "automatic":
+            return PhotoCleanerViewModel._collect_supported_file_types()
         if mode == "duplicates":
             return DetectorConfig().supported_extensions
         if mode == "vibe":
@@ -1062,6 +1305,8 @@ class PhotoCleanerViewModel:
 
     @staticmethod
     def _scan_target_label(mode: str, known_people_only: bool = False) -> str:
+        if mode == "automatic":
+            return "automatic scan"
         if mode == "duplicates":
             return "near duplicates"
         if mode == "vibe":
@@ -1075,6 +1320,24 @@ class PhotoCleanerViewModel:
     @staticmethod
     def _compute_progress_percent(mode: str, phase: str, done: int, total: int) -> int:
         clamped_done = min(max(done, 0), total)
+        if mode == "automatic":
+            ranges = {
+                "discovery": (0, 5),
+                "cache_resolution": (5, 12),
+                "blur_analysis": (12, 28),
+                "duplicate_candidates": (28, 40),
+                "face_detection_analysis": (40, 56),
+                "people_image_classification": (56, 60),
+                "face_quality_gate": (60, 68),
+                "duplicate_finalization": (68, 76),
+                "face_embedding": (76, 84),
+                "face_recognition": (84, 90),
+                "unknown_face_clustering": (90, 93),
+                "vibe_grouping": (93, 98),
+                "result_finalization": (98, 100),
+            }
+            start, end = ranges.get(phase, (0, 100))
+            return start + int((clamped_done / total) * max(end - start, 1))
         if mode == "vibe":
             ranges = {
                 "loading_visual_features": (0, 44),
@@ -1262,6 +1525,303 @@ class PhotoCleanerViewModel:
         results.extend(unknown_results)
         return results
 
+    def _build_automatic_result_tabs(
+        self,
+        automatic_result: AutomaticScanResult,
+    ) -> dict[str, list[ResultGroup]]:
+        return {
+            "Scenes": self._build_automatic_scene_results(automatic_result),
+            "Near Duplicates": self._build_automatic_duplicate_tab_results(automatic_result),
+            "People": self._build_automatic_people_results(automatic_result),
+            "Excluded": self._build_automatic_excluded_results(automatic_result),
+            "All Photos": self._build_automatic_all_photo_results(automatic_result),
+        }
+
+    def _build_automatic_scene_results(
+        self,
+        automatic_result: AutomaticScanResult,
+    ) -> list[ResultGroup]:
+        results: list[ResultGroup] = []
+        image_map = automatic_result.image_map()
+        for index, group in enumerate(automatic_result.vibe_groups, start=1):
+            items: list[ResultItem] = []
+            for path_text in group.image_paths:
+                image = image_map.get(str(Path(path_text).resolve()))
+                if image is None:
+                    continue
+                items.append(self._automatic_result_item(image))
+            if not items:
+                continue
+            metadata_lines = [f"{len(items)} photo(s)"]
+            if group.recognized_person_names:
+                metadata_lines.append(
+                    "People: " + ", ".join(group.recognized_person_names[:3])
+                )
+            results.append(
+                ResultGroup(
+                    title=group.label or f"Scene {index}",
+                    items=items,
+                    group_type="automatic_scene",
+                    representative_path=Path(group.representative_path),
+                    subtitle=f"Scene {index}",
+                    metadata_lines=tuple(metadata_lines),
+                    cohesion_text=f"Cohesion {group.cohesion_score:.2f}",
+                )
+            )
+        if automatic_result.vibe_ungrouped:
+            results.append(
+                ResultGroup(
+                    title=f"Ungrouped ({len(automatic_result.vibe_ungrouped)} photo(s))",
+                    items=[
+                        self._automatic_result_item(image)
+                        for image in automatic_result.vibe_ungrouped
+                    ],
+                    group_type="automatic_scene",
+                    subtitle="Standalone photos that did not fit a confident scene",
+                )
+            )
+        return results
+
+    def _build_automatic_duplicate_tab_results(
+        self,
+        automatic_result: AutomaticScanResult,
+    ) -> list[ResultGroup]:
+        image_map = automatic_result.image_map()
+        results: list[ResultGroup] = []
+        for index, group in enumerate(automatic_result.duplicate_groups, start=1):
+            items: list[ResultItem] = []
+            for path_text in group.image_paths:
+                image = image_map.get(path_text)
+                if image is None:
+                    continue
+                ranking = group.ranking.get(path_text)
+                detail_parts = [self._automatic_item_detail(image)]
+                if ranking is not None and ranking.explanation:
+                    detail_parts.append(", ".join(ranking.explanation[:2]))
+                items.append(
+                    self._automatic_result_item(
+                        image,
+                        detail=" • ".join(detail_parts),
+                    )
+                )
+            if not items:
+                continue
+            results.append(
+                ResultGroup(
+                    title=f"Duplicate group {index} ({len(items)} photos)",
+                    items=items,
+                    group_type="automatic_duplicates",
+                    representative_path=Path(group.keeper_paths[0]) if group.keeper_paths else None,
+                    subtitle=f"{len(group.keeper_paths)} keeper(s)",
+                    metadata_lines=(
+                        f"Keepers: {len(group.keeper_paths)}",
+                        f"Alternatives: {len(group.excluded_paths)}",
+                    ),
+                )
+            )
+        return results
+
+    def _build_automatic_people_results(
+        self,
+        automatic_result: AutomaticScanResult,
+    ) -> list[ResultGroup]:
+        image_map = automatic_result.image_map()
+        results: list[ResultGroup] = []
+        for person_name, paths in sorted(
+            automatic_result.known_people.items(),
+            key=lambda item: (-len(item[1]), item[0].lower()),
+        ):
+            unique_paths = [Path(path) for path in sorted(set(paths))]
+            items = [
+                self._automatic_result_item(image_map[str(path.resolve())])
+                for path in unique_paths
+                if str(path.resolve()) in image_map
+            ]
+            if items:
+                results.append(
+                    ResultGroup(
+                        title=f"{person_name} ({len(items)} photos)",
+                        items=items,
+                        group_type="automatic_people",
+                    )
+                )
+        for cluster in automatic_result.unknown_clusters:
+            if cluster.hidden:
+                continue
+            items = [
+                self._automatic_result_item(
+                    image_map[str(Path(path_text).resolve())],
+                    detail="Unknown person",
+                )
+                for path_text in cluster.image_paths
+                if str(Path(path_text).resolve()) in image_map
+            ]
+            if items:
+                results.append(
+                    ResultGroup(
+                        title=f"{cluster.cluster_id} ({len(items)} photos)",
+                        items=items,
+                        group_type="automatic_people",
+                        subtitle="Unknown cluster",
+                    )
+                )
+        return results
+
+    def _build_automatic_excluded_results(
+        self,
+        automatic_result: AutomaticScanResult,
+    ) -> list[ResultGroup]:
+        results: list[ResultGroup] = []
+        for reason, images in sorted(automatic_result.exclusions_by_reason.items()):
+            items = [
+                self._automatic_result_item(image)
+                for image in images
+            ]
+            if items:
+                results.append(
+                    ResultGroup(
+                        title=f"{self._title_case_reason(reason)} ({len(items)})",
+                        items=items,
+                        group_type="automatic_excluded",
+                    )
+                )
+        return results
+
+    def _build_automatic_all_photo_results(
+        self,
+        automatic_result: AutomaticScanResult,
+    ) -> list[ResultGroup]:
+        ordered_images = sorted(
+            automatic_result.all_images,
+            key=lambda image: (
+                image.capture_timestamp if image.capture_timestamp is not None else float("inf"),
+                image.path,
+            ),
+        )
+        return [
+            ResultGroup(
+                title=f"All photos ({len(ordered_images)})",
+                items=[
+                    self._automatic_result_item(image)
+                    for image in ordered_images
+                ],
+                group_type="automatic_all",
+            )
+        ]
+
+    @staticmethod
+    def _title_case_reason(reason: str) -> str:
+        if reason == "dark_primary_faces":
+            return "Dark Faces"
+        if reason == "low_primary_pick_scores":
+            return "Low Pick Scores"
+        return reason.replace("_", " ").title()
+
+    @staticmethod
+    def _automatic_item_detail(image: Any) -> str:
+        parts: list[str] = []
+        if image.is_duplicate_keeper:
+            parts.append("Keeper")
+        elif image.duplicate_group_id:
+            parts.append("Duplicate alternative")
+        else:
+            parts.append(image.status.value.replace("_", " ").title())
+        if image.primary_exclusion_reason:
+            parts.append(image.primary_exclusion_reason.replace("_", " "))
+        if image.warnings:
+            parts.append(image.warnings[0].replace("_", " "))
+        return " • ".join(parts)
+
+    @staticmethod
+    def _automatic_badge_text(image: Any) -> str:
+        assessment = getattr(image, "people_picture_assessment", None)
+        if assessment is not None and not assessment.is_people_picture:
+            return "No people pic"
+        return ""
+
+    def _automatic_result_item(self, image: Any, *, detail: str | None = None) -> ResultItem:
+        path = Path(image.path)
+        return ResultItem(
+            path=path,
+            title=path.name,
+            detail=detail or self._automatic_item_detail(image),
+            recommended_delete=image.selected_for_deletion,
+            badge_text=self._automatic_badge_text(image),
+        )
+
+    def _automatic_summary_text(self, automatic_result: AutomaticScanResult) -> str:
+        summary = automatic_result.progress_summary
+        return (
+            f"Prepared {summary.active_count} active photo(s), "
+            f"{summary.duplicate_group_count} duplicate group(s), "
+            f"and {summary.vibe_group_count} scene group(s)."
+        )
+
+    def _unknown_review_label(self, automatic_result: AutomaticScanResult) -> str:
+        visible_clusters = [cluster for cluster in automatic_result.unknown_clusters if not cluster.hidden]
+        if not visible_clusters:
+            return ""
+        return f"Unknown people to review · {len(visible_clusters)}"
+
+    def deletion_review_text(self) -> str:
+        if self.state.mode != "automatic" or self._latest_automatic_result is None:
+            count = self.selected_item_count()
+            return f"Delete {count} selected photo(s)?"
+
+        selected_paths = {str(path.resolve()) for path in self.selected_paths()}
+        selected_images = [
+            image
+            for image in self._latest_automatic_result.all_images
+            if image.path in selected_paths
+        ]
+        grouped: dict[str, int] = {}
+        total_size = 0
+        for image in selected_images:
+            reason = image.primary_exclusion_reason or "manual"
+            grouped[reason] = grouped.get(reason, 0) + 1
+            total_size += image.file_size
+        breakdown = "\n".join(
+            f"{self._title_case_reason(reason)}: {count}"
+            for reason, count in sorted(grouped.items())
+        ) or "No selected photos."
+        total_mb = total_size / (1024 * 1024)
+        return (
+            f"Move {len(selected_images)} selected photo(s) to the operating-system Trash?\n\n"
+            f"{breakdown}\n"
+            f"Total size: {total_mb:.1f} MB"
+        )
+
+    def current_unknown_clusters(self) -> list[Any]:
+        if self._latest_automatic_result is None:
+            return []
+        return [
+            cluster
+            for cluster in self._latest_automatic_result.unknown_clusters
+            if not cluster.hidden and cluster.cluster is not None
+        ]
+
+    def build_unknown_face_prompt_for_automatic_cluster(self, cluster: Any) -> UnknownFacePrompt:
+        if self._face_database is None:
+            similarity = CosineEmbeddingSimilarity()
+            self._face_database = SQLiteFaceDatabase(
+                app_data_path("face_embeddings.sqlite3"),
+                similarity,
+            )
+        if cluster.cluster is None:
+            raise RuntimeError("Unknown cluster data is unavailable.")
+        return self.build_unknown_face_prompt(cluster.cluster)
+
+    def _persist_automatic_state(self) -> None:
+        if self._latest_automatic_result is None or not self.state.folder:
+            return
+        folder_state = self._automatic_state_store.load(self.state.folder)
+        folder_state.current_tab = self.state.current_result_tab
+        self._automatic_state_store.capture(
+            folder_state,
+            self._latest_automatic_result.all_images,
+        )
+        self._automatic_state_store.save(folder_state)
+
     def _init_face_processor(self) -> _TimedFaceProcessor:
         if self._face_processor is None:
             from face_analyzer.default_face_analyzer import DefaultFaceAnalyzer
@@ -1337,6 +1897,12 @@ class PhotoCleanerViewModel:
                     self._selection_state[item.path] = (
                         True if group.group_type == "face" else item.recommended_delete
                     )
+
+        if self.state.mode == "automatic" and self._latest_automatic_result is not None:
+            valid_paths = {
+                Path(image.path)
+                for image in self._latest_automatic_result.all_images
+            }
 
         stale_paths = [path for path in self._selection_state if path not in valid_paths]
         for path in stale_paths:
@@ -1439,14 +2005,22 @@ class PhotoCleanerViewModel:
         total = len(self._iter_result_items())
         shown = len(self.current_preview_items())
 
-        if shown < total:
-            self.state.count_text = f"{selected} selected / {total} total ({shown} shown)"
+        if self.state.mode == "automatic":
+            if shown < total:
+                self.state.count_text = f"{selected} selected for Trash / {total} total ({shown} shown)"
+            else:
+                self.state.count_text = f"{selected} selected for Trash / {total} total"
         else:
-            self.state.count_text = f"{selected} selected / {total} total"
+            if shown < total:
+                self.state.count_text = f"{selected} selected / {total} total ({shown} shown)"
+            else:
+                self.state.count_text = f"{selected} selected / {total} total"
 
         delete_enabled = bool(selected and total and self.state.mode != "faces")
         export_enabled = bool(selected and total)
         self.state.can_delete = delete_enabled
+        self.state.can_restore = bool(selected and total and self.state.mode == "automatic")
+        self.state.can_keep = bool(selected and total and self.state.mode == "automatic")
         self.state.can_export = export_enabled
         self.state.can_export_vibe_debug = self.can_export_vibe_debug()
 
@@ -1456,13 +2030,19 @@ class PhotoCleanerViewModel:
         self._clear_face_groups()
         self._named_unknown_faces.clear()
         self._latest_face_result = None
+        self._latest_automatic_result = None
+        self._automatic_result_tabs = {}
         self._latest_vibe_debug_payload = None
         self._latest_vibe_folder = None
         self._results_page_index = 0
         self.state.page_label = ""
+        self.state.result_tabs = ()
+        self.state.current_result_tab = "Scenes"
+        self.state.unknown_review_label = ""
         self.state.show_pagination = False
         self.state.can_show_previous_page = False
         self.state.can_show_next_page = False
+        self._apply_mode_state()
         self._update_action_state()
 
     def _build_vibe_debug_payload(
@@ -1537,6 +2117,82 @@ class PhotoCleanerViewModel:
             if not candidate.exists() and not candidate.is_symlink():
                 return candidate
             counter += 1
+
+    def _current_automatic_config(self) -> AutomaticScanConfig:
+        blur_policy = BlurPolicy.AUTOMATIC
+        if self.state.blur_policy == "Review borderline photos":
+            blur_policy = BlurPolicy.REVIEW_BORDERLINE
+        elif self.state.blur_policy == "Do not exclude blur automatically":
+            blur_policy = BlurPolicy.KEEP_ALL
+
+        face_quality_preset = FaceQualityPreset.BALANCED
+        if self.state.face_quality_preset.lower() == "relaxed":
+            face_quality_preset = FaceQualityPreset.RELAXED
+        elif self.state.face_quality_preset.lower() == "strict":
+            face_quality_preset = FaceQualityPreset.STRICT
+
+        execution_provider = ExecutionProvider.AUTOMATIC
+        if self.state.execution_provider == "CPU":
+            execution_provider = ExecutionProvider.CPU
+        elif self.state.execution_provider == "GPU":
+            execution_provider = ExecutionProvider.GPU
+
+        vibe_detail = VibeDetail.BALANCED_SCENES
+        if (self.state.vibe_preset or "").strip().lower() == "session":
+            vibe_detail = VibeDetail.SESSION
+        elif (self.state.vibe_preset or "").strip().lower() == "tight scenes":
+            vibe_detail = VibeDetail.TIGHT_SCENES
+
+        return AutomaticScanConfig(
+            file_extensions=self.selected_file_extensions(),
+            orientation_filter=self.selected_orientation_filter(),
+            blur_policy=blur_policy,
+            face_quality_preset=face_quality_preset,
+            duplicate_selection=self._current_duplicate_selection_config(),
+            faces=self._current_face_processing_config(),
+            vibe=self._current_automatic_vibe_config(vibe_detail),
+            performance=self._current_performance_config(execution_provider),
+        )
+
+    def _current_duplicate_selection_config(self):
+        from automatic_scan.config import DuplicateSelectionConfig
+
+        keepers_text = (self.state.keepers_per_duplicate_group or "1").strip()
+        try:
+            keepers = int(keepers_text)
+        except ValueError:
+            keepers = 1
+        keepers = max(1, min(5, keepers))
+        return DuplicateSelectionConfig(
+            keepers_per_group=keepers,
+        )
+
+    def _current_face_processing_config(self):
+        from automatic_scan.config import FaceProcessingConfig
+
+        return FaceProcessingConfig(
+            hard_exclude_dark_primary_faces=self.state.hard_exclude_dark_faces,
+        )
+
+    def _current_automatic_vibe_config(self, vibe_detail: VibeDetail):
+        from automatic_scan.config import VibeConfig
+
+        return VibeConfig(
+            detail=vibe_detail,
+            include_background_embedding=True,
+            enable_fallback=True,
+            diagnostics_export=True,
+        )
+
+    def _current_performance_config(self, execution_provider: ExecutionProvider):
+        from automatic_scan.config import PerformanceConfig
+
+        return PerformanceConfig(
+            execution_provider=execution_provider,
+            batch_size=None,
+            worker_count=None,
+            memory_conservative=True,
+        )
 
     def _current_vibe_config(self) -> VibeGroupingConfig:
         preset_name = (self.state.vibe_preset or "Balanced Scenes").strip().lower()

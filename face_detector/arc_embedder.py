@@ -5,6 +5,7 @@ from typing import Any, Callable
 import cv2
 import numpy as np
 
+from automatic_scan.perf import get_active_profiler
 from face_processing.interfaces import FaceEmbedder
 from face_processing.models import DetectedFace, EmbeddedFace
 
@@ -31,6 +32,7 @@ class ArcFaceEmbedder(FaceEmbedder):
         self,
         model_path: str | Path,
         aligner: FaceAligner,
+        providers: list[str] | tuple[str, ...] | None = None,
     ):
         self._aligner = aligner
         self._timing_callback: Callable[[str, float], None] | None = None
@@ -40,7 +42,7 @@ class ArcFaceEmbedder(FaceEmbedder):
         self._session = create_inference_session(
             model_path,
             session_options=session_options,
-            providers=self._select_providers(),
+            providers=self._select_providers(providers),
         )
 
         self._input_name = self._session.get_inputs()[0].name
@@ -73,11 +75,9 @@ class ArcFaceEmbedder(FaceEmbedder):
             return []
 
         align_started = time.perf_counter()
-        aligned_faces = [
-            self._aligner.align(image, face.landmarks)
-            for image, face in face_requests
-        ]
-        self._record_timing("align", time.perf_counter() - align_started)
+        aligned_faces = self.align_requests(face_requests)
+        align_seconds = time.perf_counter() - align_started
+        self._record_timing("align", align_seconds)
 
         try:
             embeddings = self._extract_embeddings(aligned_faces)
@@ -98,8 +98,49 @@ class ArcFaceEmbedder(FaceEmbedder):
             )
         return embedded
 
+    def align_requests(
+        self,
+        face_requests: list[tuple[np.ndarray, DetectedFace]],
+    ) -> list[np.ndarray]:
+        profiler = get_active_profiler()
+        aligned_faces = []
+        for image, face in face_requests:
+            aligned_faces.append(self._aligner.align(image, face.landmarks))
+            if profiler is not None:
+                profiler.record_face_crop(aligned=True)
+        return aligned_faces
+
+    def embed_aligned_faces(
+        self,
+        aligned_faces: list[np.ndarray],
+        faces: list[DetectedFace],
+    ) -> list[EmbeddedFace]:
+        if not aligned_faces:
+            return []
+        try:
+            embeddings = self._extract_embeddings(aligned_faces)
+        except Exception:
+            embeddings = self._extract_embeddings_one_by_one(aligned_faces)
+
+        return [
+            EmbeddedFace(
+                path=face.path,
+                bbox=face.bbox,
+                confidence=face.confidence,
+                landmarks=face.landmarks,
+                embedding=embedding,
+                analysis=face.analysis,
+            )
+            for face, embedding in zip(faces, embeddings)
+        ]
+
     @classmethod
-    def _select_providers(cls) -> list[str]:
+    def _select_providers(
+        cls,
+        providers: list[str] | tuple[str, ...] | None = None,
+    ) -> list[str]:
+        if providers:
+            return select_providers(providers)
         return select_providers(cls._PREFERRED_PROVIDERS)
 
     def _extract_embeddings(
@@ -109,15 +150,29 @@ class ArcFaceEmbedder(FaceEmbedder):
         preprocess_started = time.perf_counter()
         prepared = [self._prepare_input(aligned) for aligned in aligned_faces]
         batch = np.stack(prepared, axis=0)
-        self._record_timing("embed_preprocess", time.perf_counter() - preprocess_started)
+        preprocess_seconds = time.perf_counter() - preprocess_started
+        self._record_timing("embed_preprocess", preprocess_seconds)
 
         infer_started = time.perf_counter()
         raw_embeddings = self._run_session_raw(batch)
-        self._record_timing("embed_infer", time.perf_counter() - infer_started)
+        infer_seconds = time.perf_counter() - infer_started
+        self._record_timing("embed_infer", infer_seconds)
 
         postprocess_started = time.perf_counter()
         embeddings = self._normalize_embeddings(raw_embeddings)
-        self._record_timing("embed_postprocess", time.perf_counter() - postprocess_started)
+        postprocess_seconds = time.perf_counter() - postprocess_started
+        self._record_timing("embed_postprocess", postprocess_seconds)
+        profiler = get_active_profiler()
+        if profiler is not None:
+            provider_name = self._session.get_providers()[0] if self._session.get_providers() else None
+            profiler.record_model_call(
+                "face_embedder",
+                batch_size=len(aligned_faces),
+                preprocess_seconds=preprocess_seconds,
+                inference_seconds=infer_seconds,
+                postprocess_seconds=postprocess_seconds,
+                provider=provider_name,
+            )
 
         if len(embeddings) != len(aligned_faces):
             raise RuntimeError(
@@ -149,19 +204,44 @@ class ArcFaceEmbedder(FaceEmbedder):
         self._record_timing("embed_preprocess", preprocess_seconds)
         self._record_timing("embed_infer", infer_seconds)
         self._record_timing("embed_postprocess", postprocess_seconds)
+        profiler = get_active_profiler()
+        if profiler is not None:
+            provider_name = self._session.get_providers()[0] if self._session.get_providers() else None
+            for index, _aligned in enumerate(aligned_faces):
+                profiler.record_model_call(
+                    "face_embedder",
+                    batch_size=1,
+                    preprocess_seconds=preprocess_seconds / max(len(aligned_faces), 1),
+                    inference_seconds=infer_seconds / max(len(aligned_faces), 1),
+                    postprocess_seconds=postprocess_seconds / max(len(aligned_faces), 1),
+                    provider=provider_name,
+                )
         return embeddings
 
     def _prepare_input(
         self,
         aligned: np.ndarray,
     ) -> np.ndarray:
+        profiler = get_active_profiler()
+        convert_started = time.perf_counter()
         rgb = cv2.cvtColor(
             aligned,
             cv2.COLOR_BGR2RGB,
         )
+        if profiler is not None:
+            profiler.record_color_conversion(
+                None,
+                time.perf_counter() - convert_started,
+            )
 
+        normalize_started = time.perf_counter()
         blob = rgb.astype(np.float32)
         blob = (blob - 127.5) / 127.5
+        if profiler is not None:
+            profiler.record_normalization(
+                None,
+                time.perf_counter() - normalize_started,
+            )
         return np.transpose(blob, (2, 0, 1))
 
     def _run_session_raw(
