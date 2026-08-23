@@ -12,8 +12,28 @@ def resource_root() -> Path:
     return Path(__file__).resolve().parent
 
 
+def resource_path(*parts: str) -> Path:
+    return resource_root().joinpath(*parts)
+
+
+def qml_root() -> Path:
+    return resource_path("qml")
+
+
+def qml_path(*parts: str) -> Path:
+    return qml_root().joinpath(*parts)
+
+
+def assets_root() -> Path:
+    return resource_path("assets")
+
+
+def asset_path(*parts: str) -> Path:
+    return assets_root().joinpath(*parts)
+
+
 def model_path(filename: str) -> Path:
-    return resource_root() / "onnx_models" / filename
+    return resource_path("onnx_models", filename)
 
 
 def app_data_root() -> Path:

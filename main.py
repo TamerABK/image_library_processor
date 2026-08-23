@@ -134,10 +134,20 @@ def _preload_gpu_runtime_dependencies() -> None:
 
 _preload_gpu_runtime_dependencies()
 
-from ui.app import run_app
+
+def run_app() -> int:
+    ui_mode = os.environ.get("ROOM36_UI", "tk").strip().lower()
+    if ui_mode == "qt":
+        from ui.qt.app import run_app as run_qt_app
+
+        return run_qt_app()
+
+    from ui.app import run_app as run_tk_app
+
+    run_tk_app()
+    return 0
 
 
 if __name__ == "__main__":
-
     freeze_support()
-    run_app()
+    raise SystemExit(run_app())
