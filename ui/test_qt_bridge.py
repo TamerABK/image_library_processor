@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import time
 import unittest
 from pathlib import Path
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from ui.models import (
     ResultGroup,
@@ -18,7 +21,7 @@ from ui.view_model import PhotoCleanerViewModel
 PYSIDE6_AVAILABLE = importlib.util.find_spec("PySide6") is not None
 
 if PYSIDE6_AVAILABLE:
-    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtWidgets import QApplication
 
     from ui.qt.bridge import QtPhotoCleanerBridge
 
@@ -27,7 +30,7 @@ if PYSIDE6_AVAILABLE:
 class QtPhotoCleanerBridgeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.application = QCoreApplication.instance() or QCoreApplication([])
+        cls.application = QApplication.instance() or QApplication([])
 
     def _make_bridge(self, view_model: PhotoCleanerViewModel | None = None) -> "QtPhotoCleanerBridge":
         bridge = QtPhotoCleanerBridge(view_model=view_model)

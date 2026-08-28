@@ -5,7 +5,12 @@ Item {
     width: 0
     height: 0
 
-    readonly property string fallbackFamily: Qt.application.font.family
+    Text {
+        id: fallbackProbe
+        visible: false
+    }
+
+    readonly property string fallbackFamily: fallbackProbe.font.family
 
     FontLoader {
         id: thinFont
@@ -27,6 +32,10 @@ Item {
         && regularFont.status === FontLoader.Ready
         && boldFont.status === FontLoader.Ready
 
+    readonly property bool hasThinFont: thinFont.status === FontLoader.Ready
+    readonly property bool hasRegularFont: regularFont.status === FontLoader.Ready
+    readonly property bool hasBoldFont: boldFont.status === FontLoader.Ready
+
     readonly property string thinFamily:
         thinFont.status === FontLoader.Ready ? thinFont.name : fallbackFamily
 
@@ -36,9 +45,27 @@ Item {
     readonly property string boldFamily:
         boldFont.status === FontLoader.Ready ? boldFont.name : fallbackFamily
 
-    readonly property int heroSize: 34
-    readonly property int titleSize: 24
-    readonly property int bodySize: 16
-    readonly property int labelSize: 13
-    readonly property int detailSize: 12
+    readonly property string displayFamily: thinFamily
+    readonly property string pageTitleFamily: boldFamily
+    readonly property string sectionTitleFamily: boldFamily
+    readonly property string cardTitleFamily: boldFamily
+    readonly property string bodyFamily: regularFamily
+    readonly property string buttonFamily: boldFamily
+    readonly property string captionFamily: regularFamily
+    readonly property string detailFamily: regularFamily
+
+    readonly property int display: 48
+    readonly property int pageTitle: 34
+    readonly property int sectionTitle: 24
+    readonly property int cardTitle: 18
+    readonly property int body: 16
+    readonly property int button: 15
+    readonly property int caption: 13
+    readonly property int detail: 12
+
+    readonly property int heroSize: pageTitle
+    readonly property int titleSize: sectionTitle
+    readonly property int bodySize: body
+    readonly property int labelSize: caption
+    readonly property int detailSize: detail
 }

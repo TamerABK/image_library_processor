@@ -18,7 +18,7 @@ def run_app() -> int:
     bridge = QtPhotoCleanerBridge(parent=application)
 
     engine = QQmlApplicationEngine()
-    engine.rootContext().setContextProperty("appBridge", bridge)
+    engine.setInitialProperties({"appBridge": bridge})
 
     app_qml_path = qml_path("App.qml")
     engine.load(app_qml_path.as_uri())
