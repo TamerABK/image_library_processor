@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import sys
+from functools import cache
 
 from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWidgets import QApplication
 
 from app_paths import qml_path
@@ -12,6 +14,16 @@ from .bridge import QtPhotoCleanerBridge
 
 
 _VALID_START_PAGES = {"loading", "auth", "home", "gallery"}
+
+
+@cache
+def configure_quick_controls_style() -> None:
+    """Select a customizable default once, before any Controls QML is loaded.
+
+    Explicit QT_QUICK_CONTROLS_STYLE overrides remain available (e.g. Fusion).
+    Native platform styles do not support Room 36's customized controls.
+    """
+    QQuickStyle.setStyle(os.environ.get("QT_QUICK_CONTROLS_STYLE", "").strip() or "Basic")
 
 
 def _start_page_from_environment() -> str:
@@ -31,6 +43,7 @@ def _home_preview_data_from_environment() -> bool:
 
 
 def run_app() -> int:
+    configure_quick_controls_style()
     application = QApplication.instance()
     if application is None:
         application = QApplication(sys.argv)

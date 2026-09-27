@@ -11,6 +11,7 @@ Control {
     property string placeholderText: ""
     property bool passwordMode: false
     property string errorText: ""
+    readonly property bool inputActiveFocus: input.activeFocus
 
     signal accepted(string text)
 

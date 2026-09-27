@@ -75,7 +75,6 @@ ApplicationWindow {
 
         Pages.LoadingPage {
             objectName: "loadingPage"
-            onContinueRequested: window.showPage("home")
         }
     }
 

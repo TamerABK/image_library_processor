@@ -67,8 +67,9 @@ class QtPhotoCleanerBridgeTests(unittest.TestCase):
 
         bridge.setFolder("/tmp/room36")
 
-        self.assertEqual(view_model.state.folder, "/tmp/room36")
-        self.assertEqual(bridge.folder, "/tmp/room36")
+        expected_folder = str(Path("/tmp/room36"))
+        self.assertEqual(view_model.state.folder, expected_folder)
+        self.assertEqual(bridge.folder, expected_folder)
 
     def test_scan_state_property_conversion_is_correct(self) -> None:
         view_model = PhotoCleanerViewModel()

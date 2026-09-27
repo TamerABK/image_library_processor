@@ -136,8 +136,10 @@ _preload_gpu_runtime_dependencies()
 
 
 def _ui_mode_from_environment() -> str:
-    # return os.environ.get("ROOM36_UI", "tk").strip().lower()
-    return "qt"
+    # Qt is the Phase 3 frontend; Tk remains an explicit feature-parity/debug fallback.
+    requested_mode = os.environ.get("ROOM36_UI", "qt").strip().lower()
+    return "tk" if requested_mode == "tk" else "qt"
+
 
 def run_app() -> int:
     ui_mode = _ui_mode_from_environment()

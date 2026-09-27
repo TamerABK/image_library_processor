@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import subprocess
+import sys
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -12,18 +15,24 @@ from app_paths import asset_path, qml_path, qml_root
 PYSIDE6_AVAILABLE = importlib.util.find_spec("PySide6") is not None
 
 if PYSIDE6_AVAILABLE:
-    from PySide6.QtCore import QObject, QUrl
+    from PySide6.QtCore import QObject, QPointF, QUrl
     from PySide6.QtQml import QQmlApplicationEngine, QQmlComponent
+    from PySide6.QtQuick import QQuickItem
     from PySide6.QtWidgets import QApplication
 
     from ui.qt.bridge import QtPhotoCleanerBridge
-    from ui.qt.app import _home_preview_data_from_environment, _start_page_from_environment
+    from ui.qt.app import (
+        _home_preview_data_from_environment,
+        _start_page_from_environment,
+        configure_quick_controls_style,
+    )
 
 
 @unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is not installed")
 class QmlPagesTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        configure_quick_controls_style()
         cls.application = QApplication.instance() or QApplication([])
 
     def setUp(self) -> None:
@@ -35,6 +44,7 @@ class QmlPagesTests(unittest.TestCase):
         engine.addImportPath(str(qml_root()))
         warnings: list[object] = []
         engine.warnings.connect(lambda items: warnings.extend(items))
+        self.addCleanup(lambda: self.assertEqual([], [warning.toString() for warning in warnings]))
         return engine, warnings
 
     def _create_component(self, relative_path: str):
@@ -57,6 +67,120 @@ class QmlPagesTests(unittest.TestCase):
         ):
             with self.subTest(page_path=page_path):
                 self._create_component(page_path)
+
+    def test_production_startup_selects_style_before_loading_controls(self) -> None:
+        # Qt locks its style once Controls are registered: use fresh processes.
+        script = textwrap.dedent("""
+            from PySide6.QtCore import QTimer, QtMsgType, qInstallMessageHandler
+            from PySide6.QtQuickControls2 import QQuickStyle
+            from PySide6.QtWidgets import QApplication
+            from ui.qt.app import run_app
+            messages = []
+            def capture(kind, context, message):
+                if kind in (QtMsgType.QtWarningMsg, QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+                    messages.append(message)
+            qInstallMessageHandler(capture)
+            app = QApplication([])
+            QTimer.singleShot(100, app.quit)
+            assert run_app() == 0
+            print(QQuickStyle.name())
+            assert not messages, messages
+        """)
+        for override, expected in ((None, "Basic"), ("Fusion", "Fusion")):
+            with self.subTest(style=expected):
+                environment = dict(os.environ)
+                environment.pop("QT_QUICK_CONTROLS_STYLE", None)
+                environment["ROOM36_START_PAGE"] = "auth"
+                environment["QT_QPA_PLATFORM"] = "offscreen"
+                # The Windows offscreen plugin has no system font discovery.
+                # Supply real bundled fonts rather than filtering its warnings.
+                environment["QT_QPA_FONTDIR"] = str(asset_path("fonts"))
+                environment["QML_DISABLE_DISK_CACHE"] = "1"
+                if override:
+                    environment["QT_QUICK_CONTROLS_STYLE"] = override
+                result = subprocess.run(
+                    [sys.executable, "-B", "-c", script],
+                    cwd=qml_root().parent,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+
+    def test_loading_route_is_presentation_until_owner_changes_page(self) -> None:
+        engine, warnings = self._make_engine()
+        engine.setInitialProperties({"startPage": "loading"})
+        engine.load(qml_path("App.qml").as_uri())
+        self.assertTrue(engine.rootObjects())
+        window = engine.rootObjects()[0]
+        loader = window.findChild(QObject, "pageLoader")
+        self.application.processEvents()
+        page = loader.property("item")
+        self.assertEqual(window.property("currentPage"), "loading")
+        self.assertEqual(page.metaObject().indexOfSignal("continueRequested()"), -1)
+        window.setProperty("startPage", "home")
+        self.application.processEvents()
+        self.assertEqual(loader.property("item").property("objectName"), "homePage")
+        self.assertEqual([], warnings)
+
+    def test_auth_form_state_and_submission_survive_resizing(self) -> None:
+        page = self._create_component("pages/AuthPage.qml")
+        names = ("authFullName", "authEmail", "authPassword")
+        fields = [page.findChild(QObject, name) for name in names]
+        values = ("Test User", "test@example.invalid", "test-only-password")
+        for field, value in zip(fields, values):
+            self.assertIsNotNone(field)
+            field.setProperty("text", value)
+        submissions = []
+        page.signUpRequested.connect(lambda *args: submissions.append(args))
+        for width, height, compact in ((1920, 1080, False), (1440, 900, True),
+                                       (1280, 720, True), (1920, 1080, False)):
+            with self.subTest(size=(width, height)):
+                page.setProperty("width", width)
+                page.setProperty("height", height)
+                self.application.processEvents()
+                self.assertEqual(page.property("compactLayout"), compact)
+                self.assertEqual([page.findChild(QObject, name) for name in names], fields)
+                self.assertEqual(tuple(field.property("text") for field in fields), values)
+                self.assertEqual(tuple(page.property(key) for key in ("fullName", "email", "password")), values)
+                page.findChild(QObject, "authStart").clicked.emit()
+                self.assertEqual(submissions[-1], values)
+        fields[1].setProperty("text", "updated@example.invalid")
+        self.assertEqual(page.property("email"), "updated@example.invalid")
+
+    def test_auth_actions_fit_default_and_reference_sizes(self) -> None:
+        page = self._create_component("pages/AuthPage.qml")
+        viewport = page.findChild(QQuickItem, "authFormViewport")
+        for width, height in ((1440, 900), (1280, 720), (1920, 1080)):
+            with self.subTest(size=(width, height)):
+                page.setProperty("width", width)
+                page.setProperty("height", height)
+                self.application.processEvents()
+                self.assertFalse(viewport.property("interactive"))
+                for name in ("authFullName", "authEmail", "authPassword", "authStart", "authLoginRow"):
+                    item = page.findChild(QQuickItem, name)
+                    top_left = item.mapToItem(page, QPointF(0, 0))
+                    self.assertGreaterEqual(top_left.x(), 0, name)
+                    self.assertGreaterEqual(top_left.y(), 0, name)
+                    self.assertLessEqual(top_left.x() + item.width(), width, name)
+                    self.assertLessEqual(top_left.y() + item.height(), height, name)
+
+    def test_auth_scroll_reaches_actions_at_constrained_height(self) -> None:
+        page = self._create_component("pages/AuthPage.qml")
+        page.setProperty("width", 800)
+        page.setProperty("height", 400)
+        self.application.processEvents()
+        viewport = page.findChild(QQuickItem, "authFormViewport")
+        self.assertTrue(viewport.property("interactive"))
+        viewport.setProperty("contentY", viewport.property("contentHeight") - viewport.height())
+        self.application.processEvents()
+        for name in ("authStart", "authLoginRow"):
+            item = page.findChild(QQuickItem, name)
+            top = item.mapToItem(page, QPointF(0, 0)).y()
+            self.assertGreaterEqual(top, 0, name)
+            self.assertLessEqual(top + item.height(), page.height(), name)
 
     def test_start_page_environment_routing(self) -> None:
         for page in ("loading", "auth", "home", "gallery"):

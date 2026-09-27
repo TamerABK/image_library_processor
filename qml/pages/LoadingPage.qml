@@ -5,7 +5,8 @@ Item {
     id: root
     objectName: "loadingPage"
 
-    signal continueRequested()
+    // Phase 3 presentation route only. The owner must explicitly change routes;
+    // automatic completion awaits real startup orchestration, not a splash timer.
 
     Room36Theme.Theme { id: theme }
     Room36Theme.Metrics { id: metrics }

@@ -17,12 +17,14 @@ if PYSIDE6_AVAILABLE:
     from PySide6.QtWidgets import QApplication
 
     from ui.qt.bridge import QtPhotoCleanerBridge
+    from ui.qt.app import configure_quick_controls_style
 
 
 @unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is not installed")
 class QmlDesignSystemTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        configure_quick_controls_style()
         cls.application = QApplication.instance() or QApplication([])
 
     def _make_engine(self) -> tuple["QQmlApplicationEngine", list[object]]:
@@ -39,6 +41,8 @@ class QmlDesignSystemTests(unittest.TestCase):
 
     def test_asset_paths_resolve_and_raw_runtime_assets_are_removed(self) -> None:
         self.assertTrue(qml_path("App.qml").is_file())
+        self.assertTrue(qml_path("components", "RoundedCornerMask.qml").is_file())
+        self.assertTrue(asset_path("backgrounds", "auth_hero.jpg").is_file())
         self.assertTrue(asset_path("icons", "search.svg").is_file())
         self.assertTrue(asset_path("branding", "logo_blue.svg").is_file())
         self.assertTrue(asset_path("backgrounds", "loading_mesh.svg").is_file())
