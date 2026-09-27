@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Layouts
 import "../theme" as Room36Theme
@@ -13,6 +15,7 @@ Item {
     property bool showFavorite: true
     property bool showMenu: true
     property string badgeText: ""
+    readonly property bool hasImageSource: String(source).length > 0
 
     signal clicked()
     signal selectionToggled(bool selected)
@@ -54,12 +57,17 @@ Item {
             height: parent.height - metrics.photoCardFooterHeight
             color: theme.imagePlaceholder
 
-            Image {
-                id: preview
+            Loader {
+                id: previewLoader
                 anchors.fill: parent
-                source: root.source
-                fillMode: Image.PreserveAspectCrop
-                visible: String(root.source).length > 0 && status !== Image.Error
+                active: root.hasImageSource
+
+                sourceComponent: Image {
+                    anchors.fill: parent
+                    source: root.source
+                    cache: true
+                    fillMode: Image.PreserveAspectCrop
+                }
             }
 
             Image {
@@ -68,7 +76,7 @@ Item {
                 height: metrics.iconSizeLarge
                 source: theme.iconUrl("landscape.svg")
                 fillMode: Image.PreserveAspectFit
-                visible: !preview.visible
+                visible: !root.hasImageSource
                 opacity: 0.62
             }
 

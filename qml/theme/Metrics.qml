@@ -30,14 +30,27 @@ QtObject {
     readonly property real photoCardReferenceHeight: 206.79
     readonly property real photoCardHorizontalGap: 17
 
-    readonly property real projectCardReferenceWidth: photoCardReferenceWidth
-    readonly property real projectCardReferenceHeight: photoCardReferenceHeight
+    readonly property real projectCardReferenceWidth: 418.26
+    readonly property real projectCardImageHeight: 278.83
+    readonly property real projectCardFooterHeight: 63.69
+    readonly property real projectCardReferenceHeight: 342.52
+    readonly property real projectCardHorizontalGap: 28.73
+    readonly property real projectCardRadius: 10
 
     readonly property real toolbarDropdownWidth: 177.59
     readonly property real toolbarExportButtonWidth: 204.46
     readonly property real toolbarButtonHeight: 41.99
     readonly property real toolbarButtonRadius: 20.99
     readonly property real searchFieldWidth: 320
+    readonly property real homeSearchFieldWidth: 486.61
+    readonly property real homeSubscriptionButtonWidth: 204.20
+    readonly property real homeTopBarHeight: 41.99
+    readonly property real homeTopMargin: 66
+    readonly property real homeHorizontalMargin: 76.23
+    readonly property real homeLogoWidth: 274
+    readonly property real homeLogoHeight: 75
+    readonly property real homeHeadingTop: 240
+    readonly property real homeGridTop: 325.84
 
     readonly property real sidebarPreferredWidth: 430
     readonly property real sidebarNavRowWidth: 274.71
@@ -66,4 +79,13 @@ QtObject {
     readonly property real authPrimaryButtonRadius: 29.44
     readonly property real authSocialButtonSize: 67.66
     readonly property real authSocialButtonRadius: 24.53
+    readonly property real authHeroX: 803.28
+    readonly property real authHeroY: 41.53
+    readonly property real authHeroWidth: 1075.18
+    readonly property real authHeroHeight: 996.94
+    readonly property real authHeroRadius: 40.30
+    readonly property real authFormWidth: 445.98
+    readonly property real authFormCenterX: 401.64
+    readonly property real authLogoWidth: 342
+    readonly property real authLogoHeight: 93
 }

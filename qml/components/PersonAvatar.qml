@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import "../theme" as Room36Theme
 
@@ -10,6 +12,7 @@ Item {
     property bool showName: false
     property bool showCount: count >= 0
     property bool selected: false
+    readonly property bool hasImageSource: String(source).length > 0
 
     signal clicked()
 
@@ -40,12 +43,17 @@ Item {
         border.color: root.selected ? theme.focusRing : theme.separator
         clip: true
 
-        Image {
-            id: avatarImage
+        Loader {
+            id: avatarLoader
             anchors.fill: parent
-            source: root.source
-            fillMode: Image.PreserveAspectCrop
-            visible: String(root.source).length > 0 && status !== Image.Error
+            active: root.hasImageSource
+
+            sourceComponent: Image {
+                anchors.fill: parent
+                source: root.source
+                cache: true
+                fillMode: Image.PreserveAspectCrop
+            }
         }
 
         Image {
@@ -54,7 +62,7 @@ Item {
             height: metrics.iconSizeLarge
             source: theme.iconUrl("profile.svg")
             fillMode: Image.PreserveAspectFit
-            visible: !avatarImage.visible
+            visible: !root.hasImageSource
             opacity: 0.62
         }
 

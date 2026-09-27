@@ -5,11 +5,9 @@ import "../theme" as Room36Theme
 Button {
     id: root
 
-    property url source: ""
-    property string accessibleLabel: text
-    property real buttonSize: metrics.iconButtonSize
-    property real iconSize: metrics.iconSizeMedium
-    property real radius: Math.min(width, height) / 2
+    property url iconSource: ""
+    property string provider: ""
+    property string accessibleLabel: provider.length > 0 ? provider : text
 
     Accessible.name: accessibleLabel
     Accessible.role: Accessible.Button
@@ -18,32 +16,33 @@ Button {
     Room36Theme.Metrics { id: metrics }
     Room36Theme.Animations { id: animations }
 
-    implicitWidth: buttonSize
-    implicitHeight: buttonSize
+    implicitWidth: metrics.authSocialButtonSize
+    implicitHeight: metrics.authSocialButtonSize
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
 
     contentItem: Item {
         Image {
             anchors.centerIn: parent
-            width: root.iconSize
-            height: root.iconSize
-            source: root.source
+            width: metrics.iconSizeLarge
+            height: metrics.iconSizeLarge
+            source: root.iconSource
+            cache: true
             fillMode: Image.PreserveAspectFit
             opacity: root.enabled ? 1 : 0.36
         }
     }
 
     background: Rectangle {
-        radius: root.radius
+        radius: metrics.authSocialButtonRadius
         color: !root.enabled
             ? theme.disabledFill
             : root.down
-                ? theme.pressedFill
+                ? theme.midBlue
                 : root.hovered || root.activeFocus
-                    ? theme.hoverFill
-                    : Qt.rgba(1, 1, 1, 0)
-        border.width: root.activeFocus && root.enabled ? 1 : 0
+                    ? theme.midBlue
+                    : theme.mainBlue
+        border.width: root.activeFocus && root.enabled ? 2 : 0
         border.color: theme.focusRing
 
         Behavior on color {

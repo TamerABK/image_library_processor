@@ -135,9 +135,12 @@ def _preload_gpu_runtime_dependencies() -> None:
 _preload_gpu_runtime_dependencies()
 
 
+def _ui_mode_from_environment() -> str:
+    # return os.environ.get("ROOM36_UI", "tk").strip().lower()
+    return "qt"
+
 def run_app() -> int:
-    # ui_mode = os.environ.get("ROOM36_UI", "tk").strip().lower()
-    ui_mode="qt"
+    ui_mode = _ui_mode_from_environment()
     if ui_mode == "qt":
         from ui.qt.app import run_app as run_qt_app
 

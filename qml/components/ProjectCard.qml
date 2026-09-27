@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Layouts
 import "../theme" as Room36Theme
@@ -10,6 +12,8 @@ Item {
     property string subtitle: ""
     property int photoCount: -1
     property bool selected: false
+    property color cornerMaskColor: theme.homeBackground
+    readonly property bool hasImageSource: String(source).length > 0
 
     signal clicked()
     signal menuRequested()
@@ -35,7 +39,7 @@ Item {
     Rectangle {
         id: cardSurface
         anchors.fill: parent
-        radius: metrics.photoCardRadius
+        radius: metrics.projectCardRadius
         color: theme.panelFill
         border.width: root.selected ? 2 : 1
         border.color: root.selected ? theme.focusRing : theme.separator
@@ -45,15 +49,20 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
-            height: parent.height - metrics.photoCardFooterHeight
+            height: metrics.projectCardImageHeight
             color: theme.imagePlaceholder
 
-            Image {
-                id: preview
+            Loader {
+                id: previewLoader
                 anchors.fill: parent
-                source: root.source
-                fillMode: Image.PreserveAspectCrop
-                visible: String(root.source).length > 0 && status !== Image.Error
+                active: root.hasImageSource
+
+                sourceComponent: Image {
+                    anchors.fill: parent
+                    source: root.source
+                    cache: true
+                    fillMode: Image.PreserveAspectCrop
+                }
             }
 
             Image {
@@ -62,7 +71,7 @@ Item {
                 height: metrics.iconSizeLarge
                 source: theme.iconUrl("project_open.svg")
                 fillMode: Image.PreserveAspectFit
-                visible: !preview.visible
+                visible: !root.hasImageSource
                 opacity: 0.62
             }
 
@@ -83,7 +92,7 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
-            height: metrics.photoCardFooterHeight
+            height: metrics.projectCardFooterHeight
             color: theme.footerFill
 
             ColumnLayout {
@@ -97,7 +106,7 @@ Item {
                     text: root.title
                     color: theme.white
                     font.family: typography.cardTitleFamily
-                    font.pixelSize: typography.caption
+                    font.pixelSize: typography.body
                     elide: Text.ElideRight
                     verticalAlignment: Text.AlignVCenter
                 }
@@ -110,11 +119,17 @@ Item {
                     visible: text.length > 0
                     color: theme.lightBlue
                     font.family: typography.detailFamily
-                    font.pixelSize: typography.detail
+                    font.pixelSize: typography.caption
                     elide: Text.ElideRight
                     verticalAlignment: Text.AlignVCenter
                 }
             }
+        }
+
+        RoundedCornerMask {
+            anchors.fill: parent
+            cornerRadius: metrics.projectCardRadius
+            maskColor: root.cornerMaskColor
         }
     }
 }

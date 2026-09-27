@@ -8,14 +8,15 @@ Button {
 
     property url iconSource: ""
     property bool busy: false
+    property real radius: height / 2
 
     Room36Theme.Theme { id: theme }
     Room36Theme.Typography { id: typography }
     Room36Theme.Metrics { id: metrics }
     Room36Theme.Animations { id: animations }
 
-    implicitWidth: Math.max(metrics.authPrimaryButtonWidth, label.implicitWidth + metrics.spacingLarge * 2)
-    implicitHeight: metrics.authPrimaryButtonHeight
+    implicitWidth: Math.max(132, contentLayout.implicitWidth + leftPadding + rightPadding)
+    implicitHeight: metrics.toolbarButtonHeight
     leftPadding: metrics.spacingMedium
     rightPadding: metrics.spacingMedium
     topPadding: 0
@@ -24,6 +25,8 @@ Button {
     focusPolicy: Qt.StrongFocus
 
     contentItem: RowLayout {
+        id: contentLayout
+
         spacing: metrics.spacingSmall
 
         BusyIndicator {
@@ -56,7 +59,7 @@ Button {
     }
 
     background: Rectangle {
-        radius: metrics.authPrimaryButtonRadius
+        radius: root.radius
         color: !root.enabled
             ? theme.disabledFill
             : root.down

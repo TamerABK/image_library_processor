@@ -110,11 +110,16 @@ Item {
     Components.PillButton { text: "Add"; variant: "filled"; y: 70 }
     Components.IconButton { source: theme.iconUrl("settings.svg"); accessibleLabel: "Settings"; y: 130 }
     Components.SearchField { placeholderText: "Search"; y: 190 }
+    Components.AuthTextField { label: "Email"; y: 250 }
     Components.ToolbarDropdownButton { label: "Sort"; iconSource: theme.iconUrl("sort.svg"); y: 250 }
     Components.SidebarFilterItem { iconSource: theme.iconUrl("home.svg"); label: "Home"; selected: true; y: 310 }
     Components.SelectionCheckbox { checked: true; text: "Selected"; y: 370 }
     Components.ScoreBar { value: 0.75; y: 430 }
     Components.PersonAvatar { name: "Amina"; count: 4; showName: true; selected: true; y: 490 }
+    Components.SocialLoginButton { iconSource: theme.iconUrl("google.svg"); provider: "google"; x: 520; y: 250 }
+    Components.RoundedCornerMask { x: 620; y: 250; width: 80; height: 80; cornerRadius: 16; maskColor: theme.homeBackground }
+    Components.NewProjectCard { x: 720; y: 80 }
+    Components.ProjectGrid { x: 720; y: 450; width: 900; height: 360 }
     Components.PhotoCard {
         source: theme.backgroundUrl("loading_mesh.svg")
         filename: "IMG_2042.jpg"

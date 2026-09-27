@@ -8,7 +8,12 @@ QtObject {
     readonly property color white: "#FFFFFF"
     readonly property color black: "#000000"
 
-    readonly property color workspaceBackground: Qt.rgba(164 / 255, 164 / 255, 255 / 255, 0.10)
+    readonly property color appBackground: white
+    readonly property color homeBackground: white
+    readonly property color authBackground: white
+    readonly property color libraryBackground: black
+    readonly property color galleryBackground: Qt.rgba(246 / 255, 246 / 255, 1, 1)
+    readonly property color workspaceBackground: appBackground
     readonly property color panelFill: white
     readonly property color panelRaisedFill: Qt.rgba(1, 1, 1, 0.94)
     readonly property color mutedText: Qt.rgba(0, 0, 0, 0.58)
