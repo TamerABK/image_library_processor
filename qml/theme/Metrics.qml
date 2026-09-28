@@ -53,6 +53,10 @@ QtObject {
     readonly property real homeGridTop: 325.84
 
     readonly property real sidebarPreferredWidth: 430
+    readonly property real sidebarCompactWidth: 320
+    readonly property real libraryWideBreakpoint: 1600
+    readonly property real libraryTopBarHeight: 148
+    readonly property real libraryContentMargin: 48
     readonly property real sidebarNavRowWidth: 274.71
     readonly property real sidebarNavRowHeight: 35.15
     readonly property real sidebarNavRowRadius: 17.57

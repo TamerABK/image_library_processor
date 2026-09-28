@@ -11,7 +11,7 @@ Item {
     property var projectModel: null
 
     signal newProjectRequested()
-    signal projectActivated(var projectId)
+    signal projectActivated(var projectId, string projectName)
     signal projectMenuRequested(var projectId)
     signal searchChanged(string text)
     signal sortChanged(string value)
@@ -96,7 +96,7 @@ Item {
         height: Math.max(0, root.height - y - 40)
         projectModel: root.projectModel
         onNewProjectRequested: root.newProjectRequested()
-        onProjectActivated: function(projectId) { root.projectActivated(projectId) }
+        onProjectActivated: function(projectId, projectName) { root.projectActivated(projectId, projectName) }
         onProjectMenuRequested: function(projectId) { root.projectMenuRequested(projectId) }
     }
 }

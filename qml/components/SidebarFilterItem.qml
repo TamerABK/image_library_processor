@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
 import QtQuick.Layouts
 import "../theme" as Room36Theme
 
@@ -12,6 +13,12 @@ Button {
     property bool selected: false
     property bool expanded: false
     property bool showChevron: false
+    property bool darkSurface: false
+
+    Accessible.name: count >= 0 ? label + ", " + count : label
+    Accessible.role: Accessible.Button
+    Accessible.checkable: true
+    Accessible.checked: selected
 
     Room36Theme.Theme { id: theme }
     Room36Theme.Typography { id: typography }
@@ -35,12 +42,17 @@ Button {
             visible: String(root.iconSource).length > 0
             fillMode: Image.PreserveAspectFit
             opacity: root.enabled ? 1 : 0.36
+            layer.enabled: root.darkSurface
+            layer.effect: MultiEffect {
+                colorization: 1
+                colorizationColor: theme.white
+            }
         }
 
         Text {
             Layout.fillWidth: true
             text: root.label
-            color: root.enabled ? theme.black : theme.disabledText
+            color: root.enabled ? (root.darkSurface ? theme.white : theme.black) : theme.disabledText
             font.family: root.selected ? typography.buttonFamily : typography.bodyFamily
             font.pixelSize: typography.caption
             elide: Text.ElideRight
@@ -50,7 +62,7 @@ Button {
         Text {
             text: root.count >= 0 ? root.count : ""
             visible: root.count >= 0
-            color: root.enabled ? theme.mutedText : theme.disabledText
+            color: root.enabled ? (root.darkSurface ? theme.white : theme.mutedText) : theme.disabledText
             font.family: typography.detailFamily
             font.pixelSize: typography.detail
             verticalAlignment: Text.AlignVCenter
@@ -79,7 +91,7 @@ Button {
                         ? theme.selectedFill
                         : root.hovered || root.activeFocus
                             ? theme.hoverFill
-                            : Qt.rgba(1, 1, 1, 0)
+                            : (root.darkSurface ? theme.libraryNavFill : Qt.rgba(1, 1, 1, 0))
             border.width: root.activeFocus && root.enabled ? 1 : 0
             border.color: theme.focusRing
 

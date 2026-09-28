@@ -12,6 +12,15 @@ ApplicationWindow {
     property var appBridge: null
     property string startPage: "home"
     property bool useHomePreviewData: false
+    property var projectModel: null
+    property var activeProjectId: null
+    property string activeProjectName: ""
+    // These contracts await project/settings adapters; no persistence is implied.
+    signal newProjectRequested()
+    signal projectMenuRequested(var projectId)
+    signal librarySortRequested(var projectId, string routeId, string option)
+    signal libraryViewSizeRequested(var projectId, string routeId, string option)
+    signal settingsRequested()
     readonly property string currentPage: normalizePage(startPage)
 
     visible: true
@@ -26,13 +35,16 @@ ApplicationWindow {
     Room36Theme.Metrics { id: metrics }
 
     function normalizePage(pageId) {
-        if (pageId === "loading" || pageId === "auth" || pageId === "home" || pageId === "gallery") {
+        if (pageId === "loading" || pageId === "auth" || pageId === "home" || pageId === "library" || pageId === "gallery") {
             return pageId
         }
         return "home"
     }
 
     function pageBackground(pageId) {
+        if (pageId === "library") {
+            return theme.libraryBackground
+        }
         if (pageId === "auth") {
             return theme.authBackground
         }
@@ -49,6 +61,16 @@ ApplicationWindow {
         startPage = normalizePage(pageId)
     }
 
+    function openProject(projectId, projectName) {
+        if (projectId === null || projectId === undefined || projectId === "") {
+            return false
+        }
+        activeProjectId = projectId
+        activeProjectName = projectName || ""
+        showPage("library")
+        return true
+    }
+
     Loader {
         id: pageLoader
         objectName: "pageLoader"
@@ -62,6 +84,9 @@ ApplicationWindow {
             }
             if (window.currentPage === "gallery") {
                 return galleryComponent
+            }
+            if (window.currentPage === "library") {
+                return libraryComponent
             }
             if (window.useHomePreviewData) {
                 return homePreviewComponent
@@ -91,6 +116,10 @@ ApplicationWindow {
 
         Pages.HomePage {
             objectName: "homePage"
+            projectModel: window.projectModel
+            onProjectActivated: function(projectId, projectName) { window.openProject(projectId, projectName) }
+            onNewProjectRequested: window.newProjectRequested()
+            onProjectMenuRequested: function(projectId) { window.projectMenuRequested(projectId) }
         }
     }
 
@@ -99,6 +128,23 @@ ApplicationWindow {
 
         Dev.ScreenPreview {
             objectName: "screenPreview"
+            onProjectActivated: function(projectId, projectName) { window.openProject(projectId, projectName) }
+            onNewProjectRequested: window.newProjectRequested()
+            onProjectMenuRequested: function(projectId) { window.projectMenuRequested(projectId) }
+        }
+    }
+
+    Component {
+        id: libraryComponent
+
+        Pages.LibraryShell {
+            objectName: "libraryShell"
+            projectId: window.activeProjectId
+            projectName: window.activeProjectName
+            onHomeRequested: window.showPage("home")
+            onSettingsRequested: window.settingsRequested()
+            onSortRequested: function(routeId, option) { window.librarySortRequested(projectId, routeId, option) }
+            onViewSizeRequested: function(routeId, option) { window.libraryViewSizeRequested(projectId, routeId, option) }
         }
     }
 

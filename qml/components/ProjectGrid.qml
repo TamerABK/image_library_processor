@@ -14,7 +14,7 @@ Flickable {
     )
 
     signal newProjectRequested()
-    signal projectActivated(var projectId)
+    signal projectActivated(var projectId, string projectName)
     signal projectMenuRequested(var projectId)
 
     Room36Theme.Metrics { id: metrics }
@@ -41,6 +41,7 @@ Flickable {
             model: root.projectModel ? root.projectModel : 0
 
             delegate: ProjectCard {
+                objectName: "projectCard_" + index
                 required property int index
                 required property var model
 
@@ -53,7 +54,7 @@ Flickable {
                 title: row.name !== undefined ? row.name : ""
                 photoCount: row.photoCount !== undefined ? row.photoCount : -1
                 subtitle: row.lastOpened !== undefined ? row.lastOpened : ""
-                onClicked: root.projectActivated(projectIdentifier)
+                onClicked: root.projectActivated(projectIdentifier, title)
                 onMenuRequested: root.projectMenuRequested(projectIdentifier)
             }
         }

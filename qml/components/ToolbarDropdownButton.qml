@@ -12,6 +12,9 @@ Button {
     property url iconSource: ""
     property bool open: popup.opened
     property var options: ["Newest", "Oldest", "Largest"]
+    property color normalFill: theme.panelRaisedFill
+
+    Accessible.name: label
 
     signal optionSelected(string option)
 
@@ -74,7 +77,7 @@ Button {
                 ? theme.pressedFill
                 : root.hovered || root.activeFocus
                     ? theme.hoverFill
-                    : theme.panelRaisedFill
+                    : root.normalFill
         border.width: popup.opened || root.activeFocus ? 2 : 1
         border.color: popup.opened || root.activeFocus ? theme.focusRing : theme.separator
 

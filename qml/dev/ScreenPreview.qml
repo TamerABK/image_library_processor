@@ -8,7 +8,7 @@ Item {
     property string pageId: "home"
 
     signal newProjectRequested()
-    signal projectActivated(var projectId)
+    signal projectActivated(var projectId, string projectName)
     signal projectMenuRequested(var projectId)
     signal searchChanged(string text)
     signal sortChanged(string value)
@@ -30,7 +30,7 @@ Item {
         anchors.fill: parent
         projectModel: previewProjects
         onNewProjectRequested: root.newProjectRequested()
-        onProjectActivated: function(projectId) { root.projectActivated(projectId) }
+        onProjectActivated: function(projectId, projectName) { root.projectActivated(projectId, projectName) }
         onProjectMenuRequested: function(projectId) { root.projectMenuRequested(projectId) }
         onSearchChanged: function(text) { root.searchChanged(text) }
         onSortChanged: function(value) { root.sortChanged(value) }

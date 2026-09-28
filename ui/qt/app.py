@@ -13,7 +13,7 @@ from app_paths import qml_path
 from .bridge import QtPhotoCleanerBridge
 
 
-_VALID_START_PAGES = {"loading", "auth", "home", "gallery"}
+_VALID_START_PAGES = {"loading", "auth", "home", "library", "gallery"}
 
 
 @cache

@@ -64,6 +64,7 @@ class QmlPagesTests(unittest.TestCase):
             "pages/LoadingPage.qml",
             "pages/AuthPage.qml",
             "pages/HomePage.qml",
+            "pages/LibraryShell.qml",
         ):
             with self.subTest(page_path=page_path):
                 self._create_component(page_path)
@@ -86,11 +87,12 @@ class QmlPagesTests(unittest.TestCase):
             print(QQuickStyle.name())
             assert not messages, messages
         """)
-        for override, expected in ((None, "Basic"), ("Fusion", "Fusion")):
-            with self.subTest(style=expected):
+        for override, expected, page in ((None, "Basic", "auth"), ("Fusion", "Fusion", "auth"),
+                                         (None, "Basic", "library"), ("Fusion", "Fusion", "library")):
+            with self.subTest(style=expected, page=page):
                 environment = dict(os.environ)
                 environment.pop("QT_QUICK_CONTROLS_STYLE", None)
-                environment["ROOM36_START_PAGE"] = "auth"
+                environment["ROOM36_START_PAGE"] = page
                 environment["QT_QPA_PLATFORM"] = "offscreen"
                 # The Windows offscreen plugin has no system font discovery.
                 # Supply real bundled fonts rather than filtering its warnings.
@@ -183,7 +185,7 @@ class QmlPagesTests(unittest.TestCase):
             self.assertLessEqual(top + item.height(), page.height(), name)
 
     def test_start_page_environment_routing(self) -> None:
-        for page in ("loading", "auth", "home", "gallery"):
+        for page in ("loading", "auth", "home", "library", "gallery"):
             with self.subTest(page=page):
                 with patch.dict(os.environ, {"ROOM36_START_PAGE": page}, clear=False):
                     self.assertEqual(_start_page_from_environment(), page)
@@ -199,6 +201,7 @@ class QmlPagesTests(unittest.TestCase):
             "loading": "loadingPage",
             "auth": "authPage",
             "home": "homePage",
+            "library": "libraryShell",
             "gallery": "componentGallery",
         }
 
