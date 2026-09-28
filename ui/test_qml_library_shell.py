@@ -74,7 +74,10 @@ class LibraryShellTests(unittest.TestCase):
             self.item("libraryNav_" + route).clicked.emit()
             self.app.processEvents()
             self.assertEqual(route, shell.property("currentRoute"))
-            self.assertEqual(route, self.item("libraryRoutePlaceholder").property("routeId"))
+            if route == "library":
+                self.assertIsNotNone(self.item("photoGrid"))
+            else:
+                self.assertEqual(route, self.item("libraryRoutePlaceholder").property("routeId"))
             self.assertIs(shell, self.page())
             self.assertIs(sidebar, self.item("librarySidebar"))
             self.assertIs(topbar, self.item("libraryTopBar"))

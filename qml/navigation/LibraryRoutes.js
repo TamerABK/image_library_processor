@@ -3,7 +3,7 @@
 // Navigation metadata only. No result rows, sample counts or person identities.
 var entries = [
     { routeId: "library", label: "All", title: "Library", icon: "view.svg", section: "Organize",
-      message: "Photo browsing will be added in Phase 5." },
+      message: "" },
     { routeId: "blurry", label: "Blurry photos", title: "Blurry photos", icon: "landscape.svg", section: "",
       message: "Blurry photo review will be added in Phase 6." },
     { routeId: "duplicates", label: "Near duplicates", title: "Near duplicates", icon: "view_medium.svg", section: "",

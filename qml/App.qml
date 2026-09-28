@@ -13,6 +13,8 @@ ApplicationWindow {
     property string startPage: "home"
     property bool useHomePreviewData: false
     property var projectModel: null
+    // Supplied by the project adapter; empty at production startup in Phase 5.
+    property var photoModel: null
     property var activeProjectId: null
     property string activeProjectName: ""
     // These contracts await project/settings adapters; no persistence is implied.
@@ -139,6 +141,7 @@ ApplicationWindow {
 
         Pages.LibraryShell {
             objectName: "libraryShell"
+            photoModel: window.photoModel
             projectId: window.activeProjectId
             projectName: window.activeProjectName
             onHomeRequested: window.showPage("home")

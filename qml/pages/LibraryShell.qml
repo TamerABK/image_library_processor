@@ -4,6 +4,7 @@ import QtQuick
 import "../layout" as Room36Layout
 import "../theme" as Room36Theme
 import "../dev" as Dev
+import "../components" as Components
 import "../navigation/LibraryRoutes.js" as Routes
 
 Rectangle {
@@ -11,6 +12,8 @@ Rectangle {
     objectName: "libraryShell"
 
     property var projectId: null
+    property var photoModel: null
+    property string libraryViewSize: "Medium"
     property string projectName: ""
     property string currentRoute: "library"
     property var routeCounts: ({})
@@ -66,7 +69,11 @@ Rectangle {
         pageTitle: root.currentEntry.title
         onHomeRequested: root.homeRequested()
         onSortRequested: function(option) { root.sortRequested(root.currentRoute, option) }
-        onViewSizeRequested: function(option) { root.viewSizeRequested(root.currentRoute, option) }
+        onViewSizeRequested: function(option) {
+            if (root.currentRoute === "library" && ["Small", "Medium", "Large"].indexOf(option) >= 0)
+                root.libraryViewSize = option
+            root.viewSizeRequested(root.currentRoute, option)
+        }
     }
 
     Loader {
@@ -78,14 +85,23 @@ Rectangle {
         anchors.bottom: parent.bottom
         anchors.margins: metrics.libraryContentMargin
 
-        // All Phase 4 destinations share an honest placeholder. Future pages
-        // replace this content selection, never the surrounding sidebar/top bar.
-        sourceComponent: Component {
-            Dev.LibraryRoutePlaceholder {
-                routeId: root.currentRoute
-                title: root.currentEntry.title
-                message: root.currentEntry.message
-            }
+        sourceComponent: root.currentRoute === "library" ? gridComponent : placeholderComponent
+    }
+
+    Component {
+        id: gridComponent
+        Components.PhotoGrid {
+            photoModel: root.photoModel
+            viewSize: root.libraryViewSize
+        }
+    }
+
+    Component {
+        id: placeholderComponent
+        Dev.LibraryRoutePlaceholder {
+            routeId: root.currentRoute
+            title: root.currentEntry.title
+            message: root.currentEntry.message
         }
     }
 }

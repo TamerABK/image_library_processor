@@ -8,6 +8,7 @@ Item {
     id: root
 
     property url source: ""
+    property bool cacheImage: true
     property string filename: ""
     property bool selected: false
     property bool favorite: false
@@ -65,7 +66,8 @@ Item {
                 sourceComponent: Image {
                     anchors.fill: parent
                     source: root.source
-                    cache: true
+                    cache: root.cacheImage
+                    asynchronous: true
                     fillMode: Image.PreserveAspectCrop
                 }
             }

@@ -11,6 +11,8 @@ from PySide6.QtWidgets import QApplication
 from app_paths import qml_path
 
 from .bridge import QtPhotoCleanerBridge
+from .photo_model import PhotoListModel
+from .thumbnails import ThumbnailService
 
 
 _VALID_START_PAGES = {"loading", "auth", "home", "library", "gallery"}
@@ -49,20 +51,27 @@ def run_app() -> int:
         application = QApplication(sys.argv)
 
     bridge = QtPhotoCleanerBridge(parent=application)
+    thumbnails = ThumbnailService(parent=application)
+    photo_model = PhotoListModel(thumbnails, parent=application)
+    application.aboutToQuit.connect(photo_model.close)
+    application.aboutToQuit.connect(thumbnails.shutdown)
 
     engine = QQmlApplicationEngine()
     engine.setInitialProperties(
         {
             "appBridge": bridge,
+            "photoModel": photo_model,
             "startPage": _start_page_from_environment(),
             "useHomePreviewData": _home_preview_data_from_environment(),
         }
     )
 
     app_qml_path = qml_path("App.qml")
-    engine.load(app_qml_path.as_uri())
-
-    if not engine.rootObjects():
-        raise RuntimeError(f"Failed to load QML root object from {app_qml_path}")
-
-    return application.exec()
+    try:
+        engine.load(app_qml_path.as_uri())
+        if not engine.rootObjects():
+            raise RuntimeError(f"Failed to load QML root object from {app_qml_path}")
+        return application.exec()
+    finally:
+        photo_model.close()
+        thumbnails.shutdown()
