@@ -70,22 +70,39 @@ Button {
     }
 
     background: Rectangle {
+        id: surface
+        objectName: "toolbarDropdownBase"
         radius: metrics.toolbarButtonRadius
-        color: !root.enabled
-            ? theme.disabledFill
-            : root.down || popup.opened
-                ? theme.pressedFill
-                : root.hovered || root.activeFocus
-                    ? theme.hoverFill
-                    : root.normalFill
-        border.width: popup.opened || root.activeFocus ? 2 : 1
-        border.color: popup.opened || root.activeFocus ? theme.focusRing : theme.separator
+        color: root.normalFill
 
-        Behavior on color {
-            ColorAnimation {
-                duration: animations.hover
-                easing.type: animations.standardEasing
+        // State colors are translucent overlays, not replacement surfaces.
+        Rectangle {
+            objectName: "toolbarDropdownStateOverlay"
+            anchors.fill: parent
+            radius: surface.radius
+            color: !root.enabled
+                ? theme.disabledFill
+                : root.down || popup.opened
+                    ? theme.pressedFill
+                    : root.hovered || root.activeFocus
+                        ? theme.hoverFill
+                        : "transparent"
+
+            Behavior on color {
+                ColorAnimation {
+                    duration: animations.hover
+                    easing.type: animations.standardEasing
+                }
             }
+        }
+
+        Rectangle {
+            objectName: "toolbarDropdownBorder"
+            anchors.fill: parent
+            radius: surface.radius
+            color: "transparent"
+            border.width: popup.opened || root.activeFocus ? 2 : 1
+            border.color: popup.opened || root.activeFocus ? theme.focusRing : theme.separator
         }
     }
 

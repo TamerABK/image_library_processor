@@ -4,8 +4,8 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QObject, QPointF, Qt, QtMsgType, qInstallMessageHandler
-from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtCore import QObject, QPoint, QPointF, Qt, QtMsgType, qInstallMessageHandler
+from PySide6.QtQml import QQmlApplicationEngine, QQmlProperty
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -144,6 +144,52 @@ class LibraryShellTests(unittest.TestCase):
         self.assertTrue(button.hasActiveFocus())
         QTest.keyClick(self.window, Qt.Key.Key_Space)
         self.assertEqual("blurry", shell.property("currentRoute"))
+
+    def test_toolbar_state_overlays_preserve_library_base_fill(self):
+        self.load()
+        for name in ("librarySortButton", "libraryViewButton"):
+            with self.subTest(button=name):
+                button = self.item(name)
+                base = button.findChild(QObject, "toolbarDropdownBase")
+                overlay = button.findChild(QObject, "toolbarDropdownStateOverlay")
+                border = button.findChild(QObject, "toolbarDropdownBorder")
+                self.assertEqual("#d7f205", button.property("normalFill").name())
+                self.assertIs(overlay.parent(), base)
+                self.assertIs(border.parent(), base)
+
+                def check_state(alpha, focused=False):
+                    # Allow the existing 110 ms color animation to settle.
+                    QTest.qWait(150)
+                    self.assertEqual(button.property("normalFill"), base.property("color"))
+                    self.assertEqual(255, base.property("color").alpha())
+                    self.assertAlmostEqual(alpha, overlay.property("color").alphaF(), places=2)
+                    self.assertEqual(2 if focused else 1, QQmlProperty.read(border, "border.width"))
+
+                self.item("libraryHomeButton").forceActiveFocus()
+                QTest.mouseMove(self.window, QPoint(1100, 600))
+                check_state(0)
+                center = button.mapToScene(QPointF(button.width() / 2, button.height() / 2)).toPoint()
+                QTest.mouseMove(self.window, center)
+                self.assertTrue(button.property("hovered"))
+                check_state(0.08)
+                QTest.mouseMove(self.window, QPoint(1100, 600))
+                button.forceActiveFocus()
+                check_state(0.08, focused=True)
+                QTest.keyPress(self.window, Qt.Key.Key_Space)
+                self.assertTrue(button.property("down"))
+                check_state(0.16, focused=True)
+                QTest.keyRelease(self.window, Qt.Key.Key_Space)
+                QTest.qWait(200)
+                self.assertTrue(button.property("open"))
+                check_state(0.16, focused=True)
+                QTest.keyClick(self.window, Qt.Key.Key_Escape)
+                QTest.qWait(200)
+                self.assertFalse(button.property("open"))
+                self.item("libraryHomeButton").forceActiveFocus()
+                button.setProperty("enabled", False)
+                check_state(0.07)
+                button.setProperty("enabled", True)
+                check_state(0)
 
     def test_supported_desktop_geometry(self):
         shell = self.load()
