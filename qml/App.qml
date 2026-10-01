@@ -12,17 +12,20 @@ ApplicationWindow {
     property var appBridge: null
     property string startPage: "home"
     property bool useHomePreviewData: false
-    property var projectModel: null
-    // Supplied by the project adapter; empty at production startup in Phase 5.
+    property var projectController: null
+    property var projectModel: projectController ? projectController.projects : null
     property var photoModel: null
     property var activeProjectId: null
     property string activeProjectName: ""
-    // These contracts await project/settings adapters; no persistence is implied.
+    // Unavailable account/settings/menu actions remain explicit contracts.
     signal newProjectRequested()
     signal projectMenuRequested(var projectId)
     signal librarySortRequested(var projectId, string routeId, string option)
     signal libraryViewSizeRequested(var projectId, string routeId, string option)
     signal settingsRequested()
+    signal subscriptionRequested()
+    signal profileRequested()
+    onNewProjectRequested: if (projectController) projectController.newProject()
     readonly property string currentPage: normalizePage(startPage)
 
     visible: true
@@ -73,10 +76,21 @@ ApplicationWindow {
         return true
     }
 
+    function activateProject(projectId, projectName) {
+        if (projectController) projectController.openProject(String(projectId))
+        else openProject(projectId, projectName) // Explicit standalone/dev contract.
+    }
+
+    Connections {
+        target: window.projectController
+        function onProjectOpened(projectId, projectName) { window.openProject(projectId, projectName) }
+    }
+
     Loader {
         id: pageLoader
         objectName: "pageLoader"
         anchors.fill: parent
+        anchors.bottomMargin: statusBanner.visible ? statusBanner.height : 0
         sourceComponent: {
             if (window.currentPage === "loading") {
                 return loadingPageComponent
@@ -119,9 +133,16 @@ ApplicationWindow {
         Pages.HomePage {
             objectName: "homePage"
             projectModel: window.projectModel
-            onProjectActivated: function(projectId, projectName) { window.openProject(projectId, projectName) }
+            newProjectEnabled: window.projectController !== null && !window.projectController.busy
+            searchText: window.projectController ? window.projectController.projects.searchQuery : ""
+            onProjectActivated: function(projectId, projectName) { window.activateProject(projectId, projectName) }
             onNewProjectRequested: window.newProjectRequested()
             onProjectMenuRequested: function(projectId) { window.projectMenuRequested(projectId) }
+            onSearchChanged: function(text) { if (window.projectController) window.projectController.projects.setSearch(text) }
+            onSortChanged: function(order) { if (window.projectController) window.projectController.projects.setSort(order) }
+            onSubscriptionRequested: window.subscriptionRequested()
+            onSettingsRequested: window.settingsRequested()
+            onProfileRequested: window.profileRequested()
         }
     }
 
@@ -130,7 +151,7 @@ ApplicationWindow {
 
         Dev.ScreenPreview {
             objectName: "screenPreview"
-            onProjectActivated: function(projectId, projectName) { window.openProject(projectId, projectName) }
+            onProjectActivated: function(projectId, projectName) { window.activateProject(projectId, projectName) }
             onNewProjectRequested: window.newProjectRequested()
             onProjectMenuRequested: function(projectId) { window.projectMenuRequested(projectId) }
         }
@@ -157,6 +178,28 @@ ApplicationWindow {
         Dev.ComponentGallery {
             objectName: "componentGallery"
             bridge: window.appBridge
+        }
+    }
+
+    Rectangle {
+        id: statusBanner
+        objectName: "projectStatusBanner"
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        height: Math.max(52, statusText.implicitHeight + 24)
+        visible: window.projectController !== null && window.projectController.message.length > 0
+        color: theme.mainBlue
+        Text {
+            id: statusText
+            objectName: "projectStatusText"
+            anchors.centerIn: parent
+            width: parent.width - 48
+            text: window.projectController ? window.projectController.message : ""
+            color: theme.white
+            wrapMode: Text.WordWrap
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
         }
     }
 }

@@ -270,7 +270,7 @@ class QmlPagesTests(unittest.TestCase):
             "appBackground": "#FFFFFF",
             "homeBackground": "#FFFFFF",
             "authBackground": "#FFFFFF",
-            "libraryBackground": "#000000",
+            "libraryBackground": "#FFFFFF",
         }
         for property_name, expected_color in expected.items():
             color = theme.property(property_name)

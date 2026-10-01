@@ -91,7 +91,7 @@ GridView {
         anchors.centerIn: parent
         visible: root.count === 0
         text: "No photos in this library"
-        color: theme.lightBlue
+        color: theme.mutedText
         font.family: typography.bodyFamily
         font.pixelSize: typography.body
     }

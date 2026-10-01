@@ -22,7 +22,7 @@ Item {
         Text {
             Layout.fillWidth: true
             text: root.title
-            color: theme.white
+            color: theme.mainBlue
             font.family: typography.pageTitleFamily
             font.pixelSize: typography.pageTitle
             wrapMode: Text.Wrap
@@ -32,7 +32,7 @@ Item {
         Text {
             Layout.fillWidth: true
             text: root.message
-            color: theme.lightBlue
+            color: theme.mutedText
             font.family: typography.bodyFamily
             font.pixelSize: typography.body
             wrapMode: Text.Wrap
@@ -42,7 +42,7 @@ Item {
         Text {
             Layout.fillWidth: true
             text: "Phase 4 navigation preview"
-            color: theme.lightBlue
+            color: theme.mutedText
             font.family: typography.captionFamily
             font.pixelSize: typography.caption
             horizontalAlignment: Text.AlignHCenter

@@ -67,8 +67,13 @@ Rectangle {
         height: implicitHeight
         projectName: root.projectName
         pageTitle: root.currentEntry.title
+        libraryControlsEnabled: root.currentRoute === "library"
         onHomeRequested: root.homeRequested()
-        onSortRequested: function(option) { root.sortRequested(root.currentRoute, option) }
+        onSortRequested: function(option) {
+            if (root.currentRoute === "library" && root.photoModel && ["Name A–Z", "Name Z–A"].indexOf(option) >= 0)
+                root.photoModel.sortByFilename(option === "Name Z–A")
+            root.sortRequested(root.currentRoute, option)
+        }
         onViewSizeRequested: function(option) {
             if (root.currentRoute === "library" && ["Small", "Medium", "Large"].indexOf(option) >= 0)
                 root.libraryViewSize = option

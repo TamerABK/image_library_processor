@@ -105,6 +105,7 @@ Rectangle {
 
             Components.SidebarFilterItem {
                 objectName: "libraryPreferences"
+                enabled: false
                 width: parent.width
                 darkSurface: true
                 label: "Preferences"

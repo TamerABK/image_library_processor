@@ -12,6 +12,7 @@ Item {
     property string subtitle: ""
     property int photoCount: -1
     property bool selected: false
+    property bool menuEnabled: true
     property color cornerMaskColor: theme.homeBackground
     readonly property bool hasImageSource: String(source).length > 0
 
@@ -76,6 +77,8 @@ Item {
             }
 
             IconButton {
+                objectName: "projectMenuButton"
+                enabled: root.menuEnabled
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.rightMargin: metrics.spacingTiny

@@ -4,6 +4,7 @@ import os
 import sys
 from functools import cache
 
+from PySide6.QtCore import Qt
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWidgets import QApplication
@@ -13,6 +14,7 @@ from app_paths import qml_path
 from .bridge import QtPhotoCleanerBridge
 from .photo_model import PhotoListModel
 from .thumbnails import ThumbnailService
+from .project_controller import ProjectController
 
 
 _VALID_START_PAGES = {"loading", "auth", "home", "library", "gallery"}
@@ -50,9 +52,14 @@ def run_app() -> int:
     if application is None:
         application = QApplication(sys.argv)
 
+    # Keep controls, dialogs, and window chrome light regardless of the OS theme.
+    application.styleHints().setColorScheme(Qt.ColorScheme.Light)
+
     bridge = QtPhotoCleanerBridge(parent=application)
     thumbnails = ThumbnailService(parent=application)
     photo_model = PhotoListModel(thumbnails, parent=application)
+    projects = ProjectController(photo_model, parent=application)
+    application.aboutToQuit.connect(projects.shutdown)
     application.aboutToQuit.connect(photo_model.close)
     application.aboutToQuit.connect(thumbnails.shutdown)
 
@@ -61,6 +68,7 @@ def run_app() -> int:
         {
             "appBridge": bridge,
             "photoModel": photo_model,
+            "projectController": projects,
             "startPage": _start_page_from_environment(),
             "useHomePreviewData": _home_preview_data_from_environment(),
         }
@@ -73,5 +81,6 @@ def run_app() -> int:
             raise RuntimeError(f"Failed to load QML root object from {app_qml_path}")
         return application.exec()
     finally:
+        projects.shutdown()
         photo_model.close()
         thumbnails.shutdown()

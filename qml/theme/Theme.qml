@@ -11,7 +11,7 @@ QtObject {
     readonly property color appBackground: white
     readonly property color homeBackground: white
     readonly property color authBackground: white
-    readonly property color libraryBackground: black
+    readonly property color libraryBackground: white
     readonly property color libraryNavFill: Qt.rgba(0, 0, 142 / 255, 0.32)
     readonly property color galleryBackground: Qt.rgba(246 / 255, 246 / 255, 1, 1)
     readonly property color workspaceBackground: appBackground

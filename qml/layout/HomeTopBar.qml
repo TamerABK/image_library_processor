@@ -5,6 +5,7 @@ import "../components" as Components
 
 Item {
     id: root
+    property string searchText: ""
 
     signal searchChanged(string text)
     signal subscriptionRequested()
@@ -42,6 +43,8 @@ Item {
 
         Components.SearchField {
             id: search
+            objectName: "homeSearchField"
+            text: root.searchText
             Layout.preferredWidth: root.referenceLayout ? metrics.homeSearchFieldWidth : 360
             Layout.preferredHeight: metrics.homeTopBarHeight
             placeholderText: "Search"
@@ -49,6 +52,8 @@ Item {
         }
 
         Components.PillButton {
+            objectName: "homeSubscriptionButton"
+            enabled: false
             Layout.preferredWidth: metrics.homeSubscriptionButtonWidth
             Layout.preferredHeight: metrics.homeTopBarHeight
             text: "Subscription"
@@ -58,6 +63,8 @@ Item {
         }
 
         Components.IconButton {
+            objectName: "homeSettingsButton"
+            enabled: false
             Layout.preferredWidth: 62.18
             Layout.preferredHeight: 62.18
             buttonSize: 62.18
@@ -69,6 +76,8 @@ Item {
         }
 
         Components.IconButton {
+            objectName: "homeProfileButton"
+            enabled: false
             Layout.preferredWidth: 62.18
             Layout.preferredHeight: 62.18
             buttonSize: 62.18

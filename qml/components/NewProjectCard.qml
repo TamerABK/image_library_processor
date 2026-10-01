@@ -14,6 +14,7 @@ Item {
 
     implicitWidth: metrics.projectCardReferenceWidth
     implicitHeight: metrics.projectCardReferenceHeight
+    opacity: enabled ? 1 : 0.4
 
     HoverHandler { id: hoverHandler }
     TapHandler { onTapped: root.clicked() }
