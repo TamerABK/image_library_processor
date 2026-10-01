@@ -3,12 +3,15 @@ from io import BytesIO
 import os
 from pathlib import Path
 import time
+import threading
 import unittest
+from unittest.mock import patch
 
 from PIL import Image
 from PySide6.QtCore import QObject, QEvent, QtMsgType, qInstallMessageHandler
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickItem
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from app_paths import qml_path
@@ -33,6 +36,7 @@ class PhotoGridTests(unittest.TestCase):
             cls.sources.append("data:image/png;base64," + base64.b64encode(output.getvalue()).decode())
 
     def setUp(self):
+        self.decode_gate = None
         self.warnings = []
         def capture(kind, context, message):
             if kind in (QtMsgType.QtWarningMsg, QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
@@ -61,6 +65,8 @@ class PhotoGridTests(unittest.TestCase):
         self.assertEqual([], self.warnings)
 
     def source_for(self, path, edge=384):
+        if self.decode_gate is not None:
+            self.decode_gate.wait(10)
         return self.sources[int(Path(path).stem) % len(self.sources)]
 
     def items(self, name):
@@ -124,6 +130,57 @@ class PhotoGridTests(unittest.TestCase):
         self.assertLess(grid.property("columns"), medium)
         self.items("libraryViewButton")[0].optionSelected.emit("Small")
         self.assertGreater(grid.property("columns"), medium)
+
+    def test_fast_scroll_and_view_changes_stay_below_default_pending_capacity(self):
+        gate = threading.Event()
+        self.decode_gate = gate
+        maximum_pending = 0
+        maximum_leases = 0
+        maximum_delegates = 0
+        rejected = []
+        stage = "reset"
+        request = self.service.request
+
+        def tracked_request(*args):
+            nonlocal maximum_pending, maximum_leases
+            ticket = request(*args)
+            maximum_pending = max(maximum_pending, self.service.pending_count)
+            maximum_leases = max(maximum_leases, len(self.model._leases))
+            if not ticket:
+                rejected.append((stage, args))
+            return ticket
+
+        try:
+            # Hold decoding to exercise the real scheduler under backlog rather
+            # than letting quick synthetic completions hide a capacity problem.
+            with patch.object(self.service, "request", side_effect=tracked_request):
+                self.model.replace_items(ResultItem(Path(f"synthetic/{i:05}.jpg"), "", "") for i in range(6000))
+                grid = self.grid()
+                for width, height in ((1920, 1080), (1440, 900), (1280, 720)):
+                    self.window.setWidth(width)
+                    self.window.setHeight(height)
+                    for view_size in ("Small", "Large", "Medium", "Small"):
+                        self.items("libraryViewButton")[0].optionSelected.emit(view_size)
+                        for fraction in (0.9, 0.1, 1.0, 0.0):
+                            stage = (width, height, view_size, fraction)
+                            grid.setProperty("contentY", max(0, grid.property("contentHeight") - grid.height()) * fraction)
+                            QTest.qWait(20)
+                            maximum_delegates = max(maximum_delegates, len(self.delegates()))
+                            self.assertLess(len(self.delegates()), 100)
+                            self.assertLess(self.service.pending_count, self.service.max_pending)
+            print(f"\nPhase 5 capacity diagnostic: max {maximum_delegates} delegates, "
+                  f"{maximum_leases} leases, {maximum_pending}/{self.service.max_pending} pending tickets, "
+                  f"{len(rejected)} saturated requests")
+            self.assertEqual(256, self.service.max_pending)
+            self.assertGreater(maximum_pending, 0)
+            self.assertLess(maximum_pending, self.service.max_pending)
+            self.assertLess(maximum_leases, 100)
+            self.assertEqual([], rejected)
+        finally:
+            gate.set()
+            self.decode_gate = None
+        wait_until(lambda: all(item.property("thumbnailState") == "ready" for item in self.delegates()))
+        self.assertTrue(self.delegates())
 
     def test_other_routes_release_thumbnails_and_remain_placeholders(self):
         shell = self.items("libraryShell")[0]

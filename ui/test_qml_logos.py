@@ -47,13 +47,16 @@ class LogoTests(unittest.TestCase):
         capture_qt_warnings(self)
         # Interior samples check the broken mark without a font/platform-sensitive
         # screenshot comparison. Coordinates are in the original SVG viewBox.
-        for name in ("logo_blue.svg", "logo_white.svg"):
+        for name, blade, opening in (("logo_blue.svg", (58, 39), (60, 24)),
+                                      ("logo_white.svg", (58, 39), (60, 24)),
+                                      ("logo_loading_white.svg", (189, 118), (195, 70))):
             with self.subTest(logo=name):
                 renderer = QSvgRenderer(str(asset_path("branding", name)))
-                pixels = QImage(1096, 298, QImage.Format.Format_ARGB32)
+                viewbox = renderer.viewBoxF()
+                pixels = QImage(round(viewbox.width() * 4), round(viewbox.height() * 4), QImage.Format.Format_ARGB32)
                 pixels.fill(Qt.GlobalColor.transparent)
                 painter = QPainter(pixels)
-                renderer.render(painter, QRectF(0, 0, 273.76 * 4, 74.44 * 4))
+                renderer.render(painter, QRectF(0, 0, viewbox.width() * 4, viewbox.height() * 4))
                 painter.end()
-                self.assertEqual(QColor("#d7f205"), pixels.pixelColor(58 * 4, 39 * 4))
-                self.assertEqual(0, pixels.pixelColor(60 * 4, 24 * 4).alpha())
+                self.assertEqual(QColor("#d7f205"), pixels.pixelColor(blade[0] * 4, blade[1] * 4))
+                self.assertEqual(0, pixels.pixelColor(opening[0] * 4, opening[1] * 4).alpha())

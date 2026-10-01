@@ -55,13 +55,24 @@ GridView {
             leaseModel = root.photoModel
             if (leaseModel) lease = leaseModel.acquireThumbnail(photoId, root.thumbnailEdge)
         }
-        onPhotoIdChanged: acquire()
-        Component.onCompleted: { mounted = true; acquire() }
-        Component.onDestruction: release()
+        // GridView can create and discard temporary delegates during a large
+        // jump or relayout. Acquire once after that synchronous layout settles.
+        function scheduleAcquire() {
+            if (mounted) acquisitionTimer.restart()
+        }
+        Timer {
+            id: acquisitionTimer
+            interval: 0
+            repeat: false
+            onTriggered: delegateRoot.acquire()
+        }
+        onPhotoIdChanged: scheduleAcquire()
+        Component.onCompleted: { mounted = true; scheduleAcquire() }
+        Component.onDestruction: { mounted = false; release() }
         Connections {
             target: root
-            function onPhotoModelChanged() { delegateRoot.acquire() }
-            function onThumbnailEdgeChanged() { delegateRoot.acquire() }
+            function onPhotoModelChanged() { delegateRoot.scheduleAcquire() }
+            function onThumbnailEdgeChanged() { delegateRoot.scheduleAcquire() }
         }
 
         PhotoCard {

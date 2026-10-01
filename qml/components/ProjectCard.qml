@@ -28,7 +28,13 @@ Item {
     implicitHeight: metrics.projectCardReferenceHeight
 
     HoverHandler { id: hoverHandler }
-    TapHandler { onTapped: root.clicked() }
+    TapHandler {
+        onTapped: function(eventPoint) {
+            // A disabled menu is still a reserved hit area, not a card reopen.
+            const menuPoint = projectMenu.mapFromItem(root, eventPoint.position)
+            if (!projectMenu.contains(menuPoint)) root.clicked()
+        }
+    }
 
     Room36Theme.Effects {
         z: -1
@@ -77,6 +83,7 @@ Item {
             }
 
             IconButton {
+                id: projectMenu
                 objectName: "projectMenuButton"
                 enabled: root.menuEnabled
                 anchors.right: parent.right
@@ -115,9 +122,10 @@ Item {
                 }
 
                 Text {
+                    objectName: "projectMetadata"
                     Layout.fillWidth: true
                     text: root.subtitle.length > 0
-                        ? root.subtitle
+                        ? root.subtitle + (root.photoCount >= 0 ? " · " + root.photoCount + " photos" : "")
                         : (root.photoCount >= 0 ? root.photoCount + " photos" : "")
                     visible: text.length > 0
                     color: theme.lightBlue

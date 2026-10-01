@@ -1,6 +1,7 @@
 """Small Home project registry view; contains metadata, never photo pixels."""
 from dataclasses import dataclass, asdict
 from datetime import datetime
+import math
 
 from PySide6.QtCore import QAbstractListModel, QModelIndex, Property, Qt, Signal, Slot
 
@@ -15,7 +16,16 @@ class Project:
     photo_count: int = -1
 
     def metadata(self):
-        return {key: value for key, value in asdict(self).items() if key != "photo_count"}
+        return asdict(self)
+
+
+def _last_opened_label(timestamp):
+    try:
+        if isinstance(timestamp, bool) or not math.isfinite(timestamp) or timestamp <= 0:
+            return ""
+        return "Last opened " + datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError, OSError, OverflowError):
+        return ""
 
 
 class ProjectListModel(QAbstractListModel):
@@ -44,7 +54,7 @@ class ProjectListModel(QAbstractListModel):
         project = self._visible[index.row()]
         return {"projectId": project.project_id, "name": project.name,
                 "photoCount": project.photo_count, "thumbnailUrl": "",
-                "lastOpened": "Last opened " + datetime.fromtimestamp(project.last_opened).strftime("%Y-%m-%d %H:%M")
+                "lastOpened": _last_opened_label(project.last_opened)
                 }.get(self.ROLES.get(role, b"").decode())
 
     @Property(str, notify=searchChanged)
@@ -72,6 +82,7 @@ class ProjectListModel(QAbstractListModel):
     def _refresh(self):
         self.beginResetModel()
         self._visible = [project for project in self._projects if self._query.casefold() in project.name.casefold()]
+        # Newest/Oldest refer to creation, never to reopening a project.
         key = (lambda project: (project.name.casefold(), project.project_id)) if self._sort == "Name" else (
             lambda project: (project.created_at, project.project_id))
         self._visible.sort(key=key, reverse=self._sort == "Newest")

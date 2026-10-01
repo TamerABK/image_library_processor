@@ -42,8 +42,13 @@ class ProjectTests(unittest.TestCase):
     def make_controller(self, **kwargs):
         controller = ProjectController(self.photos, registry_path=self.registry,
                                        chooser=lambda: self.choice, **kwargs)
-        self.addCleanup(controller.shutdown)
+        self.addCleanup(self.close_controller, controller)
         return controller
+
+    def close_controller(self, controller):
+        controller.shutdown()
+        controller._worker.join(timeout=2)
+        self.assertFalse(controller._worker.is_alive(), "Leaked project-discovery worker")
 
     def open_folder(self, folder=None):
         self.controller.openFolder(str(folder or self.folder))
@@ -101,7 +106,7 @@ class ProjectTests(unittest.TestCase):
         identity = self.controller.activeProjectId
         data = json.loads(self.registry.read_text())
         self.assertEqual(1, data["version"])
-        self.assertEqual({"project_id", "folder", "name", "created_at", "last_opened"}, set(data["projects"][0]))
+        self.assertEqual({"project_id", "folder", "name", "created_at", "last_opened", "photo_count"}, set(data["projects"][0]))
         reloaded = self.make_controller()
         self.assertIsNotNone(reloaded.projects.get(identity))
         reloaded.openProject(identity)
@@ -115,6 +120,91 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(1, reloaded.projects.rowCount())
         # Missing folders don't crash registry loading or silently drop the card.
         self.assertEqual(1, self.make_controller().projects.rowCount())
+
+    def test_photo_count_is_persisted_in_version_one_registry(self):
+        self.open_folder()
+        payload = json.loads(self.registry.read_text(encoding="utf-8"))
+        self.assertEqual(1, payload["version"])
+        self.assertEqual(1, payload["projects"][0]["photo_count"])
+        self.assertIs(type(payload["projects"][0]["photo_count"]), int)
+        empty = self.root / "Empty"
+        empty.mkdir()
+        self.open_folder(empty)
+        payload = json.loads(self.registry.read_text(encoding="utf-8"))
+        self.assertEqual([1, 0], [record["photo_count"] for record in payload["projects"]])
+
+    def test_saved_photo_count_survives_restart_and_reopen_refreshes_it(self):
+        self.open_folder()
+        identity = self.controller.activeProjectId
+        self.close_controller(self.controller)
+        self.photos.replace_items([], preserve_selection=False)
+        with patch("ui.qt.project_controller.find_supported_files", side_effect=AssertionError("Rescanned at startup")):
+            reloaded = self.make_controller()
+            self.assertEqual(1, reloaded.projects.get(identity).photo_count)
+            self.assertEqual(0, self.photos.rowCount())
+            self.assertFalse(reloaded.busy)
+        Image.new("RGB", (10, 10)).save(self.folder / "new.png")
+        reloaded.openProject(identity)
+        wait_until(lambda: not reloaded.busy)
+        self.assertEqual(2, reloaded.projects.get(identity).photo_count)
+        self.assertEqual(2, json.loads(self.registry.read_text())["projects"][0]["photo_count"])
+
+    def test_legacy_registry_without_photo_count_or_last_opened_loads(self):
+        self.open_folder()
+        payload = json.loads(self.registry.read_text())
+        record = payload["projects"][0]
+        del record["photo_count"]
+        del record["last_opened"]
+        self.registry.write_text(json.dumps(payload), encoding="utf-8")
+        reloaded = self.make_controller()
+        self.assertEqual(1, reloaded.projects.rowCount())
+        project = reloaded.projects.get(record["project_id"])
+        self.assertEqual(-1, project.photo_count)
+        self.assertEqual(0, project.last_opened)
+        role = next(role for role, name in reloaded.projects.roleNames().items() if name == b"lastOpened")
+        self.assertEqual("", reloaded.projects.data(reloaded.projects.index(0), role))
+        self.assertEqual("", reloaded.message)
+
+    def test_invalid_photo_counts_fall_back_without_losing_projects(self):
+        counts = [-1, 0, 7, -2, None, True, False, 1.0, 1.5, "7", "invalid", [], {}]
+        records = [{"project_id": str(i), "folder": str(self.root / str(i)), "name": str(i),
+                    "created_at": 100, "last_opened": 0, "photo_count": count}
+                   for i, count in enumerate(counts)]
+        self.registry.write_text(json.dumps({"version": 1, "projects": records}), encoding="utf-8")
+        reloaded = self.make_controller()
+        self.assertEqual(len(counts), reloaded.projects.rowCount())
+        for i, count in enumerate(counts):
+            with self.subTest(count=count):
+                self.assertEqual(count if i < 3 else -1, reloaded.projects.get(str(i)).photo_count)
+        self.assertEqual("", reloaded.message)
+        self.assertEqual("", reloaded._save_registry())
+        saved = json.loads(self.registry.read_text())["projects"]
+        self.assertTrue(all(type(record["photo_count"]) is int and record["photo_count"] >= -1 for record in saved))
+
+    def test_last_opened_display_ignores_uninitialized_and_invalid_timestamps(self):
+        role = next(role for role, name in ProjectListModel.ROLES.items() if name == b"lastOpened")
+        for timestamp in (0, -1, None, "invalid", float("nan"), float("inf"), 1e30, True):
+            with self.subTest(timestamp=timestamp):
+                model = ProjectListModel([Project("a", "a", "A", 0, timestamp)])
+                self.assertEqual("", model.data(model.index(0), role))
+        self.open_folder()
+        label = self.controller.projects.data(self.controller.projects.index(0), role)
+        self.assertRegex(label, r"^Last opened \d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
+        self.assertNotIn("1970", label)
+
+    def test_malformed_registry_timestamps_are_rejected(self):
+        self.open_folder()
+        valid = json.loads(self.registry.read_text())["projects"][0]
+        records = [valid]
+        for key in ("created_at", "last_opened"):
+            for value in (None, "invalid", float("nan"), float("inf"), -1, 1e30, True, [], {}):
+                records.append({**valid, "project_id": str(len(records)),
+                                "folder": str(self.root / str(len(records))), key: value})
+        self.registry.write_text(json.dumps({"version": 1, "projects": records}), encoding="utf-8")
+        reloaded = self.make_controller()
+        self.assertEqual(1, reloaded.projects.rowCount())
+        self.assertEqual(valid["project_id"], reloaded.projects.get(valid["project_id"]).project_id)
+        self.assertIn("skipped", reloaded.message)
 
     def test_cross_project_selection_is_cleared_and_folder_is_not_duplicated(self):
         self.open_folder()
@@ -130,19 +220,23 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(2, self.controller.projects.rowCount())
 
     def test_search_and_all_sort_orders(self):
-        model = ProjectListModel([Project("a", "a", "Zebra", 10, 10), Project("b", "b", "alpha", 20, 20)])
+        # Last-opened order deliberately disagrees with creation order.
+        model = ProjectListModel([Project("a", "a", "Zebra", 10, 100), Project("b", "b", "alpha", 20, 1),
+                                  Project("c", "c", "ALPHA", 20, 2)])
         role = next(role for role, name in model.roleNames().items() if name == b"projectId")
         def ids():
             return [model.data(model.index(i), role) for i in range(model.rowCount())]
-        self.assertEqual(["b", "a"], ids())
+        self.assertEqual(["c", "b", "a"], ids())
+        model.register(Project("a", "a", "Zebra", 10, 1000))
+        self.assertEqual(["c", "b", "a"], ids())
         model.setSort("Oldest")
-        self.assertEqual(["a", "b"], ids())
+        self.assertEqual(["a", "b", "c"], ids())
         model.setSort("Name")
-        self.assertEqual(["b", "a"], ids())
+        self.assertEqual(["b", "c", "a"], ids())
         model.setSearch("ALP")
-        self.assertEqual(["b"], ids())
+        self.assertEqual(["b", "c"], ids())
         model.setSearch("")
-        self.assertEqual(2, model.rowCount())
+        self.assertEqual(3, model.rowCount())
 
     def test_corrupt_registry_and_invalid_records_are_safe(self):
         self.registry.write_text("broken json", encoding="utf-8")
@@ -196,5 +290,6 @@ class ProjectTests(unittest.TestCase):
         controller.openFolder(str(self.folder))
         controller.shutdown()
         gate.set()
+        wait_until(lambda: not controller._worker.is_alive())
         self.app.processEvents()
         self.assertEqual(0, controller.projects.rowCount())

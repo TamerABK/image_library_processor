@@ -109,6 +109,10 @@ class ProjectFlowTests(unittest.TestCase):
         wait_until(lambda: self.window.property("currentPage") == "library" and not self.controller.busy)
         self.assertEqual(identity, self.controller.activeProjectId)
         self.assertEqual(2, self.item("photoGrid").property("count"))
+        self.click("libraryNav_blurry")
+        self.assertEqual("blurry", self.item("libraryRoutePlaceholder").property("routeId"))
+        self.click("libraryNav_library")
+        self.assertEqual(2, self.item("photoGrid").property("count"))
 
     def test_restart_reopens_persisted_project_from_home(self):
         self.create()
@@ -122,6 +126,10 @@ class ProjectFlowTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(1, self.controller.projects.rowCount())
         self.assertEqual(0, self.photos.rowCount())
+        self.assertFalse(self.controller.busy)
+        self.assertEqual(2, self.item("projectCard_0").property("photoCount"))
+        self.assertIn("2 photos", self.item("projectMetadata").property("text"))
+        self.assertIn("Last opened ", self.item("projectMetadata").property("text"))
         self.click("projectCard_0")
         wait_until(lambda: self.window.property("currentPage") == "library" and not self.controller.busy)
         self.assertEqual(identity, self.window.property("activeProjectId"))
@@ -132,12 +140,16 @@ class ProjectFlowTests(unittest.TestCase):
         self.window.subscriptionRequested.connect(lambda: events.append("subscription"))
         self.window.settingsRequested.connect(lambda: events.append("settings"))
         self.window.profileRequested.connect(lambda: events.append("profile"))
+        self.window.projectMenuRequested.connect(lambda *_: events.append("project menu"))
         for name in ("homeViewButton", "homeSubscriptionButton", "homeSettingsButton", "homeProfileButton"):
             self.click(name)
             self.assertEqual("home", self.window.property("currentPage"))
         self.assertEqual([], events)
         self.assertFalse(self.item("homeViewButton").property("open"))
         self.create()
+        self.click("libraryPreferences")
+        self.assertFalse(self.item("libraryPreferences").property("enabled"))
+        self.assertEqual([], events)
         for route in ("blurry", "duplicates", "knownPeople", "library"):
             self.click("libraryNav_" + route)
             self.assertEqual(route, self.item("libraryShell").property("currentRoute"))
@@ -145,6 +157,10 @@ class ProjectFlowTests(unittest.TestCase):
                 self.assertEqual(route == "library", self.item(name).property("enabled"))
         self.click("librarySidebarHome")
         self.assertEqual("home", self.window.property("currentPage"))
+        self.click("projectMenuButton")
+        wait_until(lambda: not self.controller.busy)
+        self.assertEqual("home", self.window.property("currentPage"))
+        self.assertEqual([], events)
 
     def test_home_search_sort_and_disabled_actions(self):
         self.create()

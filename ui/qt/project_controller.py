@@ -136,7 +136,9 @@ class ProjectController(QObject):
                 if not isinstance(record, dict) or not all(isinstance(record.get(key), str) and record[key].strip()
                         for key in ("project_id", "folder", "name")):
                     raise ValueError("Invalid project")
-                created, opened = float(record["created_at"]), float(record["last_opened"])
+                if isinstance(record["created_at"], bool) or isinstance(record.get("last_opened"), bool):
+                    raise ValueError("Invalid timestamp")
+                created, opened = float(record["created_at"]), float(record.get("last_opened", 0))
                 if not all(math.isfinite(value) and 0 <= value <= 253402214400 for value in (created, opened)):
                     raise ValueError("Invalid timestamp")
                 datetime.fromtimestamp(opened)  # Validate platform-supported display range.
@@ -145,7 +147,10 @@ class ProjectController(QObject):
                 folder = photo_identity(record["folder"])
                 if record["project_id"] in ids or folder in folders:
                     continue
-                projects.append(Project(record["project_id"], folder, record["name"], created, opened))
+                count = record.get("photo_count", -1)
+                if type(count) is not int or count < -1:
+                    count = -1
+                projects.append(Project(record["project_id"], folder, record["name"], created, opened, count))
                 ids.add(record["project_id"])
                 folders.add(folder)
             except (KeyError, TypeError, ValueError, OSError, OverflowError):
