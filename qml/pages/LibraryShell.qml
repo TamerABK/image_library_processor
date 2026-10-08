@@ -13,11 +13,15 @@ Rectangle {
 
     property var projectId: null
     property var photoModel: null
+    property var processingController: null
+    property var inspectorController: null
     property string libraryViewSize: "Medium"
     property string projectName: ""
     property string currentRoute: "library"
-    property var routeCounts: ({})
+    property var routeCounts: processingController ? processingController.routeCounts : ({})
     readonly property var currentEntry: Routes.entry(currentRoute)
+    readonly property var routeStage: processingController && processingController.stages.length > 0
+        ? processingController.stages[currentRoute === "duplicates" ? 1 : 5] : ({state: "NOT_STARTED"})
 
     signal homeRequested()
     signal settingsRequested()
@@ -33,6 +37,7 @@ Rectangle {
     implicitHeight: metrics.minimumWindowHeight
 
     function showRoute(routeId) {
+        if (inspectorController) inspectorController.close()
         currentRoute = Routes.normalize(routeId)
     }
 
@@ -86,11 +91,28 @@ Rectangle {
         objectName: "libraryContentLoader"
         anchors.left: sidebar.right
         anchors.right: parent.right
-        anchors.top: topBar.bottom
+        anchors.top: processingStatus.bottom
         anchors.bottom: parent.bottom
         anchors.margins: metrics.libraryContentMargin
 
-        sourceComponent: root.currentRoute === "library" ? gridComponent : placeholderComponent
+        sourceComponent: root.currentRoute === "library" ? gridComponent
+            : root.currentRoute === "blurry" && root.processingController ? blurComponent : placeholderComponent
+    }
+
+    Components.ProcessingStatus {
+        id: processingStatus
+        anchors.left: sidebar.right
+        anchors.right: parent.right
+        anchors.top: topBar.bottom
+        controller: root.processingController
+    }
+
+    Component {
+        id: blurComponent
+        BlurryPhotosPage {
+            processing: root.processingController
+            inspector: root.inspectorController
+        }
     }
 
     Component {
@@ -106,7 +128,11 @@ Rectangle {
         Dev.LibraryRoutePlaceholder {
             routeId: root.currentRoute
             title: root.currentEntry.title
-            message: root.currentEntry.message
+            message: root.currentEntry.message + (root.processingController && ["duplicates", "knownPeople", "unknownPeople"].indexOf(root.currentRoute) >= 0
+                ? "\n" + (root.routeStage.state === "COMPLETE"
+                    ? "Analysis is available. Review tools will arrive in a later phase."
+                    : "Analysis status: " + root.routeStage.state)
+                : "")
         }
     }
 }

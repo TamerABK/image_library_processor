@@ -29,6 +29,19 @@ Rectangle {
         GradientStop { position: 1; color: theme.mainBlue }
     }
 
+    // Fill only the left arcs so the window edge is square; keep the right arcs.
+    Rectangle {
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: root.radius
+        gradient: Gradient {
+            GradientStop { position: 0; color: theme.lightBlue }
+            GradientStop { position: 0.5; color: theme.midBlue }
+            GradientStop { position: 1; color: theme.mainBlue }
+        }
+    }
+
     Image {
         id: logo
         anchors.top: parent.top

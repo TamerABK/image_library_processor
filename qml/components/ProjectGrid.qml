@@ -13,6 +13,7 @@ Flickable {
         1,
         Math.floor((width + metrics.projectCardHorizontalGap) / (metrics.projectCardReferenceWidth + metrics.projectCardHorizontalGap))
     )
+    readonly property int occupiedColumns: Math.min(columnCount, 1 + projectRepeater.count)
 
     signal newProjectRequested()
     signal projectActivated(var projectId, string projectName)
@@ -27,7 +28,8 @@ Flickable {
 
     GridLayout {
         id: grid
-        width: root.width
+        width: root.occupiedColumns * metrics.projectCardReferenceWidth
+            + (root.occupiedColumns - 1) * metrics.projectCardHorizontalGap
         columns: root.columnCount
         columnSpacing: metrics.projectCardHorizontalGap
         rowSpacing: metrics.projectCardHorizontalGap
@@ -41,6 +43,7 @@ Flickable {
         }
 
         Repeater {
+            id: projectRepeater
             model: root.projectModel ? root.projectModel : 0
 
             delegate: ProjectCard {

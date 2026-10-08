@@ -105,6 +105,7 @@ Item {
             }
 
             SelectionCheckbox {
+                objectName: "photoSelectionCheckbox"
                 anchors.left: parent.left
                 anchors.bottom: parent.bottom
                 anchors.leftMargin: metrics.spacingSmall

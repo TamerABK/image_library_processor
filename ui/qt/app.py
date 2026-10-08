@@ -15,6 +15,9 @@ from .bridge import QtPhotoCleanerBridge
 from .photo_model import PhotoListModel
 from .thumbnails import ThumbnailService
 from .project_controller import ProjectController
+from .processing_controller import ProjectProcessingController
+from .inspector_controller import PhotoInspectorController
+from .previews import PreviewService
 
 
 _VALID_START_PAGES = {"loading", "auth", "home", "library", "gallery"}
@@ -58,8 +61,15 @@ def run_app() -> int:
     bridge = QtPhotoCleanerBridge(parent=application)
     thumbnails = ThumbnailService(parent=application)
     photo_model = PhotoListModel(thumbnails, parent=application)
-    projects = ProjectController(photo_model, parent=application)
+    processing = ProjectProcessingController(thumbnails, parent=application)
+    previews = PreviewService(parent=application)
+    inspector = PhotoInspectorController(processing.blurModel, previews, parent=application)
+    processing.sessionChanged.connect(inspector.close)
+    projects = ProjectController(photo_model, parent=application, processing=processing)
     application.aboutToQuit.connect(projects.shutdown)
+    application.aboutToQuit.connect(inspector.close)
+    application.aboutToQuit.connect(processing.shutdown)
+    application.aboutToQuit.connect(previews.shutdown)
     application.aboutToQuit.connect(photo_model.close)
     application.aboutToQuit.connect(thumbnails.shutdown)
 
@@ -69,6 +79,8 @@ def run_app() -> int:
             "appBridge": bridge,
             "photoModel": photo_model,
             "projectController": projects,
+            "processingController": processing,
+            "inspectorController": inspector,
             "startPage": _start_page_from_environment(),
             "useHomePreviewData": _home_preview_data_from_environment(),
         }
@@ -82,5 +94,8 @@ def run_app() -> int:
         return application.exec()
     finally:
         projects.shutdown()
+        inspector.close()
+        processing.shutdown()
+        previews.shutdown()
         photo_model.close()
         thumbnails.shutdown()

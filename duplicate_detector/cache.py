@@ -17,7 +17,7 @@ class DuplicatePhotoCache:
     SQLite-backed cache keyed by photo path and invalidated by file metadata.
     """
 
-    CACHE_VERSION = 2
+    CACHE_VERSION = 3
 
     def __init__(self, db_path: str | Path | None = None):
         self._storage = SharedImageCacheDatabase(db_path)
@@ -125,7 +125,9 @@ class DuplicatePhotoCache:
 
     @staticmethod
     def _serialize_hash(value: int) -> str:
-        return format(value, "x")
+        # Hexadecimal digits without a prefix can be coerced by INTEGER affinity
+        # into a decimal integer/REAL, losing 256-bit hash information.
+        return "0x" + format(value, "x")
 
     @staticmethod
     def _deserialize_hash(value: int | str) -> int:

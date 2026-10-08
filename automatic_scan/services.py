@@ -31,7 +31,7 @@ from grouping.models import VibeGroupingResult
 from grouping.vibe import VibeGroupingPreset, VibeGroupingProcessor, preset_config
 from grouping.vibe.embedder import load_embedder
 from image_loader import default_image_loader
-from scan_controls import CancellationToken
+from scan_controls import CancellationToken, ScanCancelledError
 
 from .config import AutomaticScanConfig, ExecutionProvider, VibeDetail
 from .models import DiscoveryRecord
@@ -43,16 +43,9 @@ def _resolve_onnx_providers(execution_provider: ExecutionProvider) -> list[str] 
         return None
     if execution_provider is ExecutionProvider.CPU:
         return ["CPUExecutionProvider"]
-    return select_providers(
-        [
-        "CUDAExecutionProvider",
-        "DmlExecutionProvider",
-        "CoreMLExecutionProvider",
-        "OpenVINOExecutionProvider",
-        "ROCMExecutionProvider",
-        "CPUExecutionProvider",
-        ]
-    )
+    if execution_provider is ExecutionProvider.DIRECTML:
+        return select_providers(["DmlExecutionProvider"])
+    return select_providers()
 
 
 class AutomaticScanServices:
@@ -62,28 +55,54 @@ class AutomaticScanServices:
         *,
         duplicate_config: DetectorConfig | None = None,
         blur_detector: BlurDetector | None = None,
+        lazy_models: bool = False,
+        cache_path: str | Path | None = None,
+        face_database_path: str | Path | None = None,
     ) -> None:
         profiler = get_active_profiler()
         self._config = config
+        self._face_database_path = face_database_path or app_data_path("face_embeddings.sqlite3")
 
         database_started = time.perf_counter()
-        self._blur_detector = blur_detector or BlurDetector()
-        self._blur_cache = BlurScanCache()
+        self._blur_detector = blur_detector or BlurDetector(cache_path=cache_path)
+        self._blur_cache = BlurScanCache(cache_path)
 
         self._duplicate_config = duplicate_config or DetectorConfig()
-        self._duplicate_cache = DuplicatePhotoCache()
-        self._duplicate_indexer = ImageIndexer(self._duplicate_config)
+        self._duplicate_cache = DuplicatePhotoCache(cache_path)
+        self._duplicate_indexer = ImageIndexer(self._duplicate_config, cache=self._duplicate_cache)
         self._duplicate_candidates = CandidateGenerator(self._duplicate_config)
         self._duplicate_verifier = OrbVerifier(self._duplicate_config)
 
-        self._analysis_cache = ImageFaceAnalysisCache()
-        self._face_scan_cache = FaceScanCache()
+        self._analysis_cache = ImageFaceAnalysisCache(cache_path)
+        self._face_scan_cache = FaceScanCache(cache_path)
+        self._faces_initialized = False
+        self._face_initialization_error = None
+        self._providers = tuple(_resolve_onnx_providers(config.performance.execution_provider) or ())
         if profiler is not None:
             profiler.record_startup(
                 "startup.open_databases",
                 time.perf_counter() - database_started,
             )
 
+        if not lazy_models:
+            self.initialize_faces()
+
+    def initialize_faces(self) -> None:
+        if self._faces_initialized:
+            return
+        if self._face_initialization_error is not None:
+            raise RuntimeError("Face models could not be initialized")
+        try:
+            self._initialize_faces()
+        except Exception as exc:
+            # Do not retain a traceback cycle containing partially loaded native
+            # sessions. Cache the failure, not the failed constructor's frames.
+            self._face_initialization_error = f"{type(exc).__name__}: {exc}"
+            raise
+
+    def _initialize_faces(self) -> None:
+        config = self._config
+        profiler = get_active_profiler()
         model_setup_started = time.perf_counter()
         providers = _resolve_onnx_providers(config.performance.execution_provider)
         detector_model = model_path("scrfd_10g_bnkps.onnx")
@@ -113,7 +132,7 @@ class AutomaticScanServices:
             providers=providers,
         )
         self._face_database = SQLiteFaceDatabase(
-            app_data_path("face_embeddings.sqlite3"),
+            self._face_database_path,
             similarity,
         )
         self._face_recognizer = DefaultFaceRecognizer(
@@ -133,6 +152,7 @@ class AutomaticScanServices:
         self._providers = tuple(providers or ())
         self._vibe_providers = providers
         self._vibe_processors: dict[str, VibeGroupingProcessor] = {}
+        self._faces_initialized = True
 
     def is_compatible(self, config: AutomaticScanConfig) -> bool:
         return tuple(_resolve_onnx_providers(config.performance.execution_provider) or ()) == self._providers
@@ -333,18 +353,21 @@ class AutomaticScanServices:
     def get_face_analysis_cached(self, record: DiscoveryRecord) -> list[DetectedFace] | None:
         return self._analysis_cache.get(record.path, record.file_size, record.mtime_ns)
 
-    def analyze_faces(self, record: DiscoveryRecord) -> list[DetectedFace]:
+    def analyze_faces(self, record: DiscoveryRecord, *, cancellation_token=None) -> list[DetectedFace]:
         image = default_image_loader.load_for_detection(record.path)
         if image is None:
             raise ValueError(f"Could not decode image for face analysis: {record.path}")
-        return self.analyze_faces_from_image(record, image)
+        return self.analyze_faces_from_image(record, image, cancellation_token=cancellation_token)
 
     def analyze_faces_from_image(
         self,
         record: DiscoveryRecord,
         image,
+        *, cancellation_token=None,
     ) -> list[DetectedFace]:
         detected_faces = self._face_detector.detect(image, record.path)
+        if cancellation_token is not None:
+            cancellation_token.raise_if_canceled()
         for face_index, face in enumerate(detected_faces):
             face.index = face_index
 
@@ -352,7 +375,14 @@ class AutomaticScanServices:
         analyze_many = getattr(self._face_analyzer, "analyze_many", None)
         if callable(analyze_many):
             try:
-                analysis_results = list(analyze_many(image, detected_faces))
+                analysis_results = []
+                batch_size = self.embedding_batch_size()
+                for offset in range(0, len(detected_faces), batch_size):
+                    if cancellation_token is not None:
+                        cancellation_token.raise_if_canceled()
+                    analysis_results.extend(analyze_many(image, detected_faces[offset:offset + batch_size]))
+            except ScanCancelledError:
+                raise
             except Exception:
                 analysis_results = None
 
@@ -363,6 +393,8 @@ class AutomaticScanServices:
         else:
             analyzed_faces = []
             for face in detected_faces:
+                if cancellation_token is not None:
+                    cancellation_token.raise_if_canceled()
                 try:
                     face.analysis = self._face_analyzer.analyze(image, face)
                 except Exception:
@@ -397,6 +429,7 @@ class AutomaticScanServices:
         faces: list[DetectedFace],
         *,
         minimum_embedding_utility: float,
+        cancellation_token=None,
     ) -> list[EmbeddedFace]:
         image = default_image_loader.load_for_detection(record.path)
         if image is None:
@@ -407,7 +440,12 @@ class AutomaticScanServices:
             if face.analysis is not None
             and face.analysis.embedding_utility_score >= minimum_embedding_utility
         ]
-        embedded_faces = self._face_embedder.embed(image, eligible_faces)
+        embedded_faces = []
+        batch_size = self.embedding_batch_size()
+        for offset in range(0, len(eligible_faces), batch_size):
+            if cancellation_token is not None:
+                cancellation_token.raise_if_canceled()
+            embedded_faces.extend(self._face_embedder.embed(image, eligible_faces[offset:offset + batch_size]))
         self._face_scan_cache.put(
             record.path,
             record.file_size,
@@ -608,6 +646,6 @@ class AutomaticScanServices:
         if not self._providers:
             return False
         return any(
-            provider.startswith(("CUDA", "Tensorrt", "ROCM", "Dml", "CoreML", "OpenVINO"))
+            provider.startswith(("CUDA", "Tensorrt", "MIGraphX", "ROCM", "Dml", "CoreML", "OpenVINO"))
             for provider in self._providers
         )

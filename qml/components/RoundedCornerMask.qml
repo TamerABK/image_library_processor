@@ -5,6 +5,7 @@ Canvas {
 
     property color maskColor: "white"
     property real cornerRadius: 0
+    property bool maskBottomCorners: true
 
     enabled: false
     antialiasing: true
@@ -14,6 +15,7 @@ Canvas {
     onHeightChanged: requestPaint()
     onMaskColorChanged: requestPaint()
     onCornerRadiusChanged: requestPaint()
+    onMaskBottomCornersChanged: requestPaint()
 
     onPaint: {
         const context = getContext("2d")
@@ -42,18 +44,20 @@ Canvas {
         context.closePath()
         context.fill()
 
-        context.beginPath()
-        context.moveTo(w, h)
-        context.lineTo(w, h - r)
-        context.arc(w - r, h - r, r, 0, Math.PI / 2, false)
-        context.closePath()
-        context.fill()
+        if (maskBottomCorners) {
+            context.beginPath()
+            context.moveTo(w, h)
+            context.lineTo(w, h - r)
+            context.arc(w - r, h - r, r, 0, Math.PI / 2, false)
+            context.closePath()
+            context.fill()
 
-        context.beginPath()
-        context.moveTo(0, h)
-        context.lineTo(r, h)
-        context.arc(r, h - r, r, Math.PI / 2, Math.PI, false)
-        context.closePath()
-        context.fill()
+            context.beginPath()
+            context.moveTo(0, h)
+            context.lineTo(r, h)
+            context.arc(r, h - r, r, Math.PI / 2, Math.PI, false)
+            context.closePath()
+            context.fill()
+        }
     }
 }

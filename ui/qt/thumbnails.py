@@ -63,11 +63,12 @@ class ThumbnailService(QObject):
 
     def __init__(self, parent=None, *, workers=2, max_pending=256,
                  cache_bytes=32 * 1024 * 1024, cache_entries=128,
-                 decoder=decode_thumbnail):
+                 decoder=decode_thumbnail, max_edge=512):
         super().__init__(parent)
         self.max_pending = max(1, max_pending)
         self.cache_limit = max(0, cache_bytes)
         self.entry_limit = max(0, cache_entries)
+        self.max_edge = max(32, int(max_edge))
         self._cache = OrderedDict()
         self.cache_bytes = 0
         self.cache_hits = 0
@@ -117,7 +118,7 @@ class ThumbnailService(QObject):
         self._timer.start()
         self._next_ticket += 1
         ticket = self._next_ticket
-        key = (path, max(32, min(512, int(edge))), str(revision))
+        key = (path, max(32, min(self.max_edge, int(edge))), str(revision))
         if key in self._cache:
             self.cache_hits += 1
             self._cache.move_to_end(key)

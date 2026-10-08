@@ -9,7 +9,6 @@ from automatic_scan.perf import get_active_profiler
 from face_processing.interfaces import FaceDetector
 from face_processing.models import DetectedFace
 from .onnx_runtime import (
-    create_session_options,
     get_available_providers,
     select_providers,
 )
@@ -17,15 +16,6 @@ from .scrfd import SCRFD
 
 
 class SCRFDFaceDetector(FaceDetector):
-    _PREFERRED_PROVIDERS = (
-        "CUDAExecutionProvider",
-        "DmlExecutionProvider",
-        "CoreMLExecutionProvider",
-        "OpenVINOExecutionProvider",
-        "ROCMExecutionProvider",
-        "CPUExecutionProvider",
-    )
-
     def __init__(
         self,
         model_path: str | Path,
@@ -37,12 +27,9 @@ class SCRFDFaceDetector(FaceDetector):
         self._input_size = input_size
         self._timing_callback: Callable[[str, float], None] | None = None
         self._available_providers = get_available_providers()
-        session_options = create_session_options()
-
         self._detector = SCRFD(
             str(model_path),
-            session_options=session_options,
-            providers=self._select_providers(providers),
+            providers=providers,
         )
         self._detector.set_timing_callback(self._record_timing)
 
@@ -64,12 +51,11 @@ class SCRFDFaceDetector(FaceDetector):
         cls,
         providers: list[str] | tuple[str, ...] | None = None,
     ) -> list[str]:
-        if providers:
-            return select_providers(providers)
-        return select_providers(cls._PREFERRED_PROVIDERS)
+        return select_providers(providers)
 
     def runtime_info(self) -> dict[str, Any]:
         return {
+            **self._detector.session.diagnostics,
             "selected_providers": self._detector.session.get_providers(),
             "available_providers": list(self._available_providers),
             "input_size": list(self._input_size),

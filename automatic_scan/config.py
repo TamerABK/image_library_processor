@@ -28,6 +28,7 @@ class ExecutionProvider(StrEnum):
     AUTOMATIC = "automatic"
     CPU = "cpu"
     GPU = "gpu"
+    DIRECTML = "directml"
 
 
 @dataclass(frozen=True, slots=True)

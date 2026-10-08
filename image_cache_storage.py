@@ -11,6 +11,14 @@ from automatic_scan.perf import InstrumentedSqliteConnection, get_active_profile
 UNIFIED_CACHE_DB_FILENAME = "image_analysis_cache.sqlite3"
 
 
+class _CacheConnection(InstrumentedSqliteConnection):
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
+
+
 class SharedImageCacheDatabase:
     def __init__(self, db_path: str | Path | None = None):
         self._db_path = Path(db_path) if db_path is not None else app_data_path(
@@ -47,7 +55,7 @@ class SharedImageCacheDatabase:
         connection = sqlite3.connect(
             self._db_path,
             timeout=30,
-            factory=InstrumentedSqliteConnection,
+            factory=_CacheConnection,
         )
         profiler = get_active_profiler()
         if profiler is not None:
@@ -73,6 +81,14 @@ class SharedImageCacheDatabase:
         normalized_extension = None
         if extension is not None:
             normalized_extension = extension.strip().lower() or None
+
+        # All stage rows refer to this fingerprint. Updating it in place would
+        # make another stage's old result look valid. Foreign-key cascades remove
+        # those results before the new file revision is registered.
+        connection.execute(
+            "DELETE FROM image_entries WHERE path = ? AND (file_size != ? OR mtime_ns != ?)",
+            (str(path), file_size, mtime_ns),
+        )
 
         connection.execute(
             """

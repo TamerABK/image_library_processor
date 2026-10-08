@@ -5,8 +5,10 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
 
 from app_paths import app_data_path
+from app_state_database import APP_DATABASE_FILENAME, AppStateDatabase
 
 from .models import ManualOverrideKind, PipelineImageState, PipelineImageStatus
 
@@ -32,6 +34,7 @@ class PersistedImageDecision:
     manual_override: str | None
     duplicate_group_id: str | None = None
     is_duplicate_keeper: bool | None = None
+    review_state: str | None = None
 
 
 @dataclass(slots=True)
@@ -44,15 +47,56 @@ class FolderAutomaticState:
 
 
 class AutomaticStateStore:
-    def __init__(self, root_dir: str | Path | None = None) -> None:
+    def __init__(self, root_dir: str | Path | None = None, *, database_path: str | Path | None = None) -> None:
         self._root = Path(root_dir) if root_dir is not None else app_data_path("automatic_scan_state")
-        self._root.mkdir(parents=True, exist_ok=True)
+        path = database_path or (self._root / APP_DATABASE_FILENAME if root_dir is not None
+                                 else app_data_path(APP_DATABASE_FILENAME))
+        self._database = AppStateDatabase(path)
+        self._migrate_legacy_states()
 
     def load(self, folder: str | Path) -> FolderAutomaticState:
-        path = self._state_path(folder)
-        if not path.exists():
-            return FolderAutomaticState(folder=str(Path(folder).resolve()))
+        key = str(Path(folder).resolve())
+        with self._database.connect() as db:
+            row = db.execute("SELECT folder, current_tab FROM folder_state WHERE folder=?", (key,)).fetchone()
+            if row is not None:
+                decisions = {
+                    item["path"]: PersistedImageDecision(
+                        path=item["path"], file_size=item["file_size"], mtime_ns=item["mtime_ns"],
+                        selected_for_deletion=bool(item["selected_for_deletion"]),
+                        manually_restored=bool(item["manually_restored"]), manually_kept=bool(item["manually_kept"]),
+                        manual_override=item["manual_override"], duplicate_group_id=item["duplicate_group_id"],
+                        is_duplicate_keeper=None if item["is_duplicate_keeper"] is None else bool(item["is_duplicate_keeper"]),
+                        review_state=item["review_state"])
+                    for item in db.execute("SELECT * FROM image_decisions WHERE folder=?", (key,))
+                }
+                ignored = {item[0] for item in db.execute(
+                    "SELECT cluster_id FROM ignored_unknown_clusters WHERE folder=?", (key,))}
+                transactions = []
+                for item in db.execute("SELECT id, created_at_utc FROM deletion_transactions WHERE folder=? ORDER BY id", (key,)):
+                    paths = {"paths": [], "failed_paths": []}
+                    for part in db.execute("SELECT kind, path FROM deletion_transaction_paths "
+                                           "WHERE transaction_id=? ORDER BY kind, position", (item["id"],)):
+                        paths[part["kind"]].append(part["path"])
+                    transactions.append(DeletionTransactionRecord(item["created_at_utc"], paths["paths"], paths["failed_paths"]))
+                return FolderAutomaticState(key, row["current_tab"], ignored, decisions, transactions)
+        path = self._state_path(key)
+        if path.is_file():
+            try:
+                state = self._load_legacy(path, key)
+            except (OSError, ValueError, KeyError, TypeError, OverflowError):
+                return FolderAutomaticState(folder=key)
+            self.save(state)
+            return state
+        return FolderAutomaticState(folder=key)
+
+    @staticmethod
+    def _load_legacy(path: Path, fallback_folder: str | None = None) -> FolderAutomaticState:
         payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Legacy folder state is not an object")
+        folder = payload.get("folder", fallback_folder)
+        if not isinstance(folder, str) or not folder:
+            raise ValueError("Legacy folder state is missing its folder")
         decisions = {
             item["path"]: PersistedImageDecision(
                 path=item["path"],
@@ -64,6 +108,7 @@ class AutomaticStateStore:
                 manual_override=item.get("manual_override"),
                 duplicate_group_id=item.get("duplicate_group_id"),
                 is_duplicate_keeper=item.get("is_duplicate_keeper"),
+                review_state=item.get("review_state"),
             )
             for item in payload.get("image_decisions", [])
         }
@@ -76,7 +121,7 @@ class AutomaticStateStore:
             for item in payload.get("deletion_transactions", [])
         ]
         return FolderAutomaticState(
-            folder=str(payload.get("folder", Path(folder).resolve())),
+            folder=folder,
             current_tab=str(payload.get("current_tab", "Scenes")),
             ignored_unknown_cluster_ids=set(payload.get("ignored_unknown_cluster_ids", [])),
             image_decisions=decisions,
@@ -84,36 +129,48 @@ class AutomaticStateStore:
         )
 
     def save(self, state: FolderAutomaticState) -> None:
-        path = self._state_path(state.folder)
-        payload = {
-            "version": STATE_VERSION,
-            "folder": state.folder,
-            "current_tab": state.current_tab,
-            "ignored_unknown_cluster_ids": sorted(state.ignored_unknown_cluster_ids),
-            "image_decisions": [
-                {
-                    "path": decision.path,
-                    "file_size": decision.file_size,
-                    "mtime_ns": decision.mtime_ns,
-                    "selected_for_deletion": decision.selected_for_deletion,
-                    "manually_restored": decision.manually_restored,
-                    "manually_kept": decision.manually_kept,
-                    "manual_override": decision.manual_override,
-                    "duplicate_group_id": decision.duplicate_group_id,
-                    "is_duplicate_keeper": decision.is_duplicate_keeper,
-                }
-                for decision in sorted(state.image_decisions.values(), key=lambda item: item.path)
-            ],
-            "deletion_transactions": [
-                {
-                    "created_at_utc": transaction.created_at_utc,
-                    "paths": transaction.paths,
-                    "failed_paths": transaction.failed_paths,
-                }
-                for transaction in state.deletion_transactions
-            ],
-        }
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        folder = str(Path(state.folder).resolve())
+        with self._database.connect() as db:
+            db.execute("INSERT INTO folder_state VALUES (?,?) ON CONFLICT(folder) "
+                       "DO UPDATE SET current_tab=excluded.current_tab", (folder, state.current_tab))
+            db.execute("DELETE FROM ignored_unknown_clusters WHERE folder=?", (folder,))
+            db.executemany("INSERT INTO ignored_unknown_clusters VALUES (?,?)",
+                           ((folder, value) for value in sorted(state.ignored_unknown_cluster_ids)))
+            db.execute("DELETE FROM image_decisions WHERE folder=?", (folder,))
+            db.executemany("INSERT INTO image_decisions VALUES (?,?,?,?,?,?,?,?,?,?,?)", (
+                (folder, item.path, item.file_size, item.mtime_ns, int(item.selected_for_deletion),
+                 int(item.manually_restored), int(item.manually_kept), item.manual_override,
+                 item.duplicate_group_id, None if item.is_duplicate_keeper is None else int(item.is_duplicate_keeper),
+                 item.review_state)
+                for item in state.image_decisions.values()))
+            db.execute("DELETE FROM deletion_transactions WHERE folder=?", (folder,))
+            for transaction in state.deletion_transactions:
+                cursor = db.execute("INSERT INTO deletion_transactions(folder, created_at_utc) VALUES (?,?)",
+                                    (folder, transaction.created_at_utc))
+                db.executemany("INSERT INTO deletion_transaction_paths VALUES (?,?,?,?)", (
+                    (cursor.lastrowid, kind, position, path)
+                    for kind, values in (("paths", transaction.paths), ("failed_paths", transaction.failed_paths))
+                    for position, path in enumerate(values)))
+
+    def _migrate_legacy_states(self) -> None:
+        with self._database.connect() as db:
+            if db.execute("SELECT 1 FROM app_migrations WHERE migration_key='folder_state_json_v1'").fetchone():
+                return
+        failed = False
+        if self._root.is_dir():
+            for path in self._root.glob("*.json"):
+                try:
+                    state = self._load_legacy(path)
+                    with self._database.connect() as db:
+                        exists = db.execute("SELECT 1 FROM folder_state WHERE folder=?",
+                                            (str(Path(state.folder).resolve()),)).fetchone()
+                    if not exists:
+                        self.save(state)
+                except (OSError, ValueError, KeyError, TypeError, OverflowError, sqlite3.DatabaseError):
+                    failed = True  # Keep the JSON for a later repair/import attempt.
+        if not failed:
+            with self._database.connect() as db:
+                db.execute("INSERT OR IGNORE INTO app_migrations VALUES ('folder_state_json_v1')")
 
     def apply(self, state: FolderAutomaticState, images: list[PipelineImageState]) -> None:
         valid_paths = {image.path for image in images}
@@ -139,6 +196,7 @@ class AutomaticStateStore:
                 image.status = PipelineImageStatus.MANUALLY_KEPT
 
     def capture(self, state: FolderAutomaticState, images: list[PipelineImageState]) -> None:
+        previous = state.image_decisions
         state.image_decisions = {}
         for image in images:
             state.image_decisions[image.path] = PersistedImageDecision(
@@ -151,6 +209,7 @@ class AutomaticStateStore:
                 manual_override=None if image.manual_override is None else image.manual_override.value,
                 duplicate_group_id=image.duplicate_group_id,
                 is_duplicate_keeper=image.is_duplicate_keeper,
+                review_state=previous[image.path].review_state if image.path in previous else None,
             )
 
     def record_deletion_transaction(

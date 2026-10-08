@@ -36,9 +36,9 @@ class ImageIndexer:
     - Parallelize expensive work
     """
 
-    def __init__(self, config: DetectorConfig):
+    def __init__(self, config: DetectorConfig, *, cache=None):
         self.config = config
-        self._cache = DuplicatePhotoCache()
+        self._cache = cache if cache is not None else DuplicatePhotoCache()
 
     # ------------------------------------------------------------------
     # Public API

@@ -9,6 +9,9 @@ GridView {
     objectName: "photoGrid"
     property var photoModel: null
     property string viewSize: "Medium"
+    property bool openOnClick: false
+    property string emptyText: "No photos in this library"
+    signal photoActivated(string photoId)
     readonly property int columns: Math.max(1, Math.floor(width / (preferredCardWidth + metrics.photoCardHorizontalGap)))
     readonly property real preferredCardWidth: metrics.photoCardReferenceWidth
         * (viewSize === "Small" ? 0.75 : viewSize === "Large" ? 1.25 : 1)
@@ -92,16 +95,19 @@ GridView {
                 if (root.photoModel) root.photoModel.setSelected(delegateRoot.photoId, value)
             }
             onClicked: {
-                if (root.photoModel) root.photoModel.setSelected(delegateRoot.photoId, !delegateRoot.selected)
+                if (root.openOnClick) root.photoActivated(delegateRoot.photoId)
+                else if (root.photoModel) root.photoModel.setSelected(delegateRoot.photoId, !delegateRoot.selected)
             }
-            Accessible.name: delegateRoot.filename + (delegateRoot.thumbnailState === "error" ? ", preview unavailable" : "")
+            Accessible.name: delegateRoot.filename + ", " + delegateRoot.badgeText
+                + (root.openOnClick && delegateRoot.badgeText.indexOf(" · ") < 0 ? ", undecided" : "")
+                + (delegateRoot.thumbnailState === "error" ? ", preview unavailable" : "")
         }
     }
 
     Text {
         anchors.centerIn: parent
         visible: root.count === 0
-        text: "No photos in this library"
+        text: root.emptyText
         color: theme.mutedText
         font.family: typography.bodyFamily
         font.pixelSize: typography.body

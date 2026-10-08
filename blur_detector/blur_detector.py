@@ -58,6 +58,7 @@ class BlurDetector:
             review_threshold=0.45,
             sharp_threshold=0.70,
             max_dimension=1000,
+            cache_path=None,
     ):
         self.grid_size = grid_size
 
@@ -71,7 +72,7 @@ class BlurDetector:
         self.max_dimension = max_dimension
 
         cv2.setUseOptimized(True)
-        self._cache = BlurScanCache()
+        self._cache = BlurScanCache(cache_path)
 
     def detect(self, image_path: str | Path) -> BlurResult:
         gray = default_image_loader.load_grayscale(

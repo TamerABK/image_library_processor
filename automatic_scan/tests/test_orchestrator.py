@@ -387,7 +387,7 @@ class AutomaticOrchestratorTests(unittest.TestCase):
             self.assertIn(AutomaticStage.FACE_DETECTION_ANALYSIS.value, blurry.skipped_stages)
             self.assertNotIn(str(blurry_path), services.face_calls)
             self.assertNotIn(str(blurry_path), services.embed_calls)
-            self.assertEqual(services.vibe_inputs, [[str(sharp_path)]])
+            self.assertEqual([[Path(value) for value in group] for group in services.vibe_inputs], [[sharp_path]])
         finally:
             temp_dir.cleanup()
 
@@ -447,7 +447,7 @@ class AutomaticOrchestratorTests(unittest.TestCase):
             self.assertTrue(image.is_active)
             self.assertIsNone(image.primary_exclusion_reason)
             self.assertEqual(services.embed_calls, [str(detail_path)])
-            self.assertEqual(services.vibe_inputs, [[str(detail_path)]])
+            self.assertEqual([[Path(value) for value in group] for group in services.vibe_inputs], [[detail_path]])
         finally:
             temp_dir.cleanup()
 
@@ -882,7 +882,7 @@ class AutomaticOrchestratorTests(unittest.TestCase):
                 image_map[str(resolved_paths[2])].primary_exclusion_reason,
                 "duplicate_alternative",
             )
-            self.assertEqual(services.vibe_inputs, [[str(resolved_paths[0]), str(resolved_paths[1])]])
+            self.assertEqual([[Path(value) for value in group] for group in services.vibe_inputs], [[resolved_paths[0], resolved_paths[1]]])
         finally:
             temp_dir.cleanup()
 

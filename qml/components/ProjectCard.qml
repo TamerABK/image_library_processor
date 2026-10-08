@@ -103,7 +103,16 @@ Item {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             height: metrics.projectCardFooterHeight
+            radius: metrics.projectCardRadius
             color: theme.footerFill
+
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: parent.height - parent.radius + 1
+                color: theme.footerFill
+            }
 
             ColumnLayout {
                 anchors.fill: parent
@@ -141,6 +150,7 @@ Item {
             anchors.fill: parent
             cornerRadius: metrics.projectCardRadius
             maskColor: root.cornerMaskColor
+            maskBottomCorners: false
         }
     }
 }

@@ -801,7 +801,7 @@ class PhotoCleanerView:
                     textvariable=variable,
                     state="readonly",
                     values=(variable.get(),),
-                    width=12,
+                    width=14,
                 )
                 self.execution_provider_combo.grid(row=1, column=0, sticky="w", pady=(4, 0))
                 self.execution_provider_combo.bind("<<ComboboxSelected>>", lambda _event: self._callbacks.mode_changed())

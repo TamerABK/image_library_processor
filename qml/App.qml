@@ -15,6 +15,8 @@ ApplicationWindow {
     property var projectController: null
     property var projectModel: projectController ? projectController.projects : null
     property var photoModel: null
+    property var processingController: null
+    property var inspectorController: null
     property var activeProjectId: null
     property string activeProjectName: ""
     // Unavailable account/settings/menu actions remain explicit contracts.
@@ -63,6 +65,7 @@ ApplicationWindow {
     }
 
     function showPage(pageId) {
+        if (inspectorController) inspectorController.close()
         startPage = normalizePage(pageId)
     }
 
@@ -163,6 +166,8 @@ ApplicationWindow {
         Pages.LibraryShell {
             objectName: "libraryShell"
             photoModel: window.photoModel
+            processingController: window.processingController
+            inspectorController: window.inspectorController
             projectId: window.activeProjectId
             projectName: window.activeProjectName
             onHomeRequested: window.showPage("home")

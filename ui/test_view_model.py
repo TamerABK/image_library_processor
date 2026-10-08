@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
+from automatic_scan.config import ExecutionProvider
 from automatic_scan.models import PeoplePictureAssessment, PipelineImageState
 from ui.view_model import PhotoCleanerViewModel
 
@@ -49,6 +51,22 @@ class PhotoCleanerViewModelBadgeTests(unittest.TestCase):
         )
 
         self.assertEqual(PhotoCleanerViewModel._automatic_badge_text(image), "")
+
+
+class PhotoCleanerViewModelProviderTests(unittest.TestCase):
+    def test_directml_choice_appears_only_when_runtime_exposes_it(self) -> None:
+        with patch("ui.view_model.get_available_providers", return_value=["DmlExecutionProvider", "CPUExecutionProvider"]):
+            view_model = PhotoCleanerViewModel()
+        self.assertIn("DirectML", view_model.state.available_execution_providers)
+        view_model.set_execution_provider("DirectML")
+        self.assertIs(
+            view_model._current_automatic_config().performance.execution_provider,
+            ExecutionProvider.DIRECTML,
+        )
+
+        with patch("ui.view_model.get_available_providers", return_value=["CPUExecutionProvider"]):
+            cpu_view_model = PhotoCleanerViewModel()
+        self.assertNotIn("DirectML", cpu_view_model.state.available_execution_providers)
 
 
 if __name__ == "__main__":

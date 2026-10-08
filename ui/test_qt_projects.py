@@ -1,5 +1,7 @@
 import json
+from contextlib import closing
 from pathlib import Path
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -30,6 +32,7 @@ class ProjectTests(unittest.TestCase):
         self.folder.mkdir()
         Image.new("RGB", (24, 12), "red").save(self.folder / "one.jpg")
         self.registry = self.root / "projects.json"
+        self.database = self.root / "room36_app.sqlite3"
         self.thumbnails = ThumbnailService()
         self.photos = PhotoListModel(self.thumbnails)
         self.addCleanup(self.thumbnails.shutdown)
@@ -54,6 +57,12 @@ class ProjectTests(unittest.TestCase):
         self.controller.openFolder(str(folder or self.folder))
         self.assertTrue(self.controller.busy)
         wait_until(lambda: not self.controller.busy)
+
+    def saved_projects(self):
+        with closing(sqlite3.connect(self.database)) as db:
+            db.row_factory = sqlite3.Row
+            return [dict(row) for row in db.execute(
+                "SELECT * FROM projects ORDER BY created_at, project_id")]
 
     def test_create_cancel_and_supported_file_discovery(self):
         (self.folder / "notes.txt").write_text("unsupported", encoding="utf-8")
@@ -104,9 +113,9 @@ class ProjectTests(unittest.TestCase):
     def test_persistence_reload_missing_and_reopen(self):
         self.open_folder()
         identity = self.controller.activeProjectId
-        data = json.loads(self.registry.read_text())
-        self.assertEqual(1, data["version"])
-        self.assertEqual({"project_id", "folder", "name", "created_at", "last_opened", "photo_count"}, set(data["projects"][0]))
+        self.assertFalse(self.registry.exists())
+        self.assertEqual({"project_id", "folder", "name", "created_at", "last_opened", "photo_count"},
+                         set(self.saved_projects()[0]))
         reloaded = self.make_controller()
         self.assertIsNotNone(reloaded.projects.get(identity))
         reloaded.openProject(identity)
@@ -121,17 +130,14 @@ class ProjectTests(unittest.TestCase):
         # Missing folders don't crash registry loading or silently drop the card.
         self.assertEqual(1, self.make_controller().projects.rowCount())
 
-    def test_photo_count_is_persisted_in_version_one_registry(self):
+    def test_photo_count_is_persisted_in_sqlite(self):
         self.open_folder()
-        payload = json.loads(self.registry.read_text(encoding="utf-8"))
-        self.assertEqual(1, payload["version"])
-        self.assertEqual(1, payload["projects"][0]["photo_count"])
-        self.assertIs(type(payload["projects"][0]["photo_count"]), int)
+        self.assertEqual(1, self.saved_projects()[0]["photo_count"])
+        self.assertIs(type(self.saved_projects()[0]["photo_count"]), int)
         empty = self.root / "Empty"
         empty.mkdir()
         self.open_folder(empty)
-        payload = json.loads(self.registry.read_text(encoding="utf-8"))
-        self.assertEqual([1, 0], [record["photo_count"] for record in payload["projects"]])
+        self.assertEqual([1, 0], [record["photo_count"] for record in self.saved_projects()])
 
     def test_saved_photo_count_survives_restart_and_reopen_refreshes_it(self):
         self.open_folder()
@@ -147,15 +153,11 @@ class ProjectTests(unittest.TestCase):
         reloaded.openProject(identity)
         wait_until(lambda: not reloaded.busy)
         self.assertEqual(2, reloaded.projects.get(identity).photo_count)
-        self.assertEqual(2, json.loads(self.registry.read_text())["projects"][0]["photo_count"])
+        self.assertEqual(2, self.saved_projects()[0]["photo_count"])
 
     def test_legacy_registry_without_photo_count_or_last_opened_loads(self):
-        self.open_folder()
-        payload = json.loads(self.registry.read_text())
-        record = payload["projects"][0]
-        del record["photo_count"]
-        del record["last_opened"]
-        self.registry.write_text(json.dumps(payload), encoding="utf-8")
+        record = {"project_id": "legacy", "folder": str(self.folder), "name": "Holiday", "created_at": 100}
+        self.registry.write_text(json.dumps({"version": 1, "projects": [record]}), encoding="utf-8")
         reloaded = self.make_controller()
         self.assertEqual(1, reloaded.projects.rowCount())
         project = reloaded.projects.get(record["project_id"])
@@ -164,6 +166,20 @@ class ProjectTests(unittest.TestCase):
         role = next(role for role, name in reloaded.projects.roleNames().items() if name == b"lastOpened")
         self.assertEqual("", reloaded.projects.data(reloaded.projects.index(0), role))
         self.assertEqual("", reloaded.message)
+        self.assertEqual(-1, self.saved_projects()[0]["photo_count"])
+        self.assertTrue(self.registry.exists())  # The source stays as a migration backup.
+
+    def test_legacy_registry_cannot_overwrite_newer_sqlite_project(self):
+        record = {"project_id": "legacy", "folder": str(self.folder), "name": "Old name",
+                  "created_at": 100, "last_opened": 0, "photo_count": -1}
+        self.registry.write_text(json.dumps({"version": 1, "projects": [record]}), encoding="utf-8")
+        first = self.make_controller()
+        self.assertEqual("Old name", first.projects.get("legacy").name)
+        first.projects.register(Project("legacy", str(self.folder), "Updated in SQLite", 100, 200, 8))
+        self.assertEqual("", first._save_projects())
+        second = self.make_controller()
+        self.assertEqual("Updated in SQLite", second.projects.get("legacy").name)
+        self.assertEqual(8, second.projects.get("legacy").photo_count)
 
     def test_invalid_photo_counts_fall_back_without_losing_projects(self):
         counts = [-1, 0, 7, -2, None, True, False, 1.0, 1.5, "7", "invalid", [], {}]
@@ -177,8 +193,8 @@ class ProjectTests(unittest.TestCase):
             with self.subTest(count=count):
                 self.assertEqual(count if i < 3 else -1, reloaded.projects.get(str(i)).photo_count)
         self.assertEqual("", reloaded.message)
-        self.assertEqual("", reloaded._save_registry())
-        saved = json.loads(self.registry.read_text())["projects"]
+        self.assertEqual("", reloaded._save_projects())
+        saved = self.saved_projects()
         self.assertTrue(all(type(record["photo_count"]) is int and record["photo_count"] >= -1 for record in saved))
 
     def test_last_opened_display_ignores_uninitialized_and_invalid_timestamps(self):
@@ -193,8 +209,8 @@ class ProjectTests(unittest.TestCase):
         self.assertNotIn("1970", label)
 
     def test_malformed_registry_timestamps_are_rejected(self):
-        self.open_folder()
-        valid = json.loads(self.registry.read_text())["projects"][0]
+        valid = {"project_id": "valid", "folder": str(self.folder), "name": "Holiday",
+                 "created_at": 100, "last_opened": 10, "photo_count": 1}
         records = [valid]
         for key in ("created_at", "last_opened"):
             for value in (None, "invalid", float("nan"), float("inf"), -1, 1e30, True, [], {}):
@@ -257,7 +273,7 @@ class ProjectTests(unittest.TestCase):
         wait_until(lambda: not inaccessible.busy)
         self.assertIn("cannot access", inaccessible.message)
         self.assertEqual(0, inaccessible.projects.rowCount())
-        with patch.object(Path, "replace", side_effect=PermissionError):
+        with patch.object(self.controller._database, "connect", side_effect=sqlite3.OperationalError("readonly")):
             self.open_folder()
         self.assertEqual(1, self.photos.rowCount())
         self.assertIn("could not be saved", self.controller.message)

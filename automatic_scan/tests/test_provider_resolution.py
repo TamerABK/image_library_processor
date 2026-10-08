@@ -12,6 +12,26 @@ from face_detector.scrfd_face_detector import SCRFDFaceDetector
 
 class ProviderResolutionTests(unittest.TestCase):
     @patch("automatic_scan.services.select_providers")
+    def test_gpu_choice_uses_directml_when_it_is_the_available_accelerator(self, select_providers_mock) -> None:
+        select_providers_mock.return_value = ["DmlExecutionProvider", "CPUExecutionProvider"]
+
+        self.assertEqual(
+            _resolve_onnx_providers(ExecutionProvider.GPU),
+            ["DmlExecutionProvider", "CPUExecutionProvider"],
+        )
+        select_providers_mock.assert_called_once_with()
+
+    @patch("automatic_scan.services.select_providers")
+    def test_explicit_directml_choice_uses_cpu_fallback(self, select_providers_mock) -> None:
+        select_providers_mock.return_value = ["DmlExecutionProvider", "CPUExecutionProvider"]
+
+        self.assertEqual(
+            _resolve_onnx_providers(ExecutionProvider.DIRECTML),
+            ["DmlExecutionProvider", "CPUExecutionProvider"],
+        )
+        select_providers_mock.assert_called_once_with(["DmlExecutionProvider"])
+
+    @patch("automatic_scan.services.select_providers")
     def test_gpu_provider_resolution_filters_to_available_runtime(self, select_providers_mock) -> None:
         select_providers_mock.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
@@ -54,6 +74,7 @@ class ProviderResolutionTests(unittest.TestCase):
         ort_mock,
     ) -> None:
         session = MagicMock()
+        session.get_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
         ort_mock.InferenceSession.return_value = session
         select_providers_mock.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
@@ -63,7 +84,7 @@ class ProviderResolutionTests(unittest.TestCase):
             providers=["CUDAExecutionProvider", "ROCMExecutionProvider", "CPUExecutionProvider"],
         )
 
-        self.assertIs(result, session)
+        self.assertIs(result._session, session)
         ort_mock.InferenceSession.assert_called_once()
         _, kwargs = ort_mock.InferenceSession.call_args
         self.assertEqual(kwargs["providers"], ["CUDAExecutionProvider", "CPUExecutionProvider"])

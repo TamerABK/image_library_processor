@@ -12,22 +12,12 @@ from face_processing.models import DetectedFace, EmbeddedFace
 from .face_aligner import FaceAligner
 from .onnx_runtime import (
     create_inference_session,
-    create_session_options,
     get_available_providers,
     select_providers,
 )
 
 
 class ArcFaceEmbedder(FaceEmbedder):
-    _PREFERRED_PROVIDERS = (
-        "CUDAExecutionProvider",
-        "DmlExecutionProvider",
-        "CoreMLExecutionProvider",
-        "OpenVINOExecutionProvider",
-        "ROCMExecutionProvider",
-        "CPUExecutionProvider",
-    )
-
     def __init__(
         self,
         model_path: str | Path,
@@ -37,12 +27,9 @@ class ArcFaceEmbedder(FaceEmbedder):
         self._aligner = aligner
         self._timing_callback: Callable[[str, float], None] | None = None
         self._available_providers = get_available_providers()
-        session_options = create_session_options()
-
         self._session = create_inference_session(
             model_path,
-            session_options=session_options,
-            providers=self._select_providers(providers),
+            providers=providers,
         )
 
         self._input_name = self._session.get_inputs()[0].name
@@ -56,6 +43,7 @@ class ArcFaceEmbedder(FaceEmbedder):
 
     def runtime_info(self) -> dict[str, Any]:
         return {
+            **self._session.diagnostics,
             "selected_providers": self._session.get_providers(),
             "available_providers": list(self._available_providers),
         }
@@ -139,9 +127,7 @@ class ArcFaceEmbedder(FaceEmbedder):
         cls,
         providers: list[str] | tuple[str, ...] | None = None,
     ) -> list[str]:
-        if providers:
-            return select_providers(providers)
-        return select_providers(cls._PREFERRED_PROVIDERS)
+        return select_providers(providers)
 
     def _extract_embeddings(
         self,

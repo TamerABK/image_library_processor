@@ -100,19 +100,17 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
 
         strong = defaultdict(list)
         weak = []
-        upper_indices = np.triu_indices_from(similarity_matrix, k=1)
-        pair_scores = similarity_matrix[upper_indices]
-
-        strong_mask = pair_scores >= self._strong
-        for i, j in zip(upper_indices[0][strong_mask], upper_indices[1][strong_mask]):
-            strong[int(i)].append(int(j))
-            strong[int(j)].append(int(i))
-
-        weak_mask = (pair_scores >= self._weak) & ~strong_mask
-        weak.extend(
-            (int(i), int(j))
-            for i, j in zip(upper_indices[0][weak_mask], upper_indices[1][weak_mask])
-        )
+        # At 10,000 faces, triu_indices_from alone allocates about 800 MiB.
+        # Iterate rows to preserve edge order and thresholds with bounded
+        # temporary arrays; the similarity matrix remains the main allocation.
+        for i in range(len(similarity_matrix) - 1):
+            scores = similarity_matrix[i, i + 1:]
+            for offset in np.flatnonzero(scores >= self._strong):
+                j = i + 1 + int(offset)
+                strong[i].append(j)
+                strong[j].append(i)
+            for offset in np.flatnonzero((scores >= self._weak) & (scores < self._strong)):
+                weak.append((i, i + 1 + int(offset)))
 
         return strong, weak
 

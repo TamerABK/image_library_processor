@@ -63,17 +63,11 @@ class OnnxVibeEmbedder(VibeEmbedder):
             )
 
         try:
-            from face_detector.onnx_runtime import create_inference_session, create_session_options
+            from face_detector.onnx_runtime import create_inference_session
 
-            session_options = create_session_options()
             self._session = create_inference_session(
                 model_file,
-                session_options=session_options,
-                providers=(
-                    list(providers)
-                    if providers is not None
-                    else ["CUDAExecutionProvider", "CPUExecutionProvider"]
-                ),
+                providers=providers,
             )
         except Exception as exc:  # pragma: no cover - exercised by integration on real ORT
             raise VibeModelLoadError(f"Failed to load vibe model {model_file}: {exc}") from exc

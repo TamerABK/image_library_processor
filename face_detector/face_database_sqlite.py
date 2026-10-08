@@ -3,6 +3,7 @@ import threading
 from pathlib import Path
 
 import numpy as np
+from image_cache_storage import _CacheConnection
 
 from face_processing.interfaces import EmbeddingSimilarity, FaceDatabase
 from face_processing.models import Match, Person, StoredEmbedding
@@ -177,7 +178,7 @@ class SQLiteFaceDatabase(FaceDatabase):
             )
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self._db_path)
+        connection = sqlite3.connect(self._db_path, factory=_CacheConnection)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         return connection

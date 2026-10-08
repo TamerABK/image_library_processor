@@ -74,7 +74,7 @@ def distance2kps(points, distance, max_shape=None):
 
 class SCRFD:
     def __init__(self, model_file=None, session=None, session_options=None, providers=None):
-        from .onnx_runtime import ort as onnxruntime
+        from .onnx_runtime import create_inference_session
         self.model_file = model_file
         self.session = session
         self.taskname = 'detection'
@@ -83,9 +83,9 @@ class SCRFD:
         if self.session is None:
             assert self.model_file is not None
             assert osp.exists(self.model_file)
-            self.session = onnxruntime.InferenceSession(
+            self.session = create_inference_session(
                 self.model_file,
-                sess_options=session_options,
+                session_options=session_options,
                 providers=providers,
             )
         self.center_cache = {}

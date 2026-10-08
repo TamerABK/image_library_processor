@@ -33,6 +33,7 @@ from .models import (
 )
 from .perf import AutomaticScanProfiler, active_profiler, get_active_profiler
 from .state_store import AutomaticStateStore
+from .scan_logging import get_scan_logger
 
 if TYPE_CHECKING:
     from .services import AutomaticScanServices
@@ -80,6 +81,18 @@ def _get_automatic_people_picture_logger() -> logging.Logger:
 
 
 class AutomaticScanOrchestrator:
+    def process_project(self, folder, paths, *, emit, cancellation_token,
+                        cache_path=None, config=None, services=None):
+        """Progressive Qt entry: consume discovery, retain one backend lifecycle.
+
+        Unlike the legacy combined pass this publishes Blur before initializing
+        face models, bounds intermediate work and isolates later-stage failures.
+        """
+        from .project_pipeline import process_project
+        return process_project(self, folder, paths, emit=emit,
+            cancellation_token=cancellation_token, cache_path=cache_path,
+            config=config, services=services)
+
     def __init__(
         self,
         *,
@@ -101,6 +114,7 @@ class AutomaticScanOrchestrator:
     ) -> AutomaticScanResult:
         scan_started_at = time.perf_counter()
         folder_path = Path(folder).expanduser().resolve()
+        get_scan_logger().info("legacy_scan_started folder=%s", folder_path)
         profiler = AutomaticScanProfiler()
         startup_started_at = time.perf_counter()
         with active_profiler(profiler):
@@ -251,6 +265,7 @@ class AutomaticScanOrchestrator:
                     cancellation_token=cancellation_token,
                 )
             except ScanCancelledError:
+                get_scan_logger().info("legacy_scan_cancelled folder=%s", folder_path)
                 canceled = True
                 warnings.append(
                     PipelineWarning(
@@ -311,6 +326,8 @@ class AutomaticScanOrchestrator:
             config=config,
             result=result,
         )
+        get_scan_logger().info("legacy_scan_finished folder=%s seconds=%.4f photos=%d errors=%d warnings=%d",
+                               folder_path, total_seconds, len(images), len(errors), len(warnings))
         return result
 
     def _resolve_services(self, config: AutomaticScanConfig):
@@ -536,6 +553,7 @@ class AutomaticScanOrchestrator:
                 )
                 blur_stats.processed += 1
             except Exception as exc:
+                get_scan_logger().exception("legacy_photo_failed stage=%s photo=%s", blur_stage, image_state.path)
                 image_state.status = PipelineImageStatus.PROCESSING_ERROR
                 image_state.primary_exclusion_reason = "processing_error"
                 image_state.excluded_at_stage = blur_stage
@@ -584,6 +602,7 @@ class AutomaticScanOrchestrator:
                         image_state.completed_stages.add(duplicate_stage)
                         duplicate_stats.processed += 1
             except Exception as exc:
+                get_scan_logger().exception("legacy_photo_failed stage=%s photo=%s", duplicate_stage, image_state.path)
                 errors.append(
                     PipelineError(
                         stage=duplicate_stage,
@@ -774,6 +793,7 @@ class AutomaticScanOrchestrator:
                 )
                 stats.processed += 1
             except Exception as exc:
+                get_scan_logger().exception("legacy_photo_failed stage=%s photo=%s", stage_name, image.path)
                 image.status = PipelineImageStatus.PROCESSING_ERROR
                 image.primary_exclusion_reason = "processing_error"
                 image.excluded_at_stage = stage_name
@@ -832,6 +852,7 @@ class AutomaticScanOrchestrator:
                     image.completed_stages.add(stage_name)
                     stats.processed += 1
             except Exception as exc:
+                get_scan_logger().exception("legacy_photo_failed stage=%s photo=%s", stage_name, image.path)
                 errors.append(
                     PipelineError(
                         stage=stage_name,
@@ -1669,8 +1690,18 @@ class AutomaticScanOrchestrator:
     ):
         stats = diagnostics.stage_stats.setdefault(stage.value, StageStats())
         started_at = time.perf_counter()
-        result = func()
+        logger = get_scan_logger()
+        logger.info("legacy_stage_started folder=%s stage=%s", diagnostics.folder, stage.value)
+        try:
+            result = func()
+        except Exception:
+            logger.exception("legacy_stage_failed folder=%s stage=%s seconds=%.4f",
+                             diagnostics.folder, stage.value, time.perf_counter() - started_at)
+            raise
         stats.duration_seconds += round(time.perf_counter() - started_at, 4)
+        logger.info("legacy_stage_completed folder=%s stage=%s seconds=%.4f processed=%d skipped=%d cache_hits=%d cache_misses=%d",
+                    diagnostics.folder, stage.value, stats.duration_seconds,
+                    stats.processed, stats.skipped, stats.cache_hits, stats.cache_misses)
         return result
 
     @staticmethod

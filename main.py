@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import os
 import sys
 from multiprocessing import freeze_support
@@ -26,6 +27,8 @@ def _application_roots() -> list[Path]:
 
 def _site_package_roots() -> list[Path]:
     roots: list[Path] = []
+    if getattr(sys, "frozen", False):
+        return _application_roots()
 
     versioned_site_packages = (
         Path(sys.prefix)
@@ -69,7 +72,10 @@ def _preload_linux_nvidia_shared_libraries() -> None:
 
         for name in library_names:
             for candidate in nvidia_root.glob(f"**/{name}"):
-                ctypes.CDLL(str(candidate), mode=ctypes.RTLD_GLOBAL)
+                try:
+                    ctypes.CDLL(str(candidate), mode=ctypes.RTLD_GLOBAL)
+                except OSError:
+                    logging.getLogger(__name__).warning("Optional NVIDIA preload failed.")
                 break
 
 
@@ -81,8 +87,11 @@ def _add_windows_dll_directory(path: Path) -> None:
     if not hasattr(os, "add_dll_directory"):
         return
 
-    handle = os.add_dll_directory(str(path))
-    _WINDOWS_DLL_DIRECTORIES.append(handle)
+    try:
+        handle = os.add_dll_directory(str(path))
+        _WINDOWS_DLL_DIRECTORIES.append(handle)
+    except OSError:
+        logging.getLogger(__name__).warning("Optional DLL search directory unavailable.")
 
 
 def _preload_windows_nvidia_shared_libraries() -> None:
@@ -115,24 +124,15 @@ def _preload_windows_nvidia_shared_libraries() -> None:
     for candidate in candidate_directories:
         _add_windows_dll_directory(candidate)
 
-    try:
-        import onnxruntime as ort
-    except Exception:
-        return
-
-    preload_dlls = getattr(ort, "preload_dlls", None)
-    if preload_dlls is None:
-        return
-
-    preload_dlls(cuda=True, cudnn=True, msvc=True)
+    # The shared ONNX session factory preloads CUDA only if it is selected.
 
 
 def _preload_gpu_runtime_dependencies() -> None:
-    _preload_linux_nvidia_shared_libraries()
+    if os.environ.get("ROOM36_ONNX_PROVIDER", "auto").strip().lower() not in (
+        "cpu", "directml", "migraphx"
+    ):
+        _preload_linux_nvidia_shared_libraries()
     _preload_windows_nvidia_shared_libraries()
-
-
-_preload_gpu_runtime_dependencies()
 
 
 def _ui_mode_from_environment() -> str:
@@ -142,6 +142,14 @@ def _ui_mode_from_environment() -> str:
 
 
 def run_app() -> int:
+    _preload_gpu_runtime_dependencies()
+    if "--diagnose-onnx" in sys.argv:
+        from face_detector.onnx_diagnostics import main as diagnose
+
+        return diagnose(sys.argv[1:])
+    from face_detector.onnx_runtime import log_startup_diagnostics
+
+    log_startup_diagnostics()
     ui_mode = _ui_mode_from_environment()
     if ui_mode == "qt":
         from ui.qt.app import run_app as run_qt_app

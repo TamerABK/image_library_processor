@@ -27,6 +27,7 @@ from automatic_scan import (
     ManualOverrideKind,
     VibeDetail,
 )
+from automatic_scan.scan_logging import get_scan_logger
 from app_paths import app_data_path, model_path
 from blur_detector.blur_detector import BlurDetector
 from duplicate_detector.config import DetectorConfig
@@ -36,6 +37,7 @@ from face_detector.connected_face_clusterer import ConnectedComponentFaceCluster
 from face_detector.cosine_similarity import CosineEmbeddingSimilarity
 from face_detector.face_aligner import FaceAligner
 from face_detector.face_database_sqlite import SQLiteFaceDatabase
+from face_detector.onnx_runtime import get_available_providers
 from face_detector.preview_renderer import FacePreviewRenderer
 from face_processing.interfaces import FaceDatabase, FaceDetector
 from face_processing.models import DetectedFace
@@ -369,6 +371,8 @@ class PhotoCleanerViewModel:
                 )
             ),
         )
+        if "DmlExecutionProvider" in get_available_providers():
+            self.state.available_execution_providers += ("DirectML",)
 
         self._queue: Queue[BackgroundMessage] = Queue()
         self._scan_thread: threading.Thread | None = None
@@ -1269,6 +1273,8 @@ class PhotoCleanerViewModel:
         except ScanCancelledError as exc:
             self._queue.put(ScanErrorMessage(message=str(exc), canceled=True))
         except Exception as exc:
+            if mode == "automatic":
+                get_scan_logger().exception("legacy_scan_worker_failed folder=%s", folder)
             self._queue.put(ScanErrorMessage(message=str(exc)))
 
     def _apply_mode_state(self) -> None:
@@ -2136,6 +2142,8 @@ class PhotoCleanerViewModel:
             execution_provider = ExecutionProvider.CPU
         elif self.state.execution_provider == "GPU":
             execution_provider = ExecutionProvider.GPU
+        elif self.state.execution_provider == "DirectML":
+            execution_provider = ExecutionProvider.DIRECTML
 
         vibe_detail = VibeDetail.BALANCED_SCENES
         if (self.state.vibe_preset or "").strip().lower() == "session":

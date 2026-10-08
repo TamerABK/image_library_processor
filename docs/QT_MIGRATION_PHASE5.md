@@ -106,9 +106,11 @@ uses the controller's project model. Disabled controls retain future signal
 contracts, but actual user mouse clicks emit no application actions. Lower-level
 contract tests may emit signals directly; those emissions do not simulate clicks.
 
-## Registry persistence and compatibility
+## Project persistence and compatibility
 
-The registry is `app_data_path("room36_projects.json")`. Current location behavior:
+Project metadata now lives in `app_data_path("room36_app.sqlite3")`, in the
+`projects` table. A version-1 `room36_projects.json`, if present, is imported once
+and retained as a read-only migration backup. Current location behavior:
 
 | Execution mode | Default location |
 | --- | --- |
@@ -116,12 +118,13 @@ The registry is `app_data_path("room36_projects.json")`. Current location behavi
 | Frozen application | Executable's parent directory |
 | `IMAGE_DEDUPLICATOR_APP_DATA_ROOT` set | Expanded/resolved override directory |
 
-Tests use temporary registries and an isolated application-data override.
+Tests use temporary databases and an isolated application-data override.
 Proper platform per-user data placement remains a packaging/pre-release task.
 A future Windows build should use an appropriate user application-data directory
 instead of the installation directory. Phase 5 does not refactor other storage.
 
-The JSON envelope stays **version 1**. Each project persists exactly these fields:
+The legacy JSON envelope remains **version 1** for import compatibility. Each
+project persists these fields in SQLite:
 
 | Field | Value |
 | --- | --- |
@@ -132,10 +135,9 @@ The JSON envelope stays **version 1**. Each project persists exactly these field
 | `last_opened` | Most recent successful open timestamp |
 | `photo_count` | Integer >= 0, or -1 for unknown |
 
-`photo_count` is an optional additive field; no schema bump is required.
-Old version-1 records lacking it load with count -1. Booleans, floats, strings,
-null, collections, and integers below -1 become -1 without discarding an otherwise
-valid project. The next save writes the normalized count. Successful opening
+Old version-1 records lacking `photo_count` load with count -1. Booleans, floats,
+strings, null, collections, and integers below -1 become -1 without discarding an
+otherwise valid project. Import writes the normalized count. Successful opening
 refreshes and persists the actual discovered count. Empty projects persist zero.
 Home displays a saved count immediately after restart, without enumeration.
 Counts may become stale while folders are closed; reopening refreshes them.
@@ -146,18 +148,17 @@ and relative folder paths cause the record to be skipped safely. Duplicate IDs
 and normalized folders are not registered twice. Missing folders remain as cards
 so reopening can explain the error.
 
-Writes use a sibling `.json.tmp` followed by replacement of the registry.
-This is lightweight single-process metadata storage, without cross-process
-locking, a database, photo pixels, thumbnail URLs, or persistent thumbnail caching.
-Concurrent instances sharing a registry are not coordinated.
+Writes use SQLite transactions. The project table contains no photo pixels,
+thumbnail URLs, or persistent thumbnail cache. See
+`docs/APP_DATA_SQLITE.md` for the other application databases and migration.
 
 ## Errors and discovery cancellation assessment
 
 Missing/moved folders and inaccessible roots produce specific status messages.
 Other discovery failures produce a generic message. Failed discovery neither
-registers a new project nor replaces previous photo rows. Corrupt registry JSON
+registers a new project nor replaces previous photo rows. Corrupt legacy JSON
 or invalid envelopes recover with an empty list and a message; malformed individual
-records are skipped with a message. Registry write failure still permits opening
+records are skipped with a message. Database write failure still permits opening
 the project but clearly reports that metadata was not saved. Raw worker exceptions
 and file paths are not exposed as error text.
 

@@ -4,6 +4,7 @@ from datetime import datetime
 import json
 import math
 import os
+import sqlite3
 import stat
 from pathlib import Path
 from queue import Empty, Full, Queue
@@ -15,6 +16,7 @@ from PySide6.QtCore import QObject, Property, QTimer, Signal, Slot
 from PySide6.QtWidgets import QFileDialog
 
 from app_paths import app_data_path
+from app_state_database import APP_DATABASE_FILENAME, AppStateDatabase
 from image_file_utils import find_supported_files
 from image_loader import default_image_loader
 from ui.models import ResultItem
@@ -66,19 +68,26 @@ class ProjectController(QObject):
     activeProjectChanged = Signal()
     projectOpened = Signal(str, str)
 
-    def __init__(self, photo_model, parent=None, *, registry_path=None, chooser=None,
-                 discover=discover_photos):
+    def __init__(self, photo_model, parent=None, *, registry_path=None, database_path=None, chooser=None,
+                 discover=discover_photos, processing=None):
         super().__init__(parent)
         self._photos = photo_model
-        self._registry = Path(registry_path) if registry_path is not None else app_data_path("room36_projects.json")
+        self._processing = processing
+        self._legacy_registry = Path(registry_path) if registry_path is not None else app_data_path("room36_projects.json")
         self._chooser = chooser or (lambda: QFileDialog.getExistingDirectory(None, "Choose a project folder", str(Path.home())))
         self._message = ""
+        try:
+            db_path = database_path or self._legacy_registry.with_name(APP_DATABASE_FILENAME)
+            self._database = AppStateDatabase(db_path)
+        except (OSError, sqlite3.DatabaseError):
+            self._database = None
+            self._message = "Saved projects could not be read. Check application data permissions."
         self._busy = False
         self._closed = False
         self._active_id = ""
         self._active_name = ""
         self._generation = 0
-        self._projects = ProjectListModel(self._load_registry(), self)
+        self._projects = ProjectListModel(self._load_projects(), self)
         self._tasks, self._results = Queue(maxsize=1), Queue(maxsize=1)
         self._stop = threading.Event()
         self._worker = threading.Thread(target=_discovery_worker,
@@ -120,51 +129,84 @@ class ProjectController(QObject):
             self._busy = value
             self.busyChanged.emit()
 
-    def _load_registry(self):
-        try:
-            payload = json.loads(self._registry.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict) or payload.get("version") != 1 or not isinstance(payload.get("projects"), list):
-                raise ValueError("Invalid registry")
-        except FileNotFoundError:
+    @staticmethod
+    def _project_from_record(record):
+        if not isinstance(record, dict) or not all(isinstance(record.get(key), str) and record[key].strip()
+                for key in ("project_id", "folder", "name")):
+            raise ValueError("Invalid project")
+        if isinstance(record["created_at"], bool) or isinstance(record.get("last_opened"), bool):
+            raise ValueError("Invalid timestamp")
+        created, opened = float(record["created_at"]), float(record.get("last_opened", 0))
+        if not all(math.isfinite(value) and 0 <= value <= 253402214400 for value in (created, opened)):
+            raise ValueError("Invalid timestamp")
+        datetime.fromtimestamp(opened)
+        if not Path(record["folder"]).is_absolute():
+            raise ValueError("Project folder must be absolute")
+        count = record.get("photo_count", -1)
+        if type(count) is not int or count < -1:
+            count = -1
+        return Project(record["project_id"], photo_identity(record["folder"]), record["name"],
+                       created, opened, count)
+
+    def _load_projects(self):
+        if self._database is None:
             return []
-        except (OSError, ValueError):
-            self._message = "Saved projects could not be read. You can create a new project."
+        try:
+            with self._database.connect() as db:
+                existing = db.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+                imported = db.execute("SELECT 1 FROM app_migrations WHERE migration_key='projects_json_v1'").fetchone()
+            if not imported and not existing and self._legacy_registry.is_file():
+                payload = json.loads(self._legacy_registry.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict) or payload.get("version") != 1 or not isinstance(payload.get("projects"), list):
+                    raise ValueError("Invalid registry")
+                seen_ids, seen_folders = set(), set()
+                with self._database.connect() as db:
+                    for record in payload["projects"]:
+                        try:
+                            project = self._project_from_record(record)
+                            if project.project_id in seen_ids or project.folder in seen_folders:
+                                continue
+                            db.execute("INSERT INTO projects VALUES (?,?,?,?,?,?)", tuple(project.metadata().values()))
+                            seen_ids.add(project.project_id)
+                            seen_folders.add(project.folder)
+                        except (KeyError, TypeError, ValueError, OSError, OverflowError, sqlite3.IntegrityError):
+                            self._message = "Some saved projects could not be read and were skipped."
+                    db.execute("INSERT OR IGNORE INTO app_migrations VALUES ('projects_json_v1')")
+            elif not imported and existing:
+                with self._database.connect() as db:
+                    db.execute("INSERT OR IGNORE INTO app_migrations VALUES ('projects_json_v1')")
+            with self._database.connect() as db:
+                rows = db.execute("SELECT project_id, folder, name, created_at, last_opened, photo_count "
+                                  "FROM projects ORDER BY created_at, project_id").fetchall()
+        except (OSError, ValueError, sqlite3.DatabaseError):
+            self._message = "Saved projects could not be read. Check the application database and legacy registry."
             return []
         projects, ids, folders = [], set(), set()
-        for record in payload["projects"]:
+        for row in rows:
             try:
-                if not isinstance(record, dict) or not all(isinstance(record.get(key), str) and record[key].strip()
-                        for key in ("project_id", "folder", "name")):
-                    raise ValueError("Invalid project")
-                if isinstance(record["created_at"], bool) or isinstance(record.get("last_opened"), bool):
-                    raise ValueError("Invalid timestamp")
-                created, opened = float(record["created_at"]), float(record.get("last_opened", 0))
-                if not all(math.isfinite(value) and 0 <= value <= 253402214400 for value in (created, opened)):
-                    raise ValueError("Invalid timestamp")
-                datetime.fromtimestamp(opened)  # Validate platform-supported display range.
-                if not Path(record["folder"]).is_absolute():
-                    raise ValueError("Project folder must be absolute")
-                folder = photo_identity(record["folder"])
-                if record["project_id"] in ids or folder in folders:
+                project = self._project_from_record(dict(row))
+                if project.project_id in ids or project.folder in folders:
                     continue
-                count = record.get("photo_count", -1)
-                if type(count) is not int or count < -1:
-                    count = -1
-                projects.append(Project(record["project_id"], folder, record["name"], created, opened, count))
-                ids.add(record["project_id"])
-                folders.add(folder)
+                projects.append(project)
+                ids.add(project.project_id)
+                folders.add(project.folder)
             except (KeyError, TypeError, ValueError, OSError, OverflowError):
                 self._message = "Some saved projects could not be read and were skipped."
         return projects
 
-    def _save_registry(self):
-        temporary = self._registry.with_suffix(".json.tmp")
+    def _save_projects(self):
+        if self._database is None:
+            return "Project opened, but its details could not be saved. Check application data permissions."
         try:
-            self._registry.parent.mkdir(parents=True, exist_ok=True)
-            temporary.write_text(json.dumps({"version": 1, "projects": self._projects.metadata()}, indent=2), encoding="utf-8")
-            temporary.replace(self._registry)
+            with self._database.connect() as db:
+                for project in self._projects.metadata():
+                    db.execute("""INSERT INTO projects VALUES (?,?,?,?,?,?)
+                        ON CONFLICT(project_id) DO UPDATE SET folder=excluded.folder, name=excluded.name,
+                        created_at=excluded.created_at, last_opened=excluded.last_opened,
+                        photo_count=excluded.photo_count""", tuple(project.values()))
+                db.execute("INSERT OR IGNORE INTO app_migrations VALUES ('projects_json_v1')")
             return ""
-        except OSError:
+        except (OSError, sqlite3.DatabaseError):
             return "Project opened, but its details could not be saved. It may be unavailable after restart."
 
     @Slot()
@@ -196,6 +238,8 @@ class ProjectController(QObject):
         self._start(project)
 
     def _start(self, project):
+        if self._processing is not None:
+            self._processing.invalidate()
         self._generation += 1
         self._set_message("Opening " + project.name + "…")
         self._set_busy(True)
@@ -225,7 +269,9 @@ class ProjectController(QObject):
         self._projects.register(project)
         self._active_id, self._active_name = project.project_id, project.name
         self.activeProjectChanged.emit()
-        self._set_message(self._save_registry())
+        self._set_message(self._save_projects())
+        if self._processing is not None:
+            self._processing.start(project, items)
         self.projectOpened.emit(project.project_id, project.name)
 
     @Slot()

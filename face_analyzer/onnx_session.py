@@ -8,10 +8,7 @@ from typing import Any, Sequence
 import numpy as np
 
 from automatic_scan.perf import get_active_profiler
-from face_detector.onnx_runtime import ort
-
-
-Provider = str | tuple[str, dict[str, Any]]
+from face_detector.onnx_runtime import Provider, create_inference_session
 
 
 class OnnxModel:
@@ -23,50 +20,14 @@ class OnnxModel:
         *,
         providers: Sequence[Provider] | None = None,
     ) -> None:
-        if ort is None:
-            raise RuntimeError(
-                "onnxruntime is not installed. Install onnxruntime or "
-                "onnxruntime-gpu."
-            )
-
         model_path = Path(model_path)
         if not model_path.is_file():
             raise FileNotFoundError(model_path)
         self.model_path = model_path
 
-        options = ort.SessionOptions()
-        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-
-        requested = list(providers) if providers else [
-            "CUDAExecutionProvider",
-            "CPUExecutionProvider",
-        ]
-        available = set(ort.get_available_providers())
-        selected = [
-            provider
-            for provider in requested
-            if (provider[0] if isinstance(provider, tuple) else provider) in available
-        ]
-        if not selected:
-            selected = ["CPUExecutionProvider"]
-
-        session_started = time.perf_counter()
-        self.session = ort.InferenceSession(
-            str(model_path),
-            sess_options=options,
-            providers=selected,
-        )
+        self.session = create_inference_session(model_path, providers=providers)
         self.input = self.session.get_inputs()[0]
         self.outputs = self.session.get_outputs()
-        profiler = get_active_profiler()
-        if profiler is not None:
-            provider_name = self.session.get_providers()[0] if self.session.get_providers() else None
-            profiler.record_model_session_creation(
-                self.model_path.stem,
-                time.perf_counter() - session_started,
-                provider=provider_name,
-            )
 
     def run(self, tensor: np.ndarray) -> list[np.ndarray]:
         return self.run_all_outputs(tensor)
@@ -117,6 +78,7 @@ class OnnxModel:
                 for item in self.session.get_outputs()
             ],
             "providers": list(self.session.get_providers()),
+            "runtime": dict(self.session.diagnostics),
         }
 
     @staticmethod
