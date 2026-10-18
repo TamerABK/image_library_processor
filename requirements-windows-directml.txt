@@ -1,0 +1,3 @@
+# Use a clean Windows environment; do not combine ORT distributions.
+-r requirements.txt
+onnxruntime-directml ; sys_platform == "win32"

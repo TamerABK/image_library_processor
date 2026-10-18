@@ -1,0 +1,2 @@
+# Backward-compatible name for the Windows DirectML profile.
+-r requirements-windows-directml.txt

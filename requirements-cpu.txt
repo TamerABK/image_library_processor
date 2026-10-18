@@ -1,0 +1,3 @@
+-r requirements.txt
+# Install exactly one ORT profile in a clean environment.
+onnxruntime

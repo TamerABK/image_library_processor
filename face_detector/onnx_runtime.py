@@ -149,8 +149,8 @@ def log_startup_diagnostics() -> None:
 
 
 def _configure_options(options: Any, providers: Sequence[Provider]) -> None:
-    # DML restrictions apply even if DML is a secondary graph provider.
-    if any(_provider_name(p) == DML for p in providers):
+    # Each attempt has one accelerator and CPU; only a primary DML attempt needs this.
+    if providers and _provider_name(providers[0]) == DML:
         execution_mode = _resolve_runtime_attribute("ExecutionMode")
         options.execution_mode = execution_mode.ORT_SEQUENTIAL
         options.enable_mem_pattern = False
@@ -271,8 +271,8 @@ class InferenceSession:
         return result
 
 
-def _copy_session_options(source: Any | None) -> Any:
-    options = create_session_options([DML, CPU])
+def _copy_session_options(source: Any | None, providers: Sequence[Provider] = (DML, CPU)) -> Any:
+    options = create_session_options(providers)
     if source is not None:
         for name in ("intra_op_num_threads", "inter_op_num_threads", "graph_optimization_level",
                      "log_severity_level", "enable_cpu_mem_arena"):
@@ -293,20 +293,21 @@ def create_inference_session(
         raise RuntimeError("A compatible ONNX Runtime package is required.")
     log_startup_diagnostics()
     selected = select_providers(providers)
-    if _provider_name(selected[0]) == "CUDAExecutionProvider":
-        preload_onnxruntime_dependencies()
     available = get_available_providers()
     failures: list[dict[str, str]] = []
     started = time.perf_counter()
     last_error: Exception | None = None
     for index in range(len(selected)):
-        candidates = selected[index:]
-        primary = _provider_name(candidates[0])
-        options = session_options if session_options is not None else create_session_options(candidates)
+        primary = _provider_name(selected[index])
+        if primary == "CUDAExecutionProvider":
+            preload_onnxruntime_dependencies()
+        candidates = [selected[index]] if primary == CPU else [selected[index], CPU]
+        options = (session_options if index == 0 else _copy_session_options(session_options, candidates))
+        if options is None:
+            options = create_session_options(candidates)
         _configure_options(options, candidates)
         try:
-            with compatible_model_path(model_path, directml=DML in
-                                       [_provider_name(p) for p in candidates]) as (source, corrections):
+            with compatible_model_path(model_path, directml=primary == DML) as (source, corrections):
                 raw = ort.InferenceSession(source, sess_options=options, providers=candidates)
             active = list(raw.get_providers())
             # ORT may silently retry CPU inside its constructor. Give the next

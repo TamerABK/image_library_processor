@@ -32,6 +32,7 @@ class StageState(StrEnum):
 
 STAGES = ("blur", "duplicates", "faces", "face_quality", "embeddings", "people", "ranking")
 MAX_CANDIDATE_PAIRS = 50000
+MAX_UNKNOWN_FACES = 2000  # Clustering allocates an N x N float32 similarity matrix.
 
 
 class StageUnavailable(RuntimeError):
@@ -399,9 +400,14 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
                     recognized, other = services.recognize_faces(found) if config.faces.recognize_known_people else ([], found)
                     known.extend(dict(path=str(f.path), person_id=f.person_id, bbox=f.bbox) for f in recognized)
                     unknown.extend(other)
+                    if len(unknown) > MAX_UNKNOWN_FACES and config.faces.cluster_unknown_people:
+                        raise StageUnavailable(
+                            "People matching has too many unknown faces to group safely. "
+                            "Other analysis remains available."
+                        )
                 progress(i, len(embedded))
-            logger.info("people_candidates folder=%s known_faces=%d unknown_faces=%d",
-                        folder, len(known), len(unknown))
+            logger.info("people_candidates folder=%s known_faces=%d unknown_faces=%d limit=%d",
+                        folder, len(known), len(unknown), MAX_UNKNOWN_FACES)
             if unknown and config.faces.cluster_unknown_people:
                 progress(0, 0)  # Clustering has no per-face progress counter.
                 clusters = services.cluster_unknown_faces(unknown)

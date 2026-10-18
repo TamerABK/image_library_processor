@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
@@ -144,9 +145,10 @@ class SessionPolicyTests(unittest.TestCase):
         self.assertTrue(any("onnx_session_ready model=eye" in message and
                             "active=CPUExecutionProvider device=CPU" in message for message in messages))
 
-    def test_secondary_directml_also_requires_safe_options(self):
+    def test_cuda_attempt_is_isolated_from_installed_directml(self):
         runtime.create_inference_session("model.onnx", providers=[CUDA, DML])
-        self.assertFalse(self.calls[0][1].enable_mem_pattern)
+        self.assertEqual(self.calls[0][0], [CUDA, CPU])
+        self.assertTrue(self.calls[0][1].enable_mem_pattern)
 
     def test_cpu_does_not_receive_directml_restrictions(self):
         runtime.create_inference_session("model.onnx", providers=[CPU])
@@ -156,7 +158,9 @@ class SessionPolicyTests(unittest.TestCase):
         self.fail.add(MIG)
         with self.assertLogs(runtime.LOGGER, level="WARNING"):
             result = runtime.create_inference_session("model.onnx", providers=[MIG, DML])
-        self.assertEqual([call[0][0] for call in self.calls], [MIG, DML])
+        self.assertEqual([call[0] for call in self.calls], [[MIG, CPU], [DML, CPU]])
+        self.assertTrue(self.calls[0][1].enable_mem_pattern)
+        self.assertFalse(self.calls[1][1].enable_mem_pattern)
         self.assertEqual(result.diagnostics["active_provider"], DML)
         self.assertEqual(result.diagnostics["fallbacks"][0]["provider"], MIG)
 
@@ -164,7 +168,9 @@ class SessionPolicyTests(unittest.TestCase):
         self.fail.add(DML)
         with self.assertLogs(runtime.LOGGER, level="WARNING"):
             result = runtime.create_inference_session("model.onnx", providers=[DML])
-        self.assertEqual([call[0][0] for call in self.calls], [DML, CPU])
+        self.assertEqual([call[0] for call in self.calls], [[DML, CPU], [CPU]])
+        self.assertFalse(self.calls[0][1].enable_mem_pattern)
+        self.assertTrue(self.calls[1][1].enable_mem_pattern)
         self.assertEqual(result.diagnostics["active_provider"], CPU)
 
     def test_ort_internal_cpu_fallback_still_tries_next_accelerator(self):
@@ -173,6 +179,27 @@ class SessionPolicyTests(unittest.TestCase):
             result = runtime.create_inference_session("model.onnx", providers=[CUDA, DML])
         self.assertEqual(result.diagnostics["active_provider"], DML)
         self.assertEqual([call[0][0] for call in self.calls], [CUDA, DML])
+
+    def test_model_rewrite_only_applies_to_directml_attempt(self):
+        attempts = []
+
+        @contextmanager
+        def model_path(path, *, directml):
+            attempts.append(directml)
+            yield path, 1 if directml else 0
+
+        self.fail.add(CUDA)
+        cuda_options = self.fake.SessionOptions()
+        with patch.object(runtime, "compatible_model_path", side_effect=model_path):
+            with self.assertLogs(runtime.LOGGER, level="WARNING"):
+                session = runtime.create_inference_session(
+                    "model.onnx", providers=[CUDA, DML], session_options=cuda_options)
+        self.assertEqual(attempts, [False, True])
+        self.assertEqual([call[0] for call in self.calls], [[CUDA, CPU], [DML, CPU]])
+        self.assertIs(self.calls[0][1], cuda_options)
+        self.assertTrue(cuda_options.enable_mem_pattern)
+        self.assertFalse(self.calls[1][1].enable_mem_pattern)
+        self.assertEqual(session.diagnostics["directml_reshape_corrections"], 1)
 
     def test_cpu_initialization_failure_is_clear(self):
         self.fail.add(CPU)

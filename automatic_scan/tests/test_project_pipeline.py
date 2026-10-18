@@ -11,7 +11,7 @@ from automatic_scan.config import AutomaticScanConfig, PerformanceConfig
 from automatic_scan.services import AutomaticScanServices
 from automatic_scan.orchestrator import AutomaticScanOrchestrator
 from automatic_scan.models import DiscoveryRecord
-from automatic_scan.project_pipeline import StageState
+from automatic_scan.project_pipeline import MAX_UNKNOWN_FACES, StageState
 from automatic_scan.project_cache import ProjectStageCache
 from automatic_scan.perf import AutomaticScanProfiler, active_profiler
 from automatic_scan.scan_logging import LOG_FILENAME, get_scan_logger
@@ -354,7 +354,7 @@ class ProjectPipelineTests(unittest.TestCase):
         self.assertEqual(3, stats["embeddings"]["cache_hits"])
         self.assertEqual(1, stats["people"]["aggregate_reused"])
 
-    def test_people_matching_has_no_fixed_face_count_limit(self):
+    def test_unknown_face_limit_fails_only_people_stage(self):
         from face_processing.models import EmbeddedFace
 
         self.service = FaceFixtureServices(AutomaticScanConfig(), lazy_models=True,
@@ -363,14 +363,17 @@ class ProjectPipelineTests(unittest.TestCase):
         vector[0] = 1
         face = EmbeddedFace((8, 4, 50, 30), .91, np.zeros((5, 2), dtype=np.float32),
                             vector, self.path)
-        faces = [face] * 20001
+        faces = [face] * (MAX_UNKNOWN_FACES + 1)
         with patch.object(self.service, "embed_faces", return_value=faces), \
              patch.object(self.service, "recognize_faces", side_effect=lambda batch: ([], batch)), \
              patch.object(self.service, "cluster_unknown_faces", return_value=[]) as cluster:
             self.run_project()
-        self.event("people")
-        self.assertEqual(20001, self.event("embeddings")[5]["face_count"])
-        self.assertEqual(20001, len(cluster.call_args.args[0]))
+        failed = self.event("people", StageState.FAILED)
+        self.assertIn("too many unknown faces", failed[4])
+        self.assertEqual(MAX_UNKNOWN_FACES + 1, self.event("embeddings")[5]["face_count"])
+        cluster.assert_not_called()
+        for stage in ("blur", "duplicates", "faces", "face_quality", "embeddings", "ranking"):
+            self.event(stage)
 
     def test_people_matching_handles_1500_unknown_faces(self):
         from face_processing.models import EmbeddedFace
