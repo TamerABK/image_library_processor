@@ -32,8 +32,6 @@ class StageState(StrEnum):
 
 STAGES = ("blur", "duplicates", "faces", "face_quality", "embeddings", "people", "ranking")
 MAX_CANDIDATE_PAIRS = 50000
-MAX_UNKNOWN_FACES = 20000  # Temporary test cap; clustering still builds a quadratic similarity matrix.
-MAX_PROJECT_FACES = 20000
 
 
 class StageUnavailable(RuntimeError):
@@ -45,7 +43,7 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
     logger = get_scan_logger()
     logger.info("project_started folder=%s discovered_paths=%d", folder, len(paths))
     config = config or AutomaticScanConfig(blur_policy=BlurPolicy.KEEP_ALL,
-        performance=PerformanceConfig(worker_count=1, batch_size=8))
+        performance=PerformanceConfig(worker_count=1, batch_size=32))
     folder = str(folder)
     token = cancellation_token
     cache = ProjectStageCache(cache_path)
@@ -130,42 +128,57 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
 
     def per_file(name, key, get, compute, stats, progress, source_records):
         results = {}
-        face_count = 0
-        for index, record in enumerate(source_records, 1):
-            token.raise_if_canceled()
-            operation = "cache_lookup"
+        base_getter = {
+            "blur": AutomaticScanServices.get_blur_cached,
+            "duplicates": AutomaticScanServices.get_duplicate_photo_cached,
+            "faces": AutomaticScanServices.get_face_analysis_cached,
+        }.get(name)
+        shared_getter = base_getter is not None and getattr(get, "__func__", None) is base_getter
+        with cache.storage.connect() as read_db:
             try:
-                try:
-                    value = get(record) if cache.compatible(record.path, name, key) else None
-                except Exception:
-                    logger.exception("cache_read_failed folder=%s stage=%s photo=%s; recomputing",
-                                     folder, name, record.path)
-                    value = None  # A corrupt cache is a miss, not a corrupt photo.
-                if value is None:
-                    operation = "compute"
-                    value = compute(record)
-                    if value is None:
-                        raise ValueError("No result")
-                    token.raise_if_canceled()
-                    operation = "cache_write"
-                    cache.mark(record.path, name, key)
-                    stats["computed"] += 1
-                else:
-                    stats["cache_hits"] += 1
-                if name in ("faces", "embeddings"):
-                    face_count += len(value)
-                    if face_count > MAX_PROJECT_FACES:
-                        raise StageUnavailable("People analysis exceeded its safe face limit. Image quality results remain available.")
-                results[str(record.path)] = value
-            except ScanCancelledError:
-                raise
-            except StageUnavailable:
-                raise
+                compatible = cache.compatible_paths((r.path for r in source_records),
+                                                    name, key, connection=read_db)
             except Exception:
-                stats["file_errors"] += 1
-                logger.exception("photo_failed folder=%s stage=%s operation=%s photo=%s",
-                                 folder, name, operation, record.path)
-            progress(index, len(source_records))
+                logger.exception("compatibility_prefetch_failed folder=%s stage=%s; using individual lookups",
+                                 folder, name)
+                compatible = None
+            for index, record in enumerate(source_records, 1):
+                token.raise_if_canceled()
+                operation = "cache_lookup"
+                try:
+                    try:
+                        valid_signature = (str(record.path) in compatible if compatible is not None else
+                                           cache.compatible(record.path, name, key, connection=read_db))
+                        if valid_signature:
+                            value = (get(record, connection=read_db) if shared_getter else
+                                     get(record))
+                        else:
+                            value = None
+                    except Exception:
+                        logger.exception("cache_read_failed folder=%s stage=%s photo=%s; recomputing",
+                                         folder, name, record.path)
+                        value = None  # A corrupt cache is a miss, not a corrupt photo.
+                    if value is None:
+                        operation = "compute"
+                        value = compute(record)
+                        if value is None:
+                            raise ValueError("No result")
+                        token.raise_if_canceled()
+                        operation = "cache_write"
+                        cache.mark(record.path, name, key)
+                        stats["computed"] += 1
+                    else:
+                        stats["cache_hits"] += 1
+                    results[str(record.path)] = value
+                except ScanCancelledError:
+                    raise
+                except StageUnavailable:
+                    raise
+                except Exception:
+                    stats["file_errors"] += 1
+                    logger.exception("photo_failed folder=%s stage=%s operation=%s photo=%s",
+                                     folder, name, operation, record.path)
+                progress(index, len(source_records))
         return results
 
     blur_results = {}
@@ -238,6 +251,7 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
                 found = face_results.get(str(record.path))
                 if found is None or any(f.analysis is None for f in found):
                     stats["file_errors"] += 1
+                    progress(i, len(valid))
                     continue
                 state = states[str(record.path)]
                 state.people_picture_assessment = assess_people_picture(record.width, record.height, found, config)
@@ -259,8 +273,107 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
                 token.raise_if_canceled()
                 return services.embed_faces(record, face_results[str(record.path)],
                     minimum_embedding_utility=config.faces.minimum_embedding_utility, cancellation_token=token)
-            embedded.update(per_file("embeddings", face_key, services.get_embedded_faces_cached,
-                compute, stats, progress, [r for r in valid if str(r.path) in face_results]))
+            source_records = [r for r in valid if str(r.path) in face_results]
+            # Keep the per-photo cache boundary, but group cache misses across
+            # photos so DirectML sees a stable batch size instead of thousands
+            # of different one-photo batch sizes/session variants.
+            pending = []
+            embedded_getter = services.get_embedded_faces_cached
+            shared_getter = (getattr(embedded_getter, "__func__", None) is
+                             AutomaticScanServices.get_embedded_faces_cached)
+            with cache.storage.connect() as read_db:
+                try:
+                    compatible = cache.compatible_paths((r.path for r in source_records),
+                                                        "embeddings", face_key, connection=read_db)
+                except Exception:
+                    logger.exception("compatibility_prefetch_failed folder=%s stage=embeddings; using individual lookups",
+                                     folder)
+                    compatible = None
+                for record in source_records:
+                    token.raise_if_canceled()
+                    try:
+                        valid_signature = (str(record.path) in compatible if compatible is not None else
+                                           cache.compatible(record.path, "embeddings", face_key,
+                                                            connection=read_db))
+                        if valid_signature:
+                            value = (embedded_getter(record, connection=read_db) if shared_getter else
+                                     embedded_getter(record))
+                        else:
+                            value = None
+                    except Exception:
+                        logger.exception("cache_read_failed folder=%s stage=embeddings photo=%s; recomputing",
+                                         folder, record.path)
+                        value = None
+                    if value is None:
+                        pending.append(record)
+                    else:
+                        embedded[str(record.path)] = value
+                        stats["cache_hits"] += 1
+            progress(stats["cache_hits"], len(source_records))
+
+            def store_result(record, value):
+                token.raise_if_canceled()
+                if value is None:
+                    raise ValueError("No embedding result")
+                cache.mark(record.path, "embeddings", face_key)
+                embedded[str(record.path)] = value
+                stats["computed"] += 1
+
+            def photo_error(record, exc, operation):
+                stats["file_errors"] += 1
+                logger.error("photo_failed folder=%s stage=embeddings operation=%s photo=%s",
+                             folder, operation, record.path,
+                             exc_info=(type(exc), exc, exc.__traceback__))
+
+            # Test adapters and custom service implementations may override the
+            # single-photo embed method; retain their contract unchanged.
+            use_batch = (type(services).embed_faces is AutomaticScanServices.embed_faces
+                         and "embed_faces" not in vars(services))
+            stats["batch_limit"] = services.embedding_batch_size() if use_batch else 0
+            logger.info("embedding_plan folder=%s cached_photos=%d pending_photos=%d batch_limit=%d cross_photo=%s",
+                        folder, stats["cache_hits"], len(pending), stats["batch_limit"], use_batch)
+            if pending and use_batch:
+                if any(face_results[str(r.path)] for r in pending):
+                    services.initialize_faces()
+                try:
+                    batch_results = services.embed_faces_batched(
+                        pending, face_results,
+                        minimum_embedding_utility=config.faces.minimum_embedding_utility,
+                        cancellation_token=token,
+                        on_error=lambda record, exc: photo_error(record, exc, "compute"),
+                        on_progress=lambda done, total: progress(
+                            stats["cache_hits"] + done, len(source_records)),
+                    )
+                except ScanCancelledError:
+                    raise
+                except Exception:
+                    logger.exception("embedding_batch_failed folder=%s; retrying individual photos", folder)
+                    # A native batch failure is exceptional. Retry per photo
+                    # to isolate it; ordinary operation stays cross-photo.
+                    batch_results = None
+                if batch_results is not None:
+                    for record in pending:
+                        path = str(record.path)
+                        if path not in batch_results:
+                            continue  # The batch service already logged a per-photo error.
+                        try:
+                            store_result(record, batch_results[path])
+                        except ScanCancelledError:
+                            raise
+                        except Exception as exc:
+                            photo_error(record, exc, "cache_write")
+            if pending and (not use_batch or batch_results is None):
+                for record in pending:
+                    token.raise_if_canceled()
+                    try:
+                        store_result(record, compute(record))
+                    except ScanCancelledError:
+                        raise
+                    except Exception as exc:
+                        photo_error(record, exc, "compute")
+                    progress(stats["cache_hits"] + stats["computed"] + stats["file_errors"],
+                             len(source_records))
+            progress(len(source_records), len(source_records))
             if face_results and not embedded:
                 raise ValueError("Embedding unavailable")
             return {"face_count": sum(map(len, embedded.values()))}
@@ -287,12 +400,13 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
                     known.extend(dict(path=str(f.path), person_id=f.person_id, bbox=f.bbox) for f in recognized)
                     unknown.extend(other)
                 progress(i, len(embedded))
-            logger.info("people_candidates folder=%s known_faces=%d unknown_faces=%d limit=%d",
-                        folder, len(known), len(unknown), MAX_UNKNOWN_FACES)
-            if len(unknown) > MAX_UNKNOWN_FACES:
-                raise StageUnavailable("People grouping exceeded its safe face limit. Image quality results remain available.")
-            progress(0, 0)
-            clusters = services.cluster_unknown_faces(unknown) if unknown and config.faces.cluster_unknown_people else []
+            logger.info("people_candidates folder=%s known_faces=%d unknown_faces=%d",
+                        folder, len(known), len(unknown))
+            if unknown and config.faces.cluster_unknown_people:
+                progress(0, 0)  # Clustering has no per-face progress counter.
+                clusters = services.cluster_unknown_faces(unknown)
+            else:
+                clusters = []
             payload = {"known": known, "unknown": [dict(id=c.id,
                 paths=sorted({str(f.path) for f in c.faces}), representative=str(c.representative.path),
                 representative_bbox=c.representative.bbox, face_count=len(c.faces),

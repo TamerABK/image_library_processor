@@ -15,7 +15,7 @@ from app_paths import asset_path, qml_path, qml_root
 PYSIDE6_AVAILABLE = importlib.util.find_spec("PySide6") is not None
 
 if PYSIDE6_AVAILABLE:
-    from PySide6.QtCore import QObject, QPointF, QUrl
+    from PySide6.QtCore import QObject, QPointF, Property, QUrl, Signal
     from PySide6.QtQml import QQmlApplicationEngine, QQmlComponent
     from PySide6.QtQuick import QQuickItem
     from PySide6.QtWidgets import QApplication
@@ -26,6 +26,26 @@ if PYSIDE6_AVAILABLE:
         _start_page_from_environment,
         configure_quick_controls_style,
     )
+
+
+    class ProcessingStatusFixture(QObject):
+        changed = Signal()
+
+        def __init__(self, stages):
+            super().__init__()
+            self._stages = stages
+
+        @Property(str, notify=changed)
+        def overallState(self):
+            return "RUNNING"
+
+        @Property("QVariantList", notify=changed)
+        def stages(self):
+            return self._stages
+
+        def update(self, stages):
+            self._stages = stages
+            self.changed.emit()
 
 
 @unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is not installed")
@@ -68,6 +88,55 @@ class QmlPagesTests(unittest.TestCase):
         ):
             with self.subTest(page_path=page_path):
                 self._create_component(page_path)
+
+    def test_processing_status_shows_a_bar_for_every_step(self) -> None:
+        status = self._create_component("components/ProcessingStatus.qml")
+        status.setProperty("width", 960)
+        stages = [
+            {"stage": name, "label": label, "state": "QUEUED", "done": 0, "total": 0}
+            for name, label in (
+                ("blur", "Image quality"), ("duplicates", "Near duplicates"),
+                ("faces", "Face detection"), ("face_quality", "Face quality"),
+                ("embeddings", "Face embeddings"), ("people", "People matching"),
+                ("ranking", "Representatives"),
+            )
+        ]
+        stages[0].update(state="COMPLETE")
+        stages[5].update(state="RUNNING", done=2, total=4)
+        stages[6].update(state="RUNNING")
+        fixture = ProcessingStatusFixture(stages)
+        status.setProperty("controller", fixture)
+        self.application.processEvents()
+
+        def find_visual(item, name):
+            if item.objectName() == name:
+                return item
+            return next((found for child in item.childItems()
+                         if (found := find_visual(child, name)) is not None), None)
+
+        bars = {row["stage"]: find_visual(status, "processingProgress_" + row["stage"])
+                for row in stages}
+        self.assertTrue(all(bars.values()))
+        self.assertEqual(1, bars["blur"].property("value"))
+        self.assertEqual(0.5, bars["people"].property("value"))
+        self.assertFalse(bars["people"].property("indeterminate"))
+        self.assertTrue(bars["ranking"].property("indeterminate"))
+        fill = find_visual(bars["people"], "processingProgressFill")
+        self.assertIsNotNone(fill)
+        stops = fill.property("gradient").property("stops").toVariant()
+        self.assertEqual(["#a4a4ff", "#4b44e0", "#00008e"],
+                         [stops.at(index).property("color").name() for index in range(stops.count())])
+        for bar in bars.values():
+            left = bar.mapToItem(status, QPointF(0, 0)).x()
+            self.assertGreater(bar.width(), 0)
+            self.assertGreaterEqual(left, 0)
+            self.assertLessEqual(left + bar.width(), status.width())
+
+        stages[5] = dict(stages[5], done=0, total=0)
+        fixture.update(stages)
+        self.application.processEvents()
+        people_bar = find_visual(status, "processingProgress_people")
+        self.assertTrue(people_bar.property("indeterminate"))
 
     def test_production_startup_selects_style_before_loading_controls(self) -> None:
         # Qt locks its style once Controls are registered: use fresh processes.

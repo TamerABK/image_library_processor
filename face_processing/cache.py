@@ -1249,8 +1249,9 @@ class FaceScanCache(_FaceAnalysisStorageMixin):
         include_unknown_faces: bool = True,
         database_signature: str | None = None,
         require_analysis: bool = False,
+        connection: sqlite3.Connection | None = None,
     ) -> list[EmbeddedFace] | None:
-        with self._connect() as connection:
+        with self._storage.using_connection(connection) as connection:
             entry = connection.execute(
                 """
                 SELECT
@@ -1520,8 +1521,10 @@ class ImageFaceAnalysisCache(_FaceAnalysisStorageMixin):
         path: Path,
         file_size: int,
         mtime_ns: int,
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> list[DetectedFace] | None:
-        with self._connect() as connection:
+        with self._storage.using_connection(connection) as connection:
             entry = connection.execute(
                 """
                 SELECT image_face_analysis_cache.path

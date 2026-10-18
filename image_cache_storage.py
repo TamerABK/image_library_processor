@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 from app_paths import app_data_path
@@ -65,6 +66,10 @@ class SharedImageCacheDatabase:
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute("PRAGMA busy_timeout = 30000")
         return connection
+
+    def using_connection(self, connection: sqlite3.Connection | None = None):
+        """Borrow a scan's read connection, or own a short-lived connection."""
+        return self.connect() if connection is None else nullcontext(connection)
 
     def upsert_image_entry(
         self,

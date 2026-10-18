@@ -4,7 +4,7 @@ import threading
 import unittest
 
 from PIL import Image
-from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtCore import QEvent, QObject, QPointF, Qt
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
@@ -177,6 +177,26 @@ class BlurFlowTests(unittest.TestCase):
         self.click("libraryNav_blurry")
         self.assertEqual("Review", self.item("blurFilter").property("currentText"))
         self.assertEqual("Least problematic first", self.item("blurSort").property("currentText"))
+
+    def test_blur_dropdowns_use_rounded_buttons_and_single_chevrons(self):
+        self.create()
+        self.blur()
+        for name in ("blurSort", "blurFilter"):
+            button = self.item(name)
+            base = button.findChild(QObject, "toolbarDropdownBase")
+            self.assertIsNotNone(base)
+            self.assertAlmostEqual(button.height() / 2, base.property("radius"), delta=0.1)
+            self.assertEqual(1, len(button.findChildren(QObject, "toolbarDropdownChevron")))
+
+        sort_button = self.item("blurSort")
+        sort_button.clicked.emit()
+        QTest.qWait(200)
+        self.assertTrue(sort_button.property("open"))
+        self.click("toolbarDropdownOption_Least problematic first")
+        self.assertEqual("Least problematic first", self.processing.blurModel.sortOrder)
+        self.click("blurFilter")
+        self.click("toolbarDropdownOption_Review")
+        self.assertEqual("Review", self.processing.blurModel.classificationFilter)
 
     def test_ten_thousand_candidates_stay_virtualized(self):
         self.create()

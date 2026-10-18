@@ -24,11 +24,29 @@ class ProjectStageCache:
                     payload TEXT NOT NULL, PRIMARY KEY(folder, stage));
             """)
 
-    def compatible(self, path, stage, key):
-        with self.storage.connect() as db:
+    def compatible(self, path, stage, key, *, connection=None):
+        with self.storage.using_connection(connection) as db:
             row = db.execute("SELECT signature FROM processor_compatibility WHERE path=? AND stage=?",
                              (str(path), stage)).fetchone()
         return row is not None and row[0] == key
+
+    def compatible_paths(self, paths, stage, key, *, connection=None):
+        """Read compatible identities in bounded queries for one processing stage."""
+        paths = [str(path) for path in paths]
+        matches = set()
+        if not paths:
+            return matches
+        with self.storage.using_connection(connection) as db:
+            for offset in range(0, len(paths), 400):
+                chunk = paths[offset:offset + 400]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = db.execute(
+                    "SELECT path FROM processor_compatibility "
+                    f"WHERE stage=? AND signature=? AND path IN ({placeholders})",
+                    (stage, key, *chunk),
+                ).fetchall()
+                matches.update(row[0] for row in rows)
+        return matches
 
     def mark(self, path, stage, key):
         with self.storage.connect() as db:

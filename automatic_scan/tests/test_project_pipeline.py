@@ -11,7 +11,9 @@ from automatic_scan.config import AutomaticScanConfig, PerformanceConfig
 from automatic_scan.services import AutomaticScanServices
 from automatic_scan.orchestrator import AutomaticScanOrchestrator
 from automatic_scan.models import DiscoveryRecord
-from automatic_scan.project_pipeline import MAX_UNKNOWN_FACES, StageState
+from automatic_scan.project_pipeline import StageState
+from automatic_scan.project_cache import ProjectStageCache
+from automatic_scan.perf import AutomaticScanProfiler, active_profiler
 from automatic_scan.scan_logging import LOG_FILENAME, get_scan_logger
 from automatic_scan.state_store import AutomaticStateStore
 from blur_detector.blur_detector import BlurDetector
@@ -48,6 +50,20 @@ class FaceFixtureServices(NoFacesServices):
         self._face_scan_cache.put(record.path, record.file_size, record.mtime_ns, embedded,
             coverage=self._face_scan_cache.COVERAGE_ALL_FACES)
         return embedded
+
+
+class BatchedFaceFixtureServices(FaceFixtureServices):
+    """Use the production batch entry point with deterministic face data."""
+    embed_faces = AutomaticScanServices.embed_faces
+
+    def analyze_faces(self, record, **kwargs):
+        from face_processing.models import DetectedFace
+        from face_processing.test_processing import _sample_analysis
+        faces = [DetectedFace((8, 4, 50, 30), .91,
+            np.array([[15, 10], [45, 10], [30, 20], [20, 30], [40, 30]], dtype=np.float32),
+            record.path, analysis=_sample_analysis()) for _ in range(3)]
+        self._analysis_cache.put(record.path, record.file_size, record.mtime_ns, faces)
+        return faces
 
 
 class ProjectPipelineTests(unittest.TestCase):
@@ -106,6 +122,44 @@ class ProjectPipelineTests(unittest.TestCase):
             self.assertEqual(1, stats[stage]["aggregate_reused"], stage)
         self.assertTrue(all(self.event(stage) for stage in stats))
 
+    def test_hot_cache_reuses_one_read_connection_per_stage(self):
+        paths = [self.path]
+        for index in range(29):
+            path = self.photos / f"cached_{index}.jpg"
+            Image.new("RGB", (80, 40), "gray").save(path)
+            paths.append(path)
+        self.run_project(paths)
+
+        profiler = AutomaticScanProfiler()
+        with active_profiler(profiler):
+            stats = self.run_project(paths)
+        for stage in ("blur", "duplicates", "faces", "embeddings"):
+            self.assertEqual(30, stats[stage]["cache_hits"], stage)
+            self.assertEqual(0, stats[stage]["computed"], stage)
+        self.assertLess(profiler.database_metrics()["connect_count"], 100)
+
+        changed = paths[-1]
+        stat = changed.stat()
+        os.utime(changed, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1000000))
+        stats = self.run_project(paths)
+        for stage in ("blur", "duplicates", "faces", "embeddings"):
+            self.assertEqual(29, stats[stage]["cache_hits"], stage)
+            self.assertEqual(1, stats[stage]["computed"], stage)
+
+    def test_compatible_paths_chunks_queries_without_cross_project_matches(self):
+        cache = ProjectStageCache(self.root / "compat.sqlite3")
+        paths = [str(self.root / f"image_{index}.jpg") for index in range(405)]
+        with cache.storage.connect() as db:
+            db.executemany("INSERT INTO image_entries(path,file_size,mtime_ns) VALUES (?,?,?)",
+                           [(path, 1, 1) for path in paths])
+            db.executemany("INSERT INTO processor_compatibility(path,stage,signature) VALUES (?,?,?)",
+                           [(path, "blur", "current" if index != 404 else "old")
+                            for index, path in enumerate(paths)])
+        with cache.storage.connect() as db:
+            matches = cache.compatible_paths(paths + [str(self.root / "other.jpg")],
+                                             "blur", "current", connection=db)
+        self.assertEqual(set(paths[:-1]), matches)
+
     def test_modified_file_invalidates_all_dependent_stage_rows(self):
         self.run_project()
         stat = self.path.stat()
@@ -140,6 +194,14 @@ class ProjectPipelineTests(unittest.TestCase):
             stats = self.run_project()
         self.assertEqual(1, stats["blur"]["computed"])
         self.assertEqual(0, stats["blur"]["file_errors"])
+
+    def test_custom_cache_getter_keeps_original_call_contract(self):
+        self.run_project()
+        original = self.service.get_blur_cached
+        with patch.object(self.service, "get_blur_cached", side_effect=lambda record: original(record)):
+            stats = self.run_project()
+        self.assertEqual(1, stats["blur"]["cache_hits"])
+        self.assertEqual(0, stats["blur"]["computed"])
 
     def test_hashes_round_trip_without_sqlite_numeric_coercion(self):
         self.run_project()
@@ -280,6 +342,10 @@ class ProjectPipelineTests(unittest.TestCase):
         self.assertEqual(person.id, payload["known"][0]["person_id"])
         self.assertEqual(2, payload["unknown"][0]["face_count"])
         self.assertEqual(2, len(payload["unknown"][0]["faces"]))
+        matching_progress = [(event[2], event[3]) for event in self.events
+                             if event[0] == "people" and event[1] == StageState.RUNNING]
+        self.assertIn((3, 3), matching_progress)
+        self.assertEqual((0, 0), matching_progress[-1])  # Unknown-face clustering is indeterminate.
         with patch.object(self.service, "analyze_faces", side_effect=AssertionError("recomputed")), \
              patch.object(self.service, "embed_faces", side_effect=AssertionError("recomputed")), \
              patch.object(self.service, "cluster_unknown_faces", side_effect=AssertionError("recomputed")):
@@ -288,31 +354,23 @@ class ProjectPipelineTests(unittest.TestCase):
         self.assertEqual(3, stats["embeddings"]["cache_hits"])
         self.assertEqual(1, stats["people"]["aggregate_reused"])
 
-    def test_unknown_capacity_is_failure_without_losing_blur(self):
-        self.service = FaceFixtureServices(AutomaticScanConfig(), lazy_models=True,
-            cache_path=self.root / "analysis.sqlite3", face_database_path=self.root / "faces.sqlite3")
-        with patch("automatic_scan.project_pipeline.MAX_UNKNOWN_FACES", 0):
-            self.run_project()
-        self.event("people", StageState.FAILED)
-        self.event("blur")
-        self.event("embeddings")
-
-    def test_unknown_face_limit_allows_more_than_old_2000_cap(self):
+    def test_people_matching_has_no_fixed_face_count_limit(self):
         from face_processing.models import EmbeddedFace
 
-        self.assertEqual(20000, MAX_UNKNOWN_FACES)
         self.service = FaceFixtureServices(AutomaticScanConfig(), lazy_models=True,
             cache_path=self.root / "analysis.sqlite3", face_database_path=self.root / "faces.sqlite3")
         vector = np.zeros(512, dtype=np.float32)
         vector[0] = 1
-        faces = [EmbeddedFace((8, 4, 50, 30), .91, np.zeros((5, 2), dtype=np.float32),
-                              vector, self.path) for _ in range(2501)]
+        face = EmbeddedFace((8, 4, 50, 30), .91, np.zeros((5, 2), dtype=np.float32),
+                            vector, self.path)
+        faces = [face] * 20001
         with patch.object(self.service, "embed_faces", return_value=faces), \
              patch.object(self.service, "recognize_faces", side_effect=lambda batch: ([], batch)), \
              patch.object(self.service, "cluster_unknown_faces", return_value=[]) as cluster:
             self.run_project()
         self.event("people")
-        self.assertEqual(2501, len(cluster.call_args.args[0]))
+        self.assertEqual(20001, self.event("embeddings")[5]["face_count"])
+        self.assertEqual(20001, len(cluster.call_args.args[0]))
 
     def test_people_matching_handles_1500_unknown_faces(self):
         from face_processing.models import EmbeddedFace
@@ -356,6 +414,131 @@ class ProjectPipelineTests(unittest.TestCase):
             AutomaticScanServices.embed_faces(self.service, record, faces,
                 minimum_embedding_utility=0, cancellation_token=token)
         self.assertEqual([8], calls)
+
+    def test_project_embeddings_batch_across_photos_and_reuse_per_photo_cache(self):
+        from face_processing.models import EmbeddedFace
+        from types import SimpleNamespace
+
+        self.service = BatchedFaceFixtureServices(
+            AutomaticScanConfig(performance=PerformanceConfig(batch_size=8)),
+            lazy_models=True, cache_path=self.root / "analysis.sqlite3",
+            face_database_path=self.root / "faces.sqlite3")
+        paths = [self.path]
+        for index in range(3):
+            path = self.photos / f"extra_{index}.jpg"
+            Image.new("RGB", (80, 40), "gray").save(path)
+            paths.append(path)
+        calls = []
+        def embed(aligned, faces):
+            calls.append(len(faces))
+            self.assertLessEqual(len(aligned), 8)
+            return [EmbeddedFace(f.bbox, f.confidence, f.landmarks,
+                np.eye(1, 512, dtype=np.float32)[0], f.path, f.analysis) for f in faces]
+        self.service._face_embedder = SimpleNamespace(
+            align_requests=lambda requests: [np.zeros((112, 112, 3), dtype=np.uint8)
+                                             for _ in requests],
+            embed_aligned_faces=embed)
+
+        stats = self.run_project(paths)
+        self.event("embeddings")
+        self.assertEqual([8, 4], calls)
+        self.assertEqual(4, stats["embeddings"]["computed"])
+        self.assertEqual(12, self.event("embeddings")[5]["face_count"])
+
+        calls.clear()
+        stats = self.run_project(paths)
+        self.assertEqual([], calls)
+        self.assertEqual(4, stats["embeddings"]["cache_hits"])
+
+        changed = paths[1]
+        stat = changed.stat()
+        os.utime(changed, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1000000))
+        stats = self.run_project(paths)
+        self.assertEqual([3], calls)
+        self.assertEqual(3, stats["embeddings"]["cache_hits"])
+        self.assertEqual(1, stats["embeddings"]["computed"])
+
+    def test_cross_photo_batch_isolates_decode_failure_and_cancellation(self):
+        from face_processing.models import DetectedFace, EmbeddedFace
+        from face_processing.test_processing import _sample_analysis
+        from types import SimpleNamespace
+
+        paths = [self.path]
+        for index in range(2):
+            path = self.photos / f"extra_{index}.jpg"
+            Image.new("RGB", (80, 40), "gray").save(path)
+            paths.append(path)
+        records, faces_by_path = [], {}
+        for path in paths:
+            stat = path.stat()
+            records.append(DiscoveryRecord(path, stat.st_size, stat.st_mtime_ns,
+                                           ".jpg", None, None, 80, 40))
+            faces_by_path[str(path)] = [DetectedFace((0, 0, 40, 40), .9,
+                np.zeros((5, 2)), path, analysis=_sample_analysis())]
+        self.service._config = replace(self.service._config,
+            performance=PerformanceConfig(batch_size=8))
+        calls = []
+        def embed(aligned, faces):
+            calls.append(len(faces))
+            return [EmbeddedFace(f.bbox, f.confidence, f.landmarks,
+                np.eye(1, 512, dtype=np.float32)[0], f.path, f.analysis) for f in faces]
+        self.service._face_embedder = SimpleNamespace(
+            align_requests=lambda requests: [np.zeros((112, 112, 3), dtype=np.uint8)
+                                             for _ in requests],
+            embed_aligned_faces=embed)
+        from image_loader import default_image_loader
+        original_load = default_image_loader.load_for_detection
+        def load(path):
+            return None if path == paths[1] else original_load(path)
+        errors = []
+        with patch.object(default_image_loader, "load_for_detection", side_effect=load):
+            results = self.service.embed_faces_batched(records, faces_by_path,
+                minimum_embedding_utility=0,
+                on_error=lambda record, exc: errors.append((record.path, type(exc))))
+        self.assertEqual({str(paths[0]), str(paths[2])}, set(results))
+        self.assertEqual([(paths[1], ValueError)], errors)
+        self.assertEqual([2], calls)
+        self.assertIsNone(self.service.get_embedded_faces_cached(records[1]))
+
+        token = CancellationToken()
+        def cancel_embed(aligned, faces):
+            token.cancel()
+            return embed(aligned, faces)
+        self.service._face_embedder.embed_aligned_faces = cancel_embed
+        with self.assertRaises(ScanCancelledError):
+            self.service.embed_faces_batched(records, faces_by_path,
+                minimum_embedding_utility=0, cancellation_token=token)
+        self.assertEqual([2, 3], calls)
+
+    def test_native_embedding_batch_failure_recovers_per_photo(self):
+        from face_processing.models import EmbeddedFace
+        from types import SimpleNamespace
+
+        self.service = BatchedFaceFixtureServices(
+            AutomaticScanConfig(performance=PerformanceConfig(batch_size=8)),
+            lazy_models=True, cache_path=self.root / "analysis.sqlite3",
+            face_database_path=self.root / "faces.sqlite3")
+        other = self.photos / "other.jpg"
+        Image.new("RGB", (80, 40), "gray").save(other)
+        calls = []
+        def embedded(faces):
+            return [EmbeddedFace(f.bbox, f.confidence, f.landmarks,
+                np.eye(1, 512, dtype=np.float32)[0], f.path, f.analysis) for f in faces]
+        def fail_batch(aligned, faces):
+            calls.append(("batch", len(faces)))
+            raise RuntimeError("native batch unavailable")
+        def single(image, faces):
+            calls.append(("photo", len(faces)))
+            return embedded(faces)
+        self.service._face_embedder = SimpleNamespace(
+            align_requests=lambda requests: [np.zeros((112, 112, 3), dtype=np.uint8)
+                                             for _ in requests],
+            embed_aligned_faces=fail_batch, embed=single)
+        stats = self.run_project([self.path, other])
+        self.event("embeddings")
+        self.assertEqual([("batch", 6), ("photo", 3), ("photo", 3)], calls)
+        self.assertEqual(2, stats["embeddings"]["computed"])
+        self.assertEqual(0, stats["embeddings"]["file_errors"])
 
     def test_quality_batches_cancel_without_scheduling_more_native_work(self):
         from face_processing.models import DetectedFace

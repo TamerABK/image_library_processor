@@ -30,10 +30,12 @@ class DuplicatePhotoCache:
         path: Path,
         file_size: int,
         mtime_ns: int,
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> PhotoInfo | None:
         normalized_path = str(path)
 
-        with self._connect() as connection:
+        with self._storage.using_connection(connection) as connection:
             row = connection.execute(
                 """
                 SELECT

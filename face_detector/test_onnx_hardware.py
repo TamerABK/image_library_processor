@@ -81,5 +81,12 @@ for _model in ("embedding", "pose", "vibe"):
     setattr(NativeModelTests, "test_" + _model + "_directml_batch8", _batch_test)
 
 
+def _embedding_batch32(self):
+    self.compare("embedding", "DmlExecutionProvider", batch_size=32)
+
+
+NativeModelTests.test_embedding_directml_batch32 = _embedding_batch32
+
+
 if __name__ == "__main__":
     unittest.main()

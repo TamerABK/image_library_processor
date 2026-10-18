@@ -54,6 +54,7 @@ Button {
         }
 
         Image {
+            objectName: "toolbarDropdownChevron"
             Layout.preferredWidth: metrics.iconSizeSmall
             Layout.preferredHeight: metrics.iconSizeSmall
             source: theme.iconUrl("chevron_down.svg")
@@ -150,6 +151,7 @@ Button {
 
                 delegate: ItemDelegate {
                     id: optionDelegate
+                    objectName: "toolbarDropdownOption_" + modelData
 
                     required property string modelData
 

@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, Callable
 
 from app_paths import app_data_path, model_path
 from blur_detector.blur_detector import BlurDetector, BlurResult
@@ -253,8 +253,9 @@ class AutomaticScanServices:
         discovered.sort()
         return discovered
 
-    def get_blur_cached(self, record: DiscoveryRecord) -> BlurResult | None:
-        return self._blur_cache.get(record.path, record.file_size, record.mtime_ns)
+    def get_blur_cached(self, record: DiscoveryRecord, *, connection=None) -> BlurResult | None:
+        return self._blur_cache.get(record.path, record.file_size, record.mtime_ns,
+                                    connection=connection)
 
     def analyze_blur(self, record: DiscoveryRecord) -> BlurResult:
         result = self._blur_detector.detect(record.path)
@@ -288,8 +289,9 @@ class AutomaticScanServices:
             is_raw=record.extension not in {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"},
         )
 
-    def get_duplicate_photo_cached(self, record: DiscoveryRecord) -> PhotoInfo | None:
-        return self._duplicate_cache.get(record.path, record.file_size, record.mtime_ns)
+    def get_duplicate_photo_cached(self, record: DiscoveryRecord, *, connection=None) -> PhotoInfo | None:
+        return self._duplicate_cache.get(record.path, record.file_size, record.mtime_ns,
+                                         connection=connection)
 
     def index_duplicate_photo(self, record: DiscoveryRecord) -> PhotoInfo | None:
         return self._duplicate_indexer._index_image(record.path)
@@ -350,8 +352,9 @@ class AutomaticScanServices:
         self._duplicate_verifier.clear_cache()
         return groups
 
-    def get_face_analysis_cached(self, record: DiscoveryRecord) -> list[DetectedFace] | None:
-        return self._analysis_cache.get(record.path, record.file_size, record.mtime_ns)
+    def get_face_analysis_cached(self, record: DiscoveryRecord, *, connection=None) -> list[DetectedFace] | None:
+        return self._analysis_cache.get(record.path, record.file_size, record.mtime_ns,
+                                        connection=connection)
 
     def analyze_faces(self, record: DiscoveryRecord, *, cancellation_token=None) -> list[DetectedFace]:
         image = default_image_loader.load_for_detection(record.path)
@@ -414,6 +417,8 @@ class AutomaticScanServices:
     def get_embedded_faces_cached(
         self,
         record: DiscoveryRecord,
+        *,
+        connection=None,
     ) -> list[EmbeddedFace] | None:
         return self._face_scan_cache.get(
             record.path,
@@ -421,6 +426,7 @@ class AutomaticScanServices:
             record.mtime_ns,
             include_unknown_faces=True,
             require_analysis=True,
+            connection=connection,
         )
 
     def embed_faces(
@@ -474,10 +480,17 @@ class AutomaticScanServices:
         *,
         minimum_embedding_utility: float,
         prealigned_faces_by_path: dict[str, dict[int, np.ndarray]] | None = None,
+        cancellation_token: CancellationToken | None = None,
+        on_error: Callable[[DiscoveryRecord, Exception], None] | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> dict[str, list[EmbeddedFace]]:
+        class BatchInferenceFailure(RuntimeError):
+            pass
+
         batch_size = self.embedding_batch_size()
         pending_aligned = []
         pending_faces: list[DetectedFace] = []
+        failed_paths: set[str] = set()
         embedded_by_path: dict[str, list[EmbeddedFace]] = {
             str(record.path): []
             for record in records
@@ -487,53 +500,85 @@ class AutomaticScanServices:
             nonlocal pending_aligned, pending_faces
             if not pending_aligned:
                 return
-            embedded_faces = self._face_embedder.embed_aligned_faces(
-                pending_aligned,
-                pending_faces,
-            )
+            if cancellation_token is not None:
+                cancellation_token.raise_if_canceled()
+            try:
+                embedded_faces = self._face_embedder.embed_aligned_faces(
+                    pending_aligned,
+                    pending_faces,
+                )
+            except ScanCancelledError:
+                raise
+            except Exception as exc:
+                raise BatchInferenceFailure("Face embedding batch failed") from exc
+            if cancellation_token is not None:
+                cancellation_token.raise_if_canceled()
             for embedded_face in embedded_faces:
                 embedded_by_path[str(embedded_face.path)].append(embedded_face)
             pending_aligned = []
             pending_faces = []
 
-        for record in records:
-            faces = [
-                face
-                for face in faces_by_path.get(str(record.path), [])
-                if face.analysis is not None
-                and face.analysis.embedding_utility_score >= minimum_embedding_utility
-            ]
-            if not faces:
-                continue
-            aligned_faces_by_index = (
-                prealigned_faces_by_path.pop(str(record.path), None)
-                if prealigned_faces_by_path is not None
-                else None
-            )
-            if aligned_faces_by_index is not None and all(
-                face.index is not None and int(face.index) in aligned_faces_by_index
-                for face in faces
-            ):
-                aligned_faces = [
-                    aligned_faces_by_index[int(face.index)]
-                    for face in faces
+        for index, record in enumerate(records, 1):
+            if cancellation_token is not None:
+                cancellation_token.raise_if_canceled()
+            path = str(record.path)
+            try:
+                faces = [
+                    face for face in faces_by_path.get(path, [])
+                    if face.analysis is not None
+                    and face.analysis.embedding_utility_score >= minimum_embedding_utility
                 ]
-            else:
-                image = default_image_loader.load_for_detection(record.path)
-                if image is None:
-                    raise ValueError(f"Could not decode image for face embedding: {record.path}")
-                aligned_faces = self._face_embedder.align_requests(
-                    [(image, face) for face in faces]
-                )
-            for face, aligned in zip(faces, aligned_faces):
-                pending_faces.append(face)
-                pending_aligned.append(aligned)
-                if len(pending_aligned) >= batch_size:
-                    flush()
+                if faces:
+                    aligned_faces_by_index = (
+                        prealigned_faces_by_path.pop(path, None)
+                        if prealigned_faces_by_path is not None else None
+                    )
+                    image = None
+                    if aligned_faces_by_index is None or not all(
+                        face.index is not None and int(face.index) in aligned_faces_by_index
+                        for face in faces
+                    ):
+                        image = default_image_loader.load_for_detection(record.path)
+                        if image is None:
+                            raise ValueError(f"Could not decode image for face embedding: {record.path}")
+                    # Align only one bounded chunk at a time. A photograph with
+                    # many faces must not retain every decoded crop in memory.
+                    for offset in range(0, len(faces), batch_size):
+                        if cancellation_token is not None:
+                            cancellation_token.raise_if_canceled()
+                        chunk = faces[offset:offset + batch_size]
+                        aligned = (
+                            [aligned_faces_by_index[int(face.index)] for face in chunk]
+                            if image is None else
+                            self._face_embedder.align_requests([(image, face) for face in chunk])
+                        )
+                        if len(aligned) != len(chunk):
+                            raise ValueError("Face alignment returned an incomplete batch")
+                        for face, crop in zip(chunk, aligned):
+                            pending_faces.append(face)
+                            pending_aligned.append(crop)
+                            if len(pending_aligned) >= batch_size:
+                                flush()
+            except ScanCancelledError:
+                raise
+            except BatchInferenceFailure:
+                raise
+            except Exception as exc:
+                if on_error is None:
+                    raise
+                failed_paths.add(path)
+                on_error(record, exc)
+            if on_progress is not None:
+                on_progress(index - 1, len(records))
 
         flush()
 
         for record in records:
+            if cancellation_token is not None:
+                cancellation_token.raise_if_canceled()
+            if str(record.path) in failed_paths:
+                embedded_by_path.pop(str(record.path), None)
+                continue
             self._face_scan_cache.put(
                 record.path,
                 record.file_size,
@@ -544,6 +589,8 @@ class AutomaticScanServices:
                 height=record.height,
                 is_raw=record.extension not in {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"},
             )
+        if on_progress is not None:
+            on_progress(len(records), len(records))
         return embedded_by_path
 
     def recognize_faces(

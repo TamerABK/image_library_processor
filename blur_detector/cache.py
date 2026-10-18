@@ -28,10 +28,12 @@ class BlurScanCache:
         path: Path,
         file_size: int,
         mtime_ns: int,
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> "BlurResult" | None:
         from .blur_detector import BlurResult
 
-        with self._connect() as connection:
+        with self._storage.using_connection(connection) as connection:
             row = connection.execute(
                 """
                 SELECT
