@@ -16,10 +16,26 @@ from ui.qt.thumbnails import ThumbnailService
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
+_PYSIDE6_FONT_WARNING_PREFIX = "QFontDatabase: Cannot find font directory "
+
+
+def is_benign_qt_test_warning(message: str) -> bool:
+    if not message.startswith(_PYSIDE6_FONT_WARNING_PREFIX):
+        return False
+    directory = message[len(_PYSIDE6_FONT_WARNING_PREFIX):].splitlines()[0]
+    return directory.strip().rstrip(".").replace("\\", "/").endswith("/PySide6/lib/fonts")
+
+
+def is_unexpected_qt_test_message(kind: QtMsgType, message: str) -> bool:
+    if kind not in (QtMsgType.QtWarningMsg, QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+        return False
+    return kind != QtMsgType.QtWarningMsg or not is_benign_qt_test_warning(message)
+
+
 def capture_qt_warnings(test):
     messages = []
     def capture(kind, context, message):
-        if kind in (QtMsgType.QtWarningMsg, QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+        if is_unexpected_qt_test_message(kind, message):
             messages.append(message)
     previous = qInstallMessageHandler(capture)
     test.addCleanup(lambda: qInstallMessageHandler(previous))
@@ -33,6 +49,23 @@ def wait_until(predicate, timeout=3):
         time.sleep(0.005)  # Yield Python's GIL to decoder/import work as well as Qt.
     if not predicate():
         raise AssertionError("Timed out waiting for asynchronous result")
+
+
+class QtWarningFilterTests(unittest.TestCase):
+    def test_only_pyside6_default_font_directory_warning_is_ignored(self):
+        known = ("QFontDatabase: Cannot find font directory "
+                 "C:/project/.venv/Lib/site-packages/PySide6/lib/fonts.\n"
+                 "Note that Qt no longer ships fonts...")
+        self.assertTrue(is_benign_qt_test_warning(known))
+        self.assertFalse(is_unexpected_qt_test_message(QtMsgType.QtWarningMsg, known))
+        self.assertTrue(is_unexpected_qt_test_message(
+            QtMsgType.QtWarningMsg, "QML: Failed to load component"))
+        self.assertTrue(is_unexpected_qt_test_message(
+            QtMsgType.QtWarningMsg,
+            "QFontDatabase: Cannot find font directory C:/project/assets/fonts."))
+        for kind in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+            with self.subTest(kind=kind):
+                self.assertTrue(is_unexpected_qt_test_message(kind, known))
 
 
 class ThumbnailTests(unittest.TestCase):
