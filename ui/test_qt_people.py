@@ -365,7 +365,7 @@ class PeopleFlowTests(unittest.TestCase):
         grid = self.item("peopleGrid")
         self.assertEqual(grid.property("viewSize"), "Small")
         self.assertEqual(self.item("peopleCard").property("title"), "")
-        self.assertEqual(self.item("peopleCard").property("subtitle"), "1 photo")
+        self.assertEqual(self.item("peopleCard").property("subtitle"), "1 photo · 1 face")
         self.assertEqual(self.item("personCardName").property("normalFill").name(), "#d7f205")
         self.assertEqual(self.item("personCardIgnore").property("normalFill").name(), "#d7f205")
         for name in ("personCardName", "personCardIgnore"):
@@ -460,6 +460,59 @@ class PeopleFlowTests(unittest.TestCase):
         self.people._drain()
         self.assertEqual((self.people.knownCount, self.people.unknownCount), (0, 0))
         self.assertEqual(self.people._folder, str(second))
+
+    def test_retry_advances_people_generation_and_drops_old_review_result(self):
+        self.publish()
+        key = self.people.unknownModel._all[0]["key"]
+        self.people.openUnknown(key)
+        old_session = self.processing.sessionId
+        old_cancellation = self.people._canceled
+        self.processing._stages["people"] = dict(state="FAILED", done=0, total=0,
+            error="People matching is unavailable.")
+        self.processing._overall = "FAILED"
+        self.processing.changed.emit()
+        self.assertEqual(self.people.state, "FAILED")
+        self.people._results.put(dict(session=old_session, folder=str(self.folder), key=key,
+            operation="new", error="", person_id=99, name="Stale result"))
+        self.people._pending = 1
+        observed = []
+        self.processing.sessionChanged.connect(lambda: observed.append(
+            (self.processing.sessionId, self.processing.stage("people")["state"])))
+
+        self.processing.retry()
+
+        self.assertEqual(self.processing.sessionId, old_session + 1)
+        self.assertEqual(observed, [(old_session + 1, "FAILED")])
+        self.assertEqual(self.people._session, self.processing.sessionId)
+        self.assertTrue(old_cancellation.is_set())
+        self.assertEqual(self.people._pending, 0)
+        self.assertEqual(self.people.state, "QUEUED")
+        self.assertEqual((self.people.knownModel.totalCount,
+                          self.people.unknownModel.totalCount), (0, 0))
+        self.assertFalse(self.people.selectedKnown)
+        self.assertFalse(self.people.selectedUnknown)
+        self.assertEqual(self.people.detailPhotoModel.rowCount(), 0)
+        self.people._drain()
+        self.assertEqual((self.people.knownModel.totalCount,
+                          self.people.unknownModel.totalCount), (0, 0))
+        self.assertEqual(self.people._pending, 0)
+
+    def test_known_suggestion_uses_recognition_threshold(self):
+        similarity = CosineEmbeddingSimilarity()
+        self.assertEqual(similarity.default_threshold, 0.60)
+        self.publish()
+        key = self.people.unknownModel._all[0]["key"]
+        for score, expected in ((0.59, {}), (0.61, {"name": "Alex"})):
+            with self.subTest(score=score):
+                embedding = vector(0) * score + vector(1) * np.sqrt(1 - score * score)
+                self.cache_face(self.unknown_photo, embedding, (20, 20, 50, 50))
+                self.people.openUnknown(key)
+                wait_until(lambda: self.people._pending == 0)
+                for field, value in expected.items():
+                    self.assertEqual(self.people.suggestion.get(field), value)
+                if not expected:
+                    self.assertEqual(self.people.suggestion, {})
+                self.people.back()
 
     def test_inflight_name_is_canceled_on_project_switch(self):
         self.publish()

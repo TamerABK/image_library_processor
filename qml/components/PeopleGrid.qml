@@ -66,8 +66,8 @@ GridView {
             anchors.fill: parent
             title: root.known ? delegateRoot.name : ""
             subtitle: delegateRoot.photoCount + (delegateRoot.photoCount === 1 ? " photo" : " photos")
-                + (root.known ? " · " + delegateRoot.faceCount
-                    + (delegateRoot.faceCount === 1 ? " face" : " faces") : "")
+                + " · " + delegateRoot.faceCount
+                + (delegateRoot.faceCount === 1 ? " face" : " faces")
             previewSource: delegateRoot.previewSource
             ignored: delegateRoot.ignored
             showIgnore: !root.known

@@ -86,13 +86,14 @@ def _review_worker(tasks, results, stop, cache_path, database_path, state_root):
                 result["ignored"] = bool(value)
             else:
                 selected = _cached_cluster_faces(FaceScanCache(cache_path), faces, canceled)
-                database = SQLiteFaceDatabase(database_path, CosineEmbeddingSimilarity())
+                similarity = CosineEmbeddingSimilarity()
+                database = SQLiteFaceDatabase(database_path, similarity)
                 if operation == "suggest":
                     match = database.find_nearest_embedding(selected[0].embedding)
                     person = database.get_person(match.person_id) if match else None
                     result["suggestion"] = ({"name": person.name, "personId": person.id,
                                               "score": round(match.score, 3)}
-                                             if person and match.score > 0 else {})
+                                             if person and match.score >= similarity.default_threshold else {})
                 else:
                     if canceled.is_set():
                         continue

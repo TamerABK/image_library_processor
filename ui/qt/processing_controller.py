@@ -168,6 +168,7 @@ class ProjectProcessingController(QObject):
         self._session += 1
         self._token = CancellationToken()
         self._lifecycle["token"] = self._token
+        self.sessionChanged.emit()
         self._schedule()
 
     @Slot()
