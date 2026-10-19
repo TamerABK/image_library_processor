@@ -31,13 +31,56 @@ Install exactly one ONNX Runtime distribution in a clean environment:
 `onnxruntime-gpu` and `onnxruntime-directml` together. The selected interpreter
 must be the one that starts Room 36.
 
-`Room36.spec` uses `build_support/onnx_packaging.py` and the custom ONNX hook to
-collect native files from the single installed runtime distribution. Set
-`ROOM36_ONNX_BUILD_PROFILE=cpu|cuda|directml` to require a matching build. Model
-files must be present under `onnx_models` for packaging. After building, run
-`python -m build_support.validate_onnx_package <distribution> --profile <profile>`;
-the validator launches the frozen executable and rejects source-Python or CPU
-fallback masquerading as accelerator success.
+## Building Room 36 releases
+
+| Build | Spec | Requirements | Expected EP |
+| --- | --- | --- | --- |
+| CPU | `Room36-cpu.spec` | `requirements-cpu.txt` | `CPUExecutionProvider` |
+| NVIDIA | `Room36-cuda.spec` | `requirements-cuda.txt` | `CUDAExecutionProvider` |
+| AMD/Windows | `Room36-directml.spec` | `requirements-windows-directml.txt` | `DmlExecutionProvider` |
+
+Build each release from a separate clean Python 3.12 environment containing
+exactly one ORT distribution. The release spec fixes its profile and rejects a
+conflicting `ROOM36_ONNX_BUILD_PROFILE` override. `Room36.spec` remains a
+developer/auto build; use the three named specs for releases. Run these commands
+from the repository root in PowerShell:
+
+```powershell
+py -3.12 -m venv .venv-cpu
+.\.venv-cpu\Scripts\Activate.ps1
+pip install -r requirements-cpu.txt
+pip install pyinstaller
+pyinstaller --clean Room36-cpu.spec
+python -m build_support.validate_onnx_package dist\Room36-CPU --profile cpu
+```
+
+```powershell
+py -3.12 -m venv .venv-cuda
+.\.venv-cuda\Scripts\Activate.ps1
+pip install -r requirements-cuda.txt
+pip install pyinstaller
+pyinstaller --clean Room36-cuda.spec
+python -m build_support.validate_onnx_package dist\Room36-CUDA --profile cuda
+```
+
+```powershell
+py -3.12 -m venv .venv-directml
+.\.venv-directml\Scripts\Activate.ps1
+pip install -r requirements-windows-directml.txt
+pip install pyinstaller
+pyinstaller --clean Room36-directml.spec
+python -m build_support.validate_onnx_package dist\Room36-DirectML --profile directml
+```
+
+Before building, place the production ONNX files under `onnx_models/`, including
+`open_closed_eye.onnx`, `scrfd_10g_bnkps.onnx`, `glintr100.onnx`, and
+`sixdrepnet.onnx`. The spec discovers the other model assets automatically and
+bundles `qml/` and `assets/` once each. CUDA builds can additionally bundle DLLs
+from `gpu_runtime_dll/` (or `GPU_RUNTIME_DLL_DIR`); CPU and DirectML builds never
+use that folder. Build acceptance checks the manifest and native files, launches
+the frozen `Room36.exe`, runs real bundled-model inference, and rejects CPU
+fallback for accelerator profiles. CUDA and DirectML acceptance require their
+respective GPU hardware, drivers, and runtime DLLs.
 
 Provider-policy tests use mocked runtimes and run on any host. Native accelerator
 acceptance requires the target GPU, driver, and packaged runtime.

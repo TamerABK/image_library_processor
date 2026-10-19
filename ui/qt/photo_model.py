@@ -91,6 +91,17 @@ class PhotoListModel(QAbstractListModel):
         index = self._positions.get(identity)
         return self._rows[index] if index is not None else None
 
+    @Slot(str, result="QVariantMap")
+    def photo(self, identity):
+        row = self._row(identity)
+        if row is None:
+            return {}
+        return {"photoId": row.identity, "filename": Path(row.identity).name,
+                "revision": row.revision, "title": row.title, "detail": row.detail}
+
+    def identities(self):
+        return [row.identity for row in self._rows]
+
     def _changed(self, row, *roles):
         index = self.index(self._positions[row.identity])
         self.dataChanged.emit(index, index, [self.ROLE[name] for name in roles])

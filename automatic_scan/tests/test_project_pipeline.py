@@ -354,6 +354,20 @@ class ProjectPipelineTests(unittest.TestCase):
         self.assertEqual(3, stats["embeddings"]["cache_hits"])
         self.assertEqual(1, stats["people"]["aggregate_reused"])
 
+        # A metadata review changes only the People aggregate key. Cached
+        # per-photo detection and embedding results remain reusable.
+        other_vector = np.zeros(512, dtype=np.float32)
+        other_vector[1] = 1
+        database.assign_embeddings([other_vector], name="New known person")
+        with patch.object(self.service, "analyze_faces", side_effect=AssertionError("recomputed faces")), \
+             patch.object(self.service, "embed_faces", side_effect=AssertionError("recomputed embeddings")):
+            stats = self.run_project([self.path, known, other])
+        self.assertEqual(3, stats["faces"]["cache_hits"])
+        self.assertEqual(3, stats["embeddings"]["cache_hits"])
+        self.assertEqual(0, stats["people"].get("aggregate_reused", 0))
+        self.assertEqual(3, len(self.event("people")[5]["known"]))
+        self.assertEqual([], self.event("people")[5]["unknown"])
+
     def test_unknown_face_limit_fails_only_people_stage(self):
         from face_processing.models import EmbeddedFace
 

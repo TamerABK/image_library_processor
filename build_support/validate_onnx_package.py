@@ -7,11 +7,16 @@ import os
 from pathlib import Path
 import subprocess
 
-from build_support.onnx_packaging import validate_native_components
+from build_support.onnx_packaging import EXPECTED_PROVIDERS, validate_native_components
+from build_support.room36_spec import REQUIRED_MODELS
 
 
 def validate_package(distribution: Path, profile: str, *, models=("eye",)) -> dict:
+    if profile not in EXPECTED_PROVIDERS:
+        raise ValueError("Unknown ONNX build profile: " + profile)
     distribution = distribution.resolve()
+    if not distribution.is_dir():
+        raise RuntimeError("Distribution directory does not exist: " + str(distribution))
     executables = list(distribution.rglob("Room36.exe"))
     if len(executables) != 1:
         raise RuntimeError("Expected exactly one packaged Room36.exe.")
@@ -21,6 +26,15 @@ def validate_package(distribution: Path, profile: str, *, models=("eye",)) -> di
     manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
     if manifest["profile"] != profile:
         raise RuntimeError("Packaged build profile does not match acceptance target.")
+    if manifest.get("expected_provider") != EXPECTED_PROVIDERS[profile]:
+        raise RuntimeError("Packaged expected provider does not match acceptance target.")
+    for folder in ("qml", "assets", "onnx_models"):
+        if not any(path.is_dir() for path in distribution.rglob(folder)):
+            raise RuntimeError("Packaged application resource directory is missing: " + folder)
+    model_dir = next(path for path in distribution.rglob("onnx_models") if path.is_dir())
+    missing_models = [name for name in REQUIRED_MODELS if not (model_dir / name).is_file()]
+    if missing_models:
+        raise RuntimeError("Packaged production models are missing: " + ", ".join(missing_models))
     native = validate_native_components(
         [path for path in distribution.rglob("*") if path.is_file()],
         profile, manifest["native_components"])
@@ -54,8 +68,7 @@ def validate_package(distribution: Path, profile: str, *, models=("eye",)) -> di
                                report.get("error", "unknown failure"))
         if report.get("build_profile") != profile:
             raise RuntimeError("Frozen runtime profile mismatch.")
-        expected = {"directml": "DmlExecutionProvider", "cuda": "CUDAExecutionProvider",
-                    "cpu": "CPUExecutionProvider"}[profile]
+        expected = EXPECTED_PROVIDERS[profile]
         if expected not in report["available_providers"] or report["test_model_provider"] != expected:
             raise RuntimeError("Packaged provider acceptance failed; CPU fallback is not accepted.")
         reports.append(report)

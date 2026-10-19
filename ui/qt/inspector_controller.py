@@ -7,6 +7,7 @@ class PhotoInspectorController(QObject):
 
     def __init__(self, model, previews, parent=None):
         super().__init__(parent)
+        self._default_model = model
         self._model, self._previews = model, previews
         self._order, self._tickets = [], {}
         self._position = -1
@@ -41,6 +42,16 @@ class PhotoInspectorController(QObject):
     @Slot(str)
     def open(self, identity):
         self._assert_owner()
+        self._model = self._default_model
+        self._open(identity)
+
+    @Slot(QObject, str)
+    def openFromModel(self, model, identity):
+        self._assert_owner()
+        self._model = model
+        self._open(identity)
+
+    def _open(self, identity):
         order = self._model.identities()
         if identity not in order:
             return
@@ -65,7 +76,7 @@ class PhotoInspectorController(QObject):
         for i in indices:
             identity = self._order[i]
             photo = self._model.photo(identity)
-            revision = f"{photo['file_size']}:{photo['mtime_ns']}"
+            revision = photo.get("revision", f"{photo.get('file_size', 0)}:{photo.get('mtime_ns', 0)}")
             ticket = self._previews.request(identity, 1600, revision)
             if ticket:
                 self._tickets[ticket] = identity
@@ -100,5 +111,6 @@ class PhotoInspectorController(QObject):
         self._assert_owner()
         self._cancel()
         self._order, self._position = [], -1
+        self._model = self._default_model
         self._source, self._state = "", "idle"
         self.changed.emit()

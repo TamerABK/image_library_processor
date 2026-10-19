@@ -9,6 +9,7 @@ FocusScope {
     objectName: "photoInspector"
     property var controller: null
     property Component detailsComponent: null
+    property bool showReviewActions: true
     readonly property var photo: controller ? controller.photo : ({})
     signal reviewRequested(string identity, string intent)
     Room36Theme.Theme { id: theme }
@@ -107,18 +108,21 @@ FocusScope {
             PrimaryButton {
                 objectName: "inspectorKeep"
                 text: "Keep"
+                visible: root.showReviewActions
                 onClicked: root.reviewRequested(root.photo.photoId, "KEEP")
                 Accessible.name: "Keep photo"
             }
             PrimaryButton {
                 objectName: "inspectorReview"
                 text: "Review"
+                visible: root.showReviewActions
                 onClicked: root.reviewRequested(root.photo.photoId, "REVIEW")
                 Accessible.name: "Mark photo for review"
             }
             PrimaryButton {
                 objectName: "inspectorRemove"
                 text: "Remove"
+                visible: root.showReviewActions
                 onClicked: root.reviewRequested(root.photo.photoId, "REMOVE")
                 Accessible.name: "Mark photo for future removal"
             }

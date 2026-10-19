@@ -99,6 +99,14 @@ class ProjectProcessingController(QObject):
     def message(self):
         return self._message
 
+    @Property(str, notify=changed)
+    def projectFolder(self):
+        return self._folder
+
+    @Property(int, notify=sessionChanged)
+    def sessionId(self):
+        return self._session
+
     @Property("QVariantList", notify=changed)
     def stages(self):
         return [dict(stage=k, label=self.LABELS[k], **v) for k, v in self._stages.items()]
@@ -192,6 +200,15 @@ class ProjectProcessingController(QObject):
                                 row["reviewState"] = previous["reviewState"]
                         self._blur.set_results(data)
             self.changed.emit()
+
+    def replace_people_result(self, payload):
+        """Apply a completed metadata review without scheduling processing."""
+        self._assert_owner()
+        if self._stages.get("people", {}).get("state") != "COMPLETE":
+            return False
+        self.results["people"] = payload
+        self.changed.emit()
+        return True
 
     @Slot(str, str, result=bool)
     def setReview(self, identity, intent):

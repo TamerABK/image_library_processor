@@ -154,7 +154,7 @@ class ProjectFlowTests(unittest.TestCase):
             self.click("libraryNav_" + route)
             self.assertEqual(route, self.item("libraryShell").property("currentRoute"))
             for name in ("librarySortButton", "libraryViewButton"):
-                self.assertEqual(route == "library", self.item(name).property("enabled"))
+                self.assertEqual(route != "duplicates", self.item(name).property("enabled"))
         self.click("librarySidebarHome")
         self.assertEqual("home", self.window.property("currentPage"))
         self.click("projectMenuButton")

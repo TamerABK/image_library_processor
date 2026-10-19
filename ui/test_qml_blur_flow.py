@@ -85,7 +85,12 @@ class BlurFlowTests(unittest.TestCase):
         self.create()
         self.assertTrue(self.processing.overallState in ("QUEUED", "RUNNING", "COMPLETE"))
         self.blur()
-        self.click("gridPhotoCard")
+        self.click("photoCardImage")
+        self.assertEqual(1, self.processing.blurModel.selectedCount)
+        self.assertFalse(self.inspector.opened)
+        self.click("photoCardImage")
+        self.assertEqual(0, self.processing.blurModel.selectedCount)
+        self.click("photoCardFooter")
         self.assertTrue(self.inspector.opened)
         wait_until(lambda: self.inspector.previewState == "ready")
         identity = self.inspector.photo["photoId"]
@@ -105,7 +110,7 @@ class BlurFlowTests(unittest.TestCase):
         self.assertFalse(self.inspector.opened)
         self.assertEqual("REMOVE", self.processing.blurModel.photo(identity)["reviewState"])
         self.assertTrue(any("Remove" in card.property("badgeText") for card in self.items("gridPhotoCard")))
-        self.click("gridPhotoCard")
+        self.click("photoCardFooter")
         QTest.keyClick(self.window, Qt.Key.Key_Escape)
         self.assertFalse(self.inspector.opened)
         self.assertEqual("blurry", self.item("libraryShell").property("currentRoute"))
@@ -148,7 +153,7 @@ class BlurFlowTests(unittest.TestCase):
     def test_inspector_responsive_controls_and_aspect_ratio(self):
         self.create()
         self.blur()
-        self.click("gridPhotoCard")
+        self.click("photoCardFooter")
         wait_until(lambda: self.inspector.previewState == "ready")
         for width, height in ((1280, 720), (1440, 900), (1920, 1080)):
             self.window.setWidth(width)
@@ -197,6 +202,18 @@ class BlurFlowTests(unittest.TestCase):
         self.click("blurFilter")
         self.click("toolbarDropdownOption_Review")
         self.assertEqual("Review", self.processing.blurModel.classificationFilter)
+
+    def test_topbar_sort_and_view_control_blur_grid(self):
+        self.create()
+        self.blur()
+        self.assertTrue(self.item("librarySortButton").property("enabled"))
+        self.assertTrue(self.item("libraryViewButton").property("enabled"))
+        self.click("librarySortButton")
+        self.click("toolbarDropdownOption_Least problematic first")
+        self.assertEqual(self.processing.blurModel.sortOrder, "Least problematic first")
+        self.click("libraryViewButton")
+        self.click("toolbarDropdownOption_Large")
+        self.assertEqual(self.item("photoGrid").property("viewSize"), "Large")
 
     def test_ten_thousand_candidates_stay_virtualized(self):
         self.create()

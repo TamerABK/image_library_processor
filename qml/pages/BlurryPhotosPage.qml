@@ -10,6 +10,7 @@ Item {
     objectName: "blurryPhotosPage"
     property var processing: null
     property var inspector: null
+    property string viewSize: "Medium"
     readonly property var blurStage: processing && processing.stages.length > 0
         ? processing.stages[0] : ({state: "NOT_STARTED", error: ""})
     Room36Theme.Theme { id: theme }
@@ -82,7 +83,9 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             photoModel: root.processing ? root.processing.blurModel : null
+            viewSize: root.viewSize
             openOnClick: true
+            selectOnImageClick: true
             emptyText: root.blurStage.state === "FAILED" ? "Image quality analysis could not finish."
                 : root.blurStage.state === "COMPLETE" ? "No blurry photos need review."
                 : "Analyzing image quality…"

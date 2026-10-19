@@ -120,6 +120,46 @@ class SQLiteFaceDatabase(FaceDatabase):
             embedding=np.asarray(embedding, dtype=np.float32).copy(),
         )
 
+    def assign_embeddings(self, embeddings, *, name: str | None = None,
+                          person_id: int | None = None, canceled=None) -> Person:
+        """Assign cached cluster vectors atomically to a new or existing person."""
+        if (name is None) == (person_id is None):
+            raise ValueError("Choose either a name or an existing person.")
+        serialized = [self._serialize_embedding(value) for value in embeddings]
+        if not serialized:
+            raise ValueError("No cached face embeddings are available.")
+        with self._connect() as connection:
+            if person_id is None:
+                normalized_name = name.strip()
+                if not normalized_name:
+                    raise ValueError("Person name cannot be empty.")
+                # SQLite NOCASE covers ASCII. Python casefold also avoids duplicate
+                # Unicode names that differ only in case.
+                rows = connection.execute("SELECT id, name FROM persons").fetchall()
+                row = next((item for item in rows
+                            if item["name"].casefold() == normalized_name.casefold()), None)
+                if row is None:
+                    connection.execute("INSERT OR IGNORE INTO persons (name) VALUES (?)",
+                                       (normalized_name,))
+                    row = connection.execute(
+                        "SELECT id, name FROM persons WHERE name = ? COLLATE NOCASE",
+                        (normalized_name,)).fetchone()
+            else:
+                row = connection.execute("SELECT id, name FROM persons WHERE id=?",
+                                         (person_id,)).fetchone()
+            if row is None:
+                raise ValueError("The selected known person is no longer available.")
+            for value in serialized:
+                if canceled is not None and canceled.is_set():
+                    raise ValueError("People review was canceled.")
+                connection.execute("INSERT INTO embeddings (person_id, embedding) VALUES (?,?)",
+                                   (row["id"], value))
+            if canceled is not None and canceled.is_set():
+                raise ValueError("People review was canceled.")
+        self._invalidate_people_cache()
+        self._invalidate_embedding_cache()
+        return Person(id=row["id"], name=row["name"])
+
     def find_nearest_embedding(
         self,
         embedding: np.ndarray,
@@ -158,6 +198,9 @@ class SQLiteFaceDatabase(FaceDatabase):
             if self._people_names_cache is None:
                 self._people_by_id()
             return list(self._people_names_cache or [])
+
+    def list_people(self) -> list[Person]:
+        return list(self._people_by_id().values())
 
     def _initialize(self) -> None:
         with self._connect() as connection:

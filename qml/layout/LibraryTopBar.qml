@@ -10,6 +10,7 @@ Item {
     property string projectName: ""
     property string pageTitle: "Library"
     property bool libraryControlsEnabled: true
+    property var sortOptions: ["Name A–Z", "Name Z–A"]
     signal homeRequested()
     signal sortRequested(string option)
     signal viewSizeRequested(string option)
@@ -64,7 +65,7 @@ Item {
             label: "Sort by"
             iconSource: theme.iconUrl("sort.svg")
             normalFill: theme.neonGreen
-            options: ["Name A–Z", "Name Z–A"]
+            options: root.sortOptions
             onOptionSelected: function(option) { root.sortRequested(option) }
         }
 

@@ -300,8 +300,14 @@ class PackagingContractTests(unittest.TestCase):
             folder = Path(tmp)
             (folder / "Room36.exe").touch()
             (folder / "onnxruntime_pybind11_state.pyd").touch()
+            for resource in ("qml", "assets", "onnx_models"):
+                (folder / resource).mkdir()
+            for model in ("open_closed_eye.onnx", "scrfd_10g_bnkps.onnx",
+                          "glintr100.onnx", "sixdrepnet.onnx"):
+                (folder / "onnx_models" / model).touch()
             (folder / "onnx_build_profile.json").write_text(
-                '{"profile":"cpu","native_components":["onnxruntime_pybind11_state.pyd"]}')
+                '{"profile":"cpu","expected_provider":"CPUExecutionProvider",'
+                '"native_components":["onnxruntime_pybind11_state.pyd"]}')
             process = SimpleNamespace(returncode=0, stdout='{"frozen":false,"test_inference":"PASS"}')
             with patch("build_support.validate_onnx_package.subprocess.run", return_value=process):
                 with self.assertRaisesRegex(RuntimeError, "development Python"):

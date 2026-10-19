@@ -76,6 +76,9 @@ class LibraryShellTests(unittest.TestCase):
             self.assertEqual(route, shell.property("currentRoute"))
             if route == "library":
                 self.assertIsNotNone(self.item("photoGrid"))
+            elif route in ("knownPeople", "unknownPeople"):
+                page = "knownPeoplePage" if route == "knownPeople" else "unknownPeoplePage"
+                self.assertIsNotNone(self.item(page))
             else:
                 self.assertEqual(route, self.item("libraryRoutePlaceholder").property("routeId"))
             self.assertIs(shell, self.page())

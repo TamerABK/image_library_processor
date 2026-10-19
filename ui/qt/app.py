@@ -18,6 +18,8 @@ from .project_controller import ProjectController
 from .processing_controller import ProjectProcessingController
 from .inspector_controller import PhotoInspectorController
 from .previews import PreviewService
+from .face_previews import FacePreviewService
+from .people_controller import PeopleController
 
 
 _VALID_START_PAGES = {"loading", "auth", "home", "library", "gallery"}
@@ -62,6 +64,8 @@ def run_app() -> int:
     thumbnails = ThumbnailService(parent=application)
     photo_model = PhotoListModel(thumbnails, parent=application)
     processing = ProjectProcessingController(thumbnails, parent=application)
+    face_previews = FacePreviewService(parent=application)
+    people = PeopleController(processing, face_previews, thumbnails, parent=application)
     previews = PreviewService(parent=application)
     inspector = PhotoInspectorController(processing.blurModel, previews, parent=application)
     processing.sessionChanged.connect(inspector.close)
@@ -69,6 +73,8 @@ def run_app() -> int:
     application.aboutToQuit.connect(projects.shutdown)
     application.aboutToQuit.connect(inspector.close)
     application.aboutToQuit.connect(processing.shutdown)
+    application.aboutToQuit.connect(people.shutdown)
+    application.aboutToQuit.connect(face_previews.shutdown)
     application.aboutToQuit.connect(previews.shutdown)
     application.aboutToQuit.connect(photo_model.close)
     application.aboutToQuit.connect(thumbnails.shutdown)
@@ -80,6 +86,7 @@ def run_app() -> int:
             "photoModel": photo_model,
             "projectController": projects,
             "processingController": processing,
+            "peopleController": people,
             "inspectorController": inspector,
             "startPage": _start_page_from_environment(),
             "useHomePreviewData": _home_preview_data_from_environment(),
@@ -96,6 +103,8 @@ def run_app() -> int:
         projects.shutdown()
         inspector.close()
         processing.shutdown()
+        people.shutdown()
+        face_previews.shutdown()
         previews.shutdown()
         photo_model.close()
         thumbnails.shutdown()

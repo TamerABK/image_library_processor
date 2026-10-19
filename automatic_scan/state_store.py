@@ -89,6 +89,24 @@ class AutomaticStateStore:
             return state
         return FolderAutomaticState(folder=key)
 
+    def ignored_clusters(self, folder: str | Path) -> set[str]:
+        key = str(Path(folder).resolve())
+        with self._database.connect() as db:
+            return {row[0] for row in db.execute(
+                "SELECT cluster_id FROM ignored_unknown_clusters WHERE folder=?", (key,))}
+
+    def set_cluster_ignored(self, folder: str | Path, cluster_id: str, ignored: bool) -> None:
+        """Persist one cluster without rewriting unrelated photo review state."""
+        key = str(Path(folder).resolve())
+        with self._database.connect() as db:
+            if ignored:
+                db.execute("INSERT OR IGNORE INTO folder_state(folder) VALUES (?)", (key,))
+                db.execute("INSERT OR IGNORE INTO ignored_unknown_clusters VALUES (?,?)",
+                           (key, cluster_id))
+            else:
+                db.execute("DELETE FROM ignored_unknown_clusters WHERE folder=? AND cluster_id=?",
+                           (key, cluster_id))
+
     @staticmethod
     def _load_legacy(path: Path, fallback_folder: str | None = None) -> FolderAutomaticState:
         payload = json.loads(path.read_text(encoding="utf-8"))

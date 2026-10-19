@@ -10,6 +10,7 @@ GridView {
     property var photoModel: null
     property string viewSize: "Medium"
     property bool openOnClick: false
+    property bool selectOnImageClick: false
     property string emptyText: "No photos in this library"
     signal photoActivated(string photoId)
     readonly property int columns: Math.max(1, Math.floor(width / (preferredCardWidth + metrics.photoCardHorizontalGap)))
@@ -95,6 +96,15 @@ GridView {
                 if (root.photoModel) root.photoModel.setSelected(delegateRoot.photoId, value)
             }
             onClicked: {
+                if (root.openOnClick) root.photoActivated(delegateRoot.photoId)
+                else if (root.photoModel) root.photoModel.setSelected(delegateRoot.photoId, !delegateRoot.selected)
+            }
+            onImageClicked: {
+                if (root.selectOnImageClick || !root.openOnClick) {
+                    if (root.photoModel) root.photoModel.setSelected(delegateRoot.photoId, !delegateRoot.selected)
+                } else root.photoActivated(delegateRoot.photoId)
+            }
+            onFooterClicked: {
                 if (root.openOnClick) root.photoActivated(delegateRoot.photoId)
                 else if (root.photoModel) root.photoModel.setSelected(delegateRoot.photoId, !delegateRoot.selected)
             }

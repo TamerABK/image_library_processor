@@ -19,6 +19,8 @@ Item {
     readonly property bool hasImageSource: String(source).length > 0
 
     signal clicked()
+    signal imageClicked()
+    signal footerClicked()
     signal selectionToggled(bool selected)
     signal favoriteToggled(bool favorite)
     signal menuRequested()
@@ -32,7 +34,6 @@ Item {
     implicitHeight: metrics.photoCardReferenceHeight
 
     HoverHandler { id: hoverHandler }
-    TapHandler { onTapped: root.clicked() }
 
     Room36Theme.Effects {
         z: -1
@@ -57,6 +58,12 @@ Item {
             anchors.top: parent.top
             height: parent.height - metrics.photoCardFooterHeight
             color: theme.imagePlaceholder
+
+            MouseArea {
+                objectName: "photoCardImage"
+                anchors.fill: parent
+                onClicked: root.imageClicked()
+            }
 
             Loader {
                 id: previewLoader
@@ -130,11 +137,18 @@ Item {
         }
 
         Rectangle {
+            id: footer
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             height: metrics.photoCardFooterHeight
             color: theme.footerFill
+
+            MouseArea {
+                objectName: "photoCardFooter"
+                anchors.fill: parent
+                onClicked: root.footerClicked()
+            }
 
             RowLayout {
                 anchors.fill: parent
