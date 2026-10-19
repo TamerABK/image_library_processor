@@ -7,7 +7,7 @@ from PySide6.QtCore import QAbstractListModel, QModelIndex, Property, QThread, Q
 class DuplicateGroupModel(QAbstractListModel):
     changed = Signal()
     ROLE_NAMES = ("groupId", "photoCount", "representativePhotoId", "recommendedKeeperCount", "reviewed",
-                  "reviewState", "recommendationState", "removeCount", "previewSource")
+                  "hasConflict", "reviewState", "recommendationState", "removeCount", "previewSource")
     ROLES = {int(Qt.ItemDataRole.UserRole) + i + 1: name.encode()
              for i, name in enumerate(ROLE_NAMES)}
     ROLE = {name.decode(): role for role, name in ROLES.items()}
@@ -65,6 +65,9 @@ class DuplicateGroupModel(QAbstractListModel):
 
     def get_row(self, group_id):
         return self._by_id.get(group_id)
+
+    def contains_photo(self, path):
+        return any(path in row["paths"] for row in self._all)
 
     def _refilter(self):
         self._rows = [row for row in self._all if self._filter == "All" or

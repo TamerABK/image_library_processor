@@ -144,7 +144,7 @@ class DuplicateFlowTests(unittest.TestCase):
                          position.toPoint())
         self.app.processEvents()
 
-    def publish(self, *, ranked=True, folder=None):
+    def publish(self, *, ranked=True, folder=None, keeper_count=1):
         self.processing.invalidate()
         self.processing._folder = str(folder or self.folder)
         rows = []
@@ -160,8 +160,8 @@ class DuplicateFlowTests(unittest.TestCase):
             self.processing._stages["ranking"] = dict(state="COMPLETE", done=0, total=0, error="")
             self.processing.results["ranking"] = [dict(group_id=self.group_id,
                 image_paths=[str(path) for path in self.paths],
-                keeper_paths=[str(self.paths[0])],
-                excluded_paths=[str(path) for path in self.paths[1:]],
+                keeper_paths=[str(path) for path in self.paths[:keeper_count]],
+                excluded_paths=[str(path) for path in self.paths[keeper_count:]],
                 ranking={str(self.paths[0]): dict(explanation=["Sharper important faces"])})]
         self.processing.changed.emit()
         self.app.processEvents()
@@ -255,6 +255,100 @@ class DuplicateFlowTests(unittest.TestCase):
         self.assertEqual(self.store.load(self.folder).image_decisions[str(keep)].review_state, "KEEP")
         self.assertEqual(self.store.duplicate_reviews(self.folder), {})
 
+    def test_later_blur_decisions_reopen_review_without_changing_saved_choices(self):
+        for conflicting_path, blur_intent in ((self.paths[1], "KEEP"),
+                                              (self.paths[1], "REVIEW"),
+                                              (self.paths[0], "REMOVE")):
+            with self.subTest(path=conflicting_path.name, intent=blur_intent):
+                self.publish()
+                self.duplicates.openGroup(self.group_id)
+                self.assertTrue(self.duplicates.confirmGroup())
+                wait_until(lambda: not self.duplicates.busy)
+                original = self.store.duplicate_reviews(self.folder)[self.group_id]
+                session = self.processing.sessionId
+                self.assertEqual(self.duplicates.needsReviewCount, 0)
+                self.assertTrue(self.processing.setReview(str(conflicting_path), blur_intent))
+                row = self.duplicates.groupModel.get_row(self.group_id)
+                self.assertTrue(row["persistedReviewed"])
+                self.assertFalse(row["reviewed"])
+                self.assertTrue(row["hasConflict"])
+                self.assertEqual(row["conflictingPaths"], [str(conflicting_path)])
+                self.assertEqual(row["reviewState"], "Decision conflict")
+                self.assertEqual(self.duplicates.needsReviewCount, 1)
+                self.assertEqual(self.duplicates.groupModel.visibleCount, 1)
+                self.duplicates.groupModel.setFilter("Reviewed")
+                self.assertEqual(self.duplicates.groupModel.visibleCount, 0)
+                self.duplicates.groupModel.setFilter("Needs review")
+                self.assertEqual(self.store.duplicate_reviews(self.folder)[self.group_id], original)
+                self.assertEqual(self.store.load(self.folder).image_decisions[
+                    str(conflicting_path)].review_state, blur_intent)
+                self.assertEqual(self.processing.sessionId, session)
+                self.assertTrue(self.processing._tasks.empty())
+                self.click("libraryNav_duplicates")
+                self.assertEqual(self.item("duplicateGroupStatus").property("text"), "Decision conflict")
+                self.assertTrue(self.item("duplicateConflictMessage").property("visible"))
+                self.assertTrue(self.processing.setReview(str(conflicting_path), "UNDECIDED"))
+                row = self.duplicates.groupModel.get_row(self.group_id)
+                self.assertTrue(row["reviewed"])
+                self.assertFalse(row["hasConflict"])
+                self.assertEqual(self.duplicates.needsReviewCount, 0)
+                self.duplicates.groupModel.setFilter("Reviewed")
+                self.assertEqual(self.duplicates.groupModel.visibleCount, 1)
+                self.duplicates.groupModel.setFilter("Needs review")
+                self.assertEqual(self.store.duplicate_reviews(self.folder)[self.group_id], original)
+                self.assertEqual(self.store.load(self.folder).image_decisions[
+                    str(conflicting_path)].review_state, "UNDECIDED")
+
+    def test_multi_keeper_replacement_is_explicit_and_persistent(self):
+        for old_index, expected in ((1, [0, 2]), (0, [1, 2])):
+            with self.subTest(replaced=self.paths[old_index].name):
+                self.publish(keeper_count=2)
+                self.duplicates.openGroup(self.group_id)
+                self.assertTrue(self.duplicates.confirmGroup())
+                wait_until(lambda: not self.duplicates.busy)
+                self.assertFalse(self.duplicates.setKeeper(str(self.paths[2])))
+                self.assertEqual(self.duplicates.selectedGroup["currentKeepers"],
+                                 [str(self.paths[0]), str(self.paths[1])])
+                self.assertTrue(self.duplicates.replaceKeeper(str(self.paths[old_index]),
+                                                              str(self.paths[2])))
+                wait_until(lambda: not self.duplicates.busy)
+                keepers = [str(self.paths[index]) for index in expected]
+                row = self.duplicates.selectedGroup
+                self.assertEqual(row["currentKeepers"], keepers)
+                self.assertEqual(len(row["currentKeepers"]), 2)
+                self.assertTrue(row["reviewed"])
+                self.assertEqual(row["intents"], {str(path): "KEEP" if str(path) in keepers
+                                                   else "REMOVE" for path in self.paths})
+                self.assertEqual(self.store.duplicate_reviews(self.folder)[self.group_id]["keepers"],
+                                 keepers)
+                reopened = DuplicateReviewController(self.processing, self.thumbnails,
+                                                     state_root=self.state_root)
+                try:
+                    self.assertEqual(reopened.groupModel.get_row(self.group_id)["currentKeepers"], keepers)
+                    self.assertTrue(reopened.groupModel.get_row(self.group_id)["reviewed"])
+                finally:
+                    reopened.shutdown()
+                self.assertTrue(all(path.exists() for path in self.paths))
+                if old_index == 1:
+                    self.assertTrue(self.duplicates.replaceKeeper(str(self.paths[2]),
+                                                                  str(self.paths[1])))
+                    wait_until(lambda: not self.duplicates.busy)
+
+    def test_multi_keeper_replacement_rejects_new_blur_conflict(self):
+        self.publish(keeper_count=2)
+        self.duplicates.openGroup(self.group_id)
+        self.assertTrue(self.duplicates.confirmGroup())
+        wait_until(lambda: not self.duplicates.busy)
+        saved = self.store.duplicate_reviews(self.folder)[self.group_id]
+        self.assertTrue(self.processing.setReview(str(self.paths[1]), "KEEP"))
+        self.assertFalse(self.duplicates.replaceKeeper(str(self.paths[1]), str(self.paths[2])))
+        self.assertIn("conflicting", self.duplicates.error)
+        self.assertEqual(self.duplicates.selectedGroup["currentKeepers"],
+                         [str(self.paths[0]), str(self.paths[1])])
+        self.assertEqual(self.store.duplicate_reviews(self.folder)[self.group_id], saved)
+        self.assertEqual(self.store.load(self.folder).image_decisions[
+            str(self.paths[1])].review_state, "KEEP")
+
     def test_retry_and_project_switch_discard_old_review_result(self):
         self.publish()
         self.duplicates.openGroup(self.group_id)
@@ -331,12 +425,7 @@ class DuplicateFlowTests(unittest.TestCase):
             self.assertEqual(self.store.duplicate_reviews(other), {})
 
     def test_qml_remove_restore_and_keeper_count_of_two(self):
-        self.publish()
-        self.processing.results["ranking"] = [dict(group_id=self.group_id,
-            image_paths=[str(path) for path in self.paths],
-            keeper_paths=[str(self.paths[0]), str(self.paths[1])],
-            excluded_paths=[str(self.paths[2])], ranking={})]
-        self.processing.changed.emit()
+        self.publish(keeper_count=2)
         self.click("libraryNav_duplicates")
         self.click("duplicateGroupOpen")
         self.assertEqual(len(self.duplicates.selectedGroup["currentKeepers"]), 2)
@@ -346,10 +435,13 @@ class DuplicateFlowTests(unittest.TestCase):
         self.click_object(self.items("duplicateToggleRemove")[2])
         wait_until(lambda: not self.duplicates.busy)
         self.assertNotIn(str(self.paths[2]), self.duplicates.selectedGroup["intents"])
-        self.assertTrue(self.duplicates.setKeeper(str(self.paths[2])))
+        self.click_object(self.items("duplicateSetKeeper")[2])
+        self.assertEqual(self.item("nearDuplicatesPage").property("pendingNewKeeper"), str(self.paths[2]))
+        self.assertEqual(len(self.items("duplicateReplaceKeeperOption")), 2)
+        self.click_object(self.items("duplicateReplaceKeeperOption")[1])
         wait_until(lambda: not self.duplicates.busy)
-        self.assertEqual(len(self.duplicates.selectedGroup["currentKeepers"]), 2)
-        self.assertIn(str(self.paths[2]), self.duplicates.selectedGroup["currentKeepers"])
+        self.assertEqual(self.duplicates.selectedGroup["currentKeepers"],
+                         [str(self.paths[0]), str(self.paths[2])])
 
     def test_processing_empty_failure_and_pending_recommendation_states(self):
         self.click("libraryNav_duplicates")
@@ -374,7 +466,7 @@ class DuplicateFlowTests(unittest.TestCase):
     def test_large_qml_grid_keeps_delegates_and_preview_queue_bounded(self):
         self.publish()
         rows = [dict(groupId=f"g{i:04}", photoCount=2, representativePhotoId=str(self.paths[0]),
-                     reviewed=False, reviewState="Needs review", recommendationState="pending",
+                     reviewed=False, hasConflict=False, reviewState="Needs review", recommendationState="pending",
                      recommendedKeeperCount=0, removeCount=0, signature=str(i)) for i in range(2000)]
         self.duplicates.groupModel.set_rows(rows)
         self.click("libraryNav_duplicates")

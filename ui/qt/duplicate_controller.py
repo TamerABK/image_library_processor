@@ -86,6 +86,7 @@ class DuplicateReviewController(QObject):
         self._timer.timeout.connect(self._drain)
         processing.sessionChanged.connect(self._reset_session)
         processing.changed.connect(self._sync)
+        processing.blurModel.reviewChanged.connect(self._blur_review_changed)
         self._groups.changed.connect(self.changed)
         self._sync()
 
@@ -188,10 +189,13 @@ class DuplicateReviewController(QObject):
         self._rebuild()
 
     def _rebuild(self):
+        blur_results = self._processing.blurModel.results
         revisions = {path: (row["file_size"], row["mtime_ns"])
-                     for path, row in self._processing.blurModel.results.items()}
+                     for path, row in blur_results.items()}
+        blur_reviews = {path: row.get("reviewState", "UNDECIDED")
+                        for path, row in blur_results.items()}
         rows = project_duplicate_rows(self._duplicates_payload, self._ranking_payload,
-                                       revisions, self._persisted,
+                                       revisions, self._persisted, blur_reviews=blur_reviews,
                                        ranking_failed=self._ranking_state in ("FAILED", "CANCELLED") or
                                            (self._ranking_state == "COMPLETE" and not self._ranking_payload))
         self._groups.set_rows(rows)
@@ -199,6 +203,12 @@ class DuplicateReviewController(QObject):
             self._selected = ""
         self._refresh_detail()
         self.changed.emit()
+
+    @Slot(str)
+    def _blur_review_changed(self, path):
+        self._assert_owner()
+        if self._groups.contains_photo(path):
+            self._rebuild()
 
     def _refresh_detail(self):
         row = self._groups.get_row(self._selected)
@@ -272,15 +282,25 @@ class DuplicateReviewController(QObject):
         keepers = list(row["currentKeepers"])
         if path in keepers:
             return True
-        if not keepers:
+        if len(keepers) != 1:
+            self._error = "Choose which keeper to replace."
+            self.changed.emit()
             return False
-        keepers[-1] = path
+        return self.replaceKeeper(keepers[0], path)
+
+    @Slot(str, str, result=bool)
+    def replaceKeeper(self, old_path, new_path):
+        row = self._groups.get_row(self._selected)
+        if not row or old_path not in row["currentKeepers"] or new_path not in row["paths"] or (
+                new_path in row["currentKeepers"]):
+            return False
+        keepers = [path for path in row["currentKeepers"] if path != old_path] + [new_path]
         intents = dict(row["intents"])
-        if row["reviewed"]:
+        if row["persistedReviewed"]:
             intents = {member: "KEEP" if member in keepers else "REMOVE" for member in row["paths"]}
         else:
-            intents.pop(path, None)
-        return self._submit(keepers, intents, row["reviewed"])
+            intents.pop(new_path, None)
+        return self._submit(keepers, intents, row["persistedReviewed"])
 
     @Slot(str, str, result=bool)
     def setIntent(self, path, intent):

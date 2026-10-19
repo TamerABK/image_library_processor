@@ -17,7 +17,9 @@ def group_revision(paths: list[str], revisions: dict[str, tuple[int, int]]) -> s
     return digest.hexdigest()
 
 
-def project_duplicate_rows(duplicates, ranking, revisions, persisted, *, ranking_failed=False):
+def project_duplicate_rows(duplicates, ranking, revisions, persisted, *, ranking_failed=False,
+                           blur_reviews=None):
+    blur_reviews = blur_reviews or {}
     ranked = {row["group_id"]: row for row in ranking or ()}
     rows = []
     for members in duplicates or ():
@@ -35,7 +37,11 @@ def project_duplicate_rows(duplicates, ranking, revisions, persisted, *, ranking
                      (not recommended or len(saved.get("keepers", ())) == len(recommended)))
         keepers = list(saved["keepers"]) if valid else recommended
         intents = dict(saved.get("intents", {})) if valid else {}
-        reviewed = bool(saved.get("reviewed")) if valid else False
+        persisted_reviewed = bool(saved.get("reviewed")) if valid else False
+        conflicting_paths = [path for path, intent in intents.items()
+                             if (intent == "REMOVE" and blur_reviews.get(path) in ("KEEP", "REVIEW"))
+                             or (intent == "KEEP" and blur_reviews.get(path) == "REMOVE")]
+        reviewed = persisted_reviewed and not conflicting_paths
         representative = keepers[0] if keepers else paths[0]
         explanations = (recommendation or {}).get("ranking", {}).get(
             recommended[0] if recommended else "", {}).get("explanation", ())
@@ -46,7 +52,10 @@ def project_duplicate_rows(duplicates, ranking, revisions, persisted, *, ranking
                              "ready" if recommendation else "unavailable" if ranking_failed else "pending"),
                          explanation=list(explanations), intents=intents,
                          removeCount=sum(value == "REMOVE" for value in intents.values()),
-                         reviewed=reviewed, reviewState="Reviewed" if reviewed else "Needs review",
+                         persistedReviewed=persisted_reviewed, reviewed=reviewed,
+                         hasConflict=bool(conflicting_paths), conflictingPaths=conflicting_paths,
+                         reviewState=("Decision conflict" if conflicting_paths else
+                                      "Reviewed" if reviewed else "Needs review"),
                          manualOverride=bool(valid and keepers != recommended) if recommended else bool(valid),
                          signature=signature or ""))
     return rows

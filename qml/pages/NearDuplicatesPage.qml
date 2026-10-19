@@ -11,8 +11,13 @@ Item {
     property var duplicates: null
     property var inspector: null
     property string viewSize: "Medium"
+    property string pendingNewKeeper: ""
     readonly property var group: duplicates ? duplicates.selectedGroup : ({})
     readonly property bool detailOpen: Boolean(group.groupId)
+    onDetailOpenChanged: if (!detailOpen) {
+        replaceKeeperDialog.close()
+        pendingNewKeeper = ""
+    }
     Room36Theme.Theme { id: theme }
     Room36Theme.Typography { id: typography }
     Component.onDestruction: if (inspector) inspector.close()
@@ -122,6 +127,16 @@ Item {
             font.pixelSize: typography.body
         }
         Text {
+            objectName: "duplicateConflictMessage"
+            Layout.fillWidth: true
+            visible: root.detailOpen && Boolean(root.group.hasConflict)
+            text: "Decision conflict: one or more photos have different choices in another review. Resolve those choices before confirming this group."
+            color: theme.mainBlue
+            wrapMode: Text.WordWrap
+            font.pixelSize: typography.body
+            Accessible.name: text
+        }
+        Text {
             Layout.fillWidth: true
             visible: root.detailOpen && root.group.explanation && root.group.explanation.length > 0
             text: root.group.explanation ? "Recommended: " + root.group.explanation.join(" · ") : ""
@@ -186,12 +201,20 @@ Item {
                             Components.PillButton {
                                 objectName: "duplicateSetKeeper"
                                 variant: "translucent"
-                                text: "Set keeper"
+                                text: root.group.currentKeepers && root.group.currentKeepers.length > 1
+                                    ? "Replace keeper…" : "Set keeper"
                                 enabled: root.duplicates !== null && !root.duplicates.busy
                                     && root.group.recommendationState === "ready"
                                     && !memberRow.modelData.keeper
-                                onClicked: root.duplicates.setKeeper(memberRow.modelData.photoId)
-                                Accessible.name: "Set " + memberRow.modelData.filename + " as keeper"
+                                onClicked: {
+                                    if (root.group.currentKeepers.length > 1) {
+                                        root.pendingNewKeeper = memberRow.modelData.photoId
+                                        replaceKeeperDialog.open()
+                                    } else {
+                                        root.duplicates.setKeeper(memberRow.modelData.photoId)
+                                    }
+                                }
+                                Accessible.name: text + " " + memberRow.modelData.filename
                             }
                             Components.PillButton {
                                 objectName: "duplicateToggleRemove"
@@ -207,6 +230,56 @@ Item {
                         }
                     }
                 }
+            }
+        }
+    }
+    Dialog {
+        id: replaceKeeperDialog
+        objectName: "duplicateReplaceKeeperDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        title: "Choose keeper to replace"
+        width: Math.min(420, root.width - 40)
+        standardButtons: Dialog.NoButton
+        background: Rectangle {
+            radius: 20
+            color: theme.panelFill
+            border.width: 1
+            border.color: theme.separator
+        }
+        ColumnLayout {
+            width: replaceKeeperDialog.availableWidth
+            spacing: 10
+            Text {
+                Layout.fillWidth: true
+                text: "Which current keeper should this photo replace?"
+                color: theme.mainBlue
+                wrapMode: Text.WordWrap
+                font.pixelSize: typography.body
+            }
+            Repeater {
+                model: root.group.currentKeepers || []
+                delegate: Components.PillButton {
+                    required property string modelData
+                    objectName: "duplicateReplaceKeeperOption"
+                    Layout.fillWidth: true
+                    variant: "translucent"
+                    text: modelData.substring(Math.max(modelData.lastIndexOf("/"), modelData.lastIndexOf("\\")) + 1)
+                    onClicked: {
+                        root.duplicates.replaceKeeper(modelData, root.pendingNewKeeper)
+                        replaceKeeperDialog.close()
+                    }
+                    Accessible.name: "Replace current keeper " + text
+                }
+            }
+            Components.PillButton {
+                objectName: "duplicateCancelReplacement"
+                Layout.alignment: Qt.AlignRight
+                variant: "translucent"
+                text: "Cancel"
+                onClicked: replaceKeeperDialog.close()
+                Accessible.name: "Cancel keeper replacement"
             }
         }
     }

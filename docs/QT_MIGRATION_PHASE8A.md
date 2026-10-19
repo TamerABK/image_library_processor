@@ -12,7 +12,9 @@ a `PhotoListModel` for the selected group. Both grids are virtualized. Visible g
 cards acquire bounded `ThumbnailService` leases; the detail grid and existing
 Inspector use the same preview infrastructure as other library routes. The
 recommendation and explanation come directly from the ranking result. Manual
-selection preserves the ranking result's keeper count.
+selection preserves the ranking result's keeper count. With one keeper, Set keeper
+replaces it directly. With multiple keepers, Replace keeper asks which current
+keeper to replace; the controller rejects ambiguous or invalid replacements.
 
 The group's backend ID is a digest of its sorted member paths. It can change when
 membership changes. The `duplicate_group_reviews` table in the existing Room 36
@@ -20,8 +22,15 @@ app-state database stores a user's keeper paths, per-member `KEEP`/`REMOVE` inte
 and explicit reviewed flag. The table is separate from `image_decisions` because
 that row's `review_state` is also used by Blur review; duplicate actions never
 overwrite a Blur choice. A conflicting explicit Blur choice blocks bulk confirmation
-with a safe message. `REMOVE` here is review intent only: no source file is moved or
-deleted. Restoring an alternative clears its duplicate `REMOVE` intent and returns
+with a safe message. Later Blur changes also trigger duplicate presentation
+reconciliation. `REMOVE` against Blur `KEEP`/`REVIEW`, or `KEEP` against Blur
+`REMOVE`, produces a derived Decision conflict. Saved Blur and duplicate choices and
+the duplicate group's reviewed flag remain independent and unchanged. The effective
+reviewed state is the saved reviewed flag only when no conflict exists; conflicted
+groups return to Needs review and increase the sidebar count until the choices are
+resolved. Reconciliation does not restart processing. `REMOVE` here is review intent
+only: no source file is moved or deleted. Restoring an alternative clears its
+duplicate `REMOVE` intent and returns
 the group to Needs review.
 
 Each saved group includes a signature of member paths, file sizes, and modification

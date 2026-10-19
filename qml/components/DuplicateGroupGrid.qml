@@ -33,6 +33,7 @@ GridView {
         required property int recommendedKeeperCount
         required property string representativePhotoId
         required property bool reviewed
+        required property bool hasConflict
         required property string recommendationState
         required property string previewSource
         property var leaseModel: null
@@ -101,7 +102,7 @@ GridView {
                 }
                 Text {
                     objectName: "duplicateGroupStatus"
-                    text: tile.reviewed ? "Reviewed" : tile.recommendationState === "ready"
+                    text: tile.hasConflict ? "Decision conflict" : tile.reviewed ? "Reviewed" : tile.recommendationState === "ready"
                         ? (tile.recommendedKeeperCount === 1
                             ? "Recommended keeper ready" : "Keeper recommendations ready")
                         : tile.recommendationState === "unavailable" ? "Keeper recommendation unavailable"
@@ -121,7 +122,7 @@ GridView {
                 onClicked: root.groupOpened(tile.groupId)
                 Accessible.role: Accessible.Button
                 Accessible.name: tile.photoCount + " photo duplicate group, "
-                    + (tile.reviewed ? "reviewed" : "needs review")
+                    + (tile.hasConflict ? "decision conflict" : tile.reviewed ? "reviewed" : "needs review")
             }
         }
     }
