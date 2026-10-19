@@ -7,7 +7,7 @@ var entries = [
     { routeId: "blurry", label: "Blurry photos", title: "Blurry photos", icon: "landscape.svg", section: "",
       message: "Blurry photo review will be added in Phase 6." },
     { routeId: "duplicates", label: "Near duplicates", title: "Near duplicates", icon: "view_medium.svg", section: "",
-      message: "Duplicate review will be added in a later feature phase." },
+      message: "" },
     { routeId: "favorites", label: "Favorites", title: "Favorites", icon: "favorite.svg", section: "",
       message: "Favorites will be connected in a later feature phase." },
     { routeId: "knownPeople", label: "Known people", title: "Known people", icon: "profile.svg", section: "People",

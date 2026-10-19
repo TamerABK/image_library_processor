@@ -15,15 +15,18 @@ Rectangle {
     property var photoModel: null
     property var processingController: null
     property var peopleController: null
+    property var duplicateController: null
     property var inspectorController: null
     property string libraryViewSize: "Medium"
     property string blurViewSize: "Medium"
     property string knownPeopleViewSize: "Medium"
     property string unknownPeopleViewSize: "Medium"
+    property string duplicateViewSize: "Medium"
     property string projectName: ""
     property string currentRoute: "library"
     property var routeCounts: ({
         blurry: processingController ? processingController.routeCounts.blurry : -1,
+        duplicates: duplicateController ? duplicateController.needsReviewCount : -1,
         knownPeople: peopleController ? peopleController.knownCount : -1,
         unknownPeople: peopleController ? peopleController.unknownCount : -1
     })
@@ -80,9 +83,11 @@ Rectangle {
         height: implicitHeight
         projectName: root.projectName
         pageTitle: root.currentEntry.title
-        libraryControlsEnabled: ["library", "blurry", "knownPeople", "unknownPeople"].indexOf(root.currentRoute) >= 0
+        libraryControlsEnabled: ["library", "blurry", "duplicates", "knownPeople", "unknownPeople"].indexOf(root.currentRoute) >= 0
         sortOptions: root.currentRoute === "blurry"
             ? ["Most problematic first", "Least problematic first", "Filename A–Z", "Filename Z–A"]
+            : root.currentRoute === "duplicates"
+                ? ["Largest groups", "Smallest groups"]
             : root.currentRoute === "knownPeople"
                 ? ["Name A–Z", "Most photos", "Most faces"]
                 : root.currentRoute === "unknownPeople"
@@ -94,6 +99,8 @@ Rectangle {
                 root.photoModel.sortByFilename(option === "Name Z–A")
             else if (root.currentRoute === "blurry" && root.processingController)
                 root.processingController.blurModel.setSort(option)
+            else if (root.currentRoute === "duplicates" && root.duplicateController)
+                root.duplicateController.groupModel.setSort(option)
             else if (root.currentRoute === "knownPeople" && root.peopleController)
                 root.peopleController.knownModel.setSort(option)
             else if (root.currentRoute === "unknownPeople" && root.peopleController)
@@ -104,6 +111,7 @@ Rectangle {
             if (["Small", "Medium", "Large"].indexOf(option) >= 0) {
                 if (root.currentRoute === "library") root.libraryViewSize = option
                 else if (root.currentRoute === "blurry") root.blurViewSize = option
+                else if (root.currentRoute === "duplicates") root.duplicateViewSize = option
                 else if (root.currentRoute === "knownPeople") root.knownPeopleViewSize = option
                 else if (root.currentRoute === "unknownPeople") root.unknownPeopleViewSize = option
             }
@@ -122,6 +130,7 @@ Rectangle {
 
         sourceComponent: root.currentRoute === "library" ? gridComponent
             : root.currentRoute === "blurry" && root.processingController ? blurComponent
+            : root.currentRoute === "duplicates" ? duplicateComponent
             : root.currentRoute === "knownPeople" ? knownComponent
             : root.currentRoute === "unknownPeople" ? unknownComponent : placeholderComponent
     }
@@ -140,6 +149,15 @@ Rectangle {
             processing: root.processingController
             inspector: root.inspectorController
             viewSize: root.blurViewSize
+        }
+    }
+
+    Component {
+        id: duplicateComponent
+        NearDuplicatesPage {
+            duplicates: root.duplicateController
+            inspector: root.inspectorController
+            viewSize: root.duplicateViewSize
         }
     }
 

@@ -107,6 +107,32 @@ class AutomaticStateStore:
                 db.execute("DELETE FROM ignored_unknown_clusters WHERE folder=? AND cluster_id=?",
                            (key, cluster_id))
 
+    def duplicate_reviews(self, folder: str | Path) -> dict[str, dict]:
+        """Load only duplicate metadata; blur/image decisions remain independent."""
+        key = str(Path(folder).resolve())
+        with self._database.connect() as db:
+            return {row["group_id"]: {
+                "signature": row["revision_signature"],
+                "keepers": json.loads(row["keeper_paths"]),
+                "intents": json.loads(row["member_intents"]),
+                "reviewed": bool(row["reviewed"]),
+            } for row in db.execute(
+                "SELECT * FROM duplicate_group_reviews WHERE folder=?", (key,))}
+
+    def save_duplicate_review(self, folder: str | Path, group_id: str, signature: str,
+                              keepers: list[str], intents: dict[str, str], reviewed: bool) -> None:
+        """Write one group atomically without replacing unrelated review rows."""
+        key = str(Path(folder).resolve())
+        with self._database.connect() as db:
+            db.execute("INSERT OR IGNORE INTO folder_state(folder) VALUES (?)", (key,))
+            db.execute("INSERT INTO duplicate_group_reviews VALUES (?,?,?,?,?,?) "
+                       "ON CONFLICT(folder, group_id) DO UPDATE SET "
+                       "revision_signature=excluded.revision_signature, "
+                       "keeper_paths=excluded.keeper_paths, "
+                       "member_intents=excluded.member_intents, reviewed=excluded.reviewed",
+                       (key, group_id, signature, json.dumps(keepers),
+                        json.dumps(intents, sort_keys=True), int(reviewed)))
+
     @staticmethod
     def _load_legacy(path: Path, fallback_folder: str | None = None) -> FolderAutomaticState:
         payload = json.loads(path.read_text(encoding="utf-8"))

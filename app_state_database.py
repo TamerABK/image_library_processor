@@ -51,6 +51,15 @@ class AppStateDatabase:
                     review_state TEXT,
                     PRIMARY KEY (folder, path)
                 );
+                CREATE TABLE IF NOT EXISTS duplicate_group_reviews (
+                    folder TEXT NOT NULL REFERENCES folder_state(folder) ON DELETE CASCADE,
+                    group_id TEXT NOT NULL,
+                    revision_signature TEXT NOT NULL,
+                    keeper_paths TEXT NOT NULL,
+                    member_intents TEXT NOT NULL,
+                    reviewed INTEGER NOT NULL CHECK (reviewed IN (0, 1)),
+                    PRIMARY KEY (folder, group_id)
+                );
                 CREATE TABLE IF NOT EXISTS deletion_transactions (
                     id INTEGER PRIMARY KEY,
                     folder TEXT NOT NULL REFERENCES folder_state(folder) ON DELETE CASCADE,

@@ -4,13 +4,14 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QObject, QPoint, QPointF, Qt, QtMsgType, qInstallMessageHandler
+from PySide6.QtCore import QObject, QPoint, QPointF, Qt, qInstallMessageHandler
 from PySide6.QtQml import QQmlApplicationEngine, QQmlProperty
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from app_paths import qml_path, qml_root
 from ui.qt.app import configure_quick_controls_style
+from ui.test_qt_thumbnails import is_unexpected_qt_test_message
 
 
 class LibraryShellTests(unittest.TestCase):
@@ -29,7 +30,7 @@ class LibraryShellTests(unittest.TestCase):
         self.engine.warnings.connect(lambda warnings: self.messages.extend(w.toString() for w in warnings))
 
     def capture(self, kind, context, message):
-        if kind in (QtMsgType.QtWarningMsg, QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+        if is_unexpected_qt_test_message(kind, message):
             self.messages.append(message)
 
     def tearDown(self):
@@ -76,6 +77,8 @@ class LibraryShellTests(unittest.TestCase):
             self.assertEqual(route, shell.property("currentRoute"))
             if route == "library":
                 self.assertIsNotNone(self.item("photoGrid"))
+            elif route == "duplicates":
+                self.assertIsNotNone(self.item("nearDuplicatesPage"))
             elif route in ("knownPeople", "unknownPeople"):
                 page = "knownPeoplePage" if route == "knownPeople" else "unknownPeoplePage"
                 self.assertIsNotNone(self.item(page))

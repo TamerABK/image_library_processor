@@ -20,6 +20,7 @@ from .inspector_controller import PhotoInspectorController
 from .previews import PreviewService
 from .face_previews import FacePreviewService
 from .people_controller import PeopleController
+from .duplicate_controller import DuplicateReviewController
 
 
 _VALID_START_PAGES = {"loading", "auth", "home", "library", "gallery"}
@@ -66,6 +67,7 @@ def run_app() -> int:
     processing = ProjectProcessingController(thumbnails, parent=application)
     face_previews = FacePreviewService(parent=application)
     people = PeopleController(processing, face_previews, thumbnails, parent=application)
+    duplicates = DuplicateReviewController(processing, thumbnails, parent=application)
     previews = PreviewService(parent=application)
     inspector = PhotoInspectorController(processing.blurModel, previews, parent=application)
     processing.sessionChanged.connect(inspector.close)
@@ -74,6 +76,7 @@ def run_app() -> int:
     application.aboutToQuit.connect(inspector.close)
     application.aboutToQuit.connect(processing.shutdown)
     application.aboutToQuit.connect(people.shutdown)
+    application.aboutToQuit.connect(duplicates.shutdown)
     application.aboutToQuit.connect(face_previews.shutdown)
     application.aboutToQuit.connect(previews.shutdown)
     application.aboutToQuit.connect(photo_model.close)
@@ -87,6 +90,7 @@ def run_app() -> int:
             "projectController": projects,
             "processingController": processing,
             "peopleController": people,
+            "duplicateController": duplicates,
             "inspectorController": inspector,
             "startPage": _start_page_from_environment(),
             "useHomePreviewData": _home_preview_data_from_environment(),
@@ -104,6 +108,7 @@ def run_app() -> int:
         inspector.close()
         processing.shutdown()
         people.shutdown()
+        duplicates.shutdown()
         face_previews.shutdown()
         previews.shutdown()
         photo_model.close()
