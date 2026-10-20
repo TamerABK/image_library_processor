@@ -107,12 +107,5 @@ Button {
                 }
             }
         }
-
-        Room36Theme.Effects {
-            z: -1
-            sourceItem: surface
-            active: root.enabled && (root.selected || root.activeFocus)
-            glowColor: theme.selectedGlow
-        }
     }
 }
