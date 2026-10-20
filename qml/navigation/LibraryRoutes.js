@@ -15,7 +15,7 @@ var entries = [
     { routeId: "unknownPeople", label: "Unknown people", title: "Unknown people", icon: "sidebar_profile.svg", section: "",
       message: "Unknown people review will be added in Phase 7." },
     { routeId: "trash", label: "Trash", title: "Trash", icon: "trash.svg", section: "Settings",
-      message: "Trash content will be connected in a later feature phase." }
+      message: "" }
 ]
 
 function entry(routeId) {

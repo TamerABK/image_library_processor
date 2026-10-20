@@ -17,6 +17,7 @@ Rectangle {
     property var peopleController: null
     property var duplicateController: null
     property var favoritesController: null
+    property var trashController: null
     property var inspectorController: null
     property string libraryViewSize: "Medium"
     property string blurViewSize: "Medium"
@@ -24,12 +25,14 @@ Rectangle {
     property string unknownPeopleViewSize: "Medium"
     property string duplicateViewSize: "Medium"
     property string favoritesViewSize: "Medium"
+    property string trashViewSize: "Medium"
     property string projectName: ""
     property string currentRoute: "library"
     property var routeCounts: ({
         blurry: processingController ? processingController.routeCounts.blurry : -1,
         duplicates: duplicateController ? duplicateController.needsReviewCount : -1,
         favorites: favoritesController ? favoritesController.count : -1,
+        trash: trashController ? trashController.count : -1,
         knownPeople: peopleController ? peopleController.knownCount : -1,
         unknownPeople: peopleController ? peopleController.unknownCount : -1
     })
@@ -86,7 +89,7 @@ Rectangle {
         height: implicitHeight
         projectName: root.projectName
         pageTitle: root.currentEntry.title
-        libraryControlsEnabled: ["library", "blurry", "duplicates", "favorites", "knownPeople", "unknownPeople"].indexOf(root.currentRoute) >= 0
+        libraryControlsEnabled: ["library", "blurry", "duplicates", "favorites", "knownPeople", "unknownPeople", "trash"].indexOf(root.currentRoute) >= 0
         sortOptions: root.currentRoute === "blurry"
             ? ["Most problematic first", "Least problematic first", "Filename A–Z", "Filename Z–A"]
             : root.currentRoute === "duplicates"
@@ -102,6 +105,8 @@ Rectangle {
                 root.photoModel.sortByFilename(option === "Name Z–A")
             else if (root.currentRoute === "favorites" && root.favoritesController)
                 root.favoritesController.sortByFilename(option === "Name Z–A")
+            else if (root.currentRoute === "trash" && root.trashController)
+                root.trashController.photoModel.sortByFilename(option === "Name Z–A")
             else if (root.currentRoute === "blurry" && root.processingController)
                 root.processingController.blurModel.setSort(option)
             else if (root.currentRoute === "duplicates" && root.duplicateController)
@@ -116,6 +121,7 @@ Rectangle {
             if (["Small", "Medium", "Large"].indexOf(option) >= 0) {
                 if (root.currentRoute === "library") root.libraryViewSize = option
                 else if (root.currentRoute === "favorites") root.favoritesViewSize = option
+                else if (root.currentRoute === "trash") root.trashViewSize = option
                 else if (root.currentRoute === "blurry") root.blurViewSize = option
                 else if (root.currentRoute === "duplicates") root.duplicateViewSize = option
                 else if (root.currentRoute === "knownPeople") root.knownPeopleViewSize = option
@@ -138,6 +144,7 @@ Rectangle {
             : root.currentRoute === "blurry" && root.processingController ? blurComponent
             : root.currentRoute === "duplicates" ? duplicateComponent
             : root.currentRoute === "favorites" ? favoritesComponent
+            : root.currentRoute === "trash" ? trashComponent
             : root.currentRoute === "knownPeople" ? knownComponent
             : root.currentRoute === "unknownPeople" ? unknownComponent : placeholderComponent
     }
@@ -156,6 +163,16 @@ Rectangle {
             favorites: root.favoritesController
             inspector: root.inspectorController
             viewSize: root.favoritesViewSize
+        }
+    }
+
+    Component {
+        id: trashComponent
+        TrashPage {
+            trash: root.trashController
+            favorites: root.favoritesController
+            inspector: root.inspectorController
+            viewSize: root.trashViewSize
         }
     }
 

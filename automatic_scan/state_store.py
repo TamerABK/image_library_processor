@@ -133,6 +133,73 @@ class AutomaticStateStore:
                        (key, group_id, signature, json.dumps(keepers),
                         json.dumps(intents, sort_keys=True), int(reviewed)))
 
+    def save_image_reviews(self, folder: str | Path,
+                           revisions: list[tuple[str, int, int]], intent: str) -> None:
+        """Update only Blur review columns; leave duplicate metadata and history intact."""
+        if intent not in ("UNDECIDED", "KEEP", "REVIEW", "REMOVE"):
+            raise ValueError("Invalid image review intent")
+        key = str(Path(folder).resolve())
+        selected, kept = int(intent == "REMOVE"), int(intent == "KEEP")
+        override = "keep" if kept else None
+        with self._database.connect() as db:
+            db.execute("INSERT OR IGNORE INTO folder_state(folder) VALUES (?)", (key,))
+            for path, size, mtime in revisions:
+                db.execute("INSERT INTO image_decisions VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+                           "ON CONFLICT(folder,path) DO UPDATE SET file_size=excluded.file_size, "
+                           "mtime_ns=excluded.mtime_ns, selected_for_deletion=excluded.selected_for_deletion, "
+                           "manually_restored=excluded.manually_restored, manually_kept=excluded.manually_kept, "
+                           "manual_override=excluded.manual_override, review_state=excluded.review_state",
+                           (key, path, size, mtime, selected, 0, kept, override, None, None, intent))
+
+    def clear_removal_intents(self, folder: str | Path, path: str,
+                              *, blur_revision: tuple[int, int] | None,
+                              duplicate_groups: dict[str, str]) -> tuple[bool, bool]:
+        """Clear only explicit REMOVE choices, retaining unrelated review fields.
+
+        The caller supplies current group signatures; stale groups are rejected.
+        """
+        key = str(Path(folder).resolve())
+        blur_cleared = duplicate_cleared = False
+        with self._database.connect() as db:
+            if blur_revision is not None:
+                row = db.execute("SELECT file_size, mtime_ns, review_state FROM image_decisions "
+                                 "WHERE folder=? AND path=?", (key, path)).fetchone()
+                if row and row["review_state"] == "REMOVE":
+                    if (row["file_size"], row["mtime_ns"]) != blur_revision:
+                        raise ValueError("This photo changed. Reopen the project before restoring its decision.")
+                    db.execute("UPDATE image_decisions SET review_state='UNDECIDED', "
+                               "selected_for_deletion=0, manually_restored=0, manually_kept=0, "
+                               "manual_override=NULL WHERE folder=? AND path=?", (key, path))
+                    blur_cleared = True
+            for group_id, signature in duplicate_groups.items():
+                row = db.execute("SELECT revision_signature, member_intents FROM duplicate_group_reviews "
+                                 "WHERE folder=? AND group_id=?", (key, group_id)).fetchone()
+                if not row:
+                    continue
+                if row["revision_signature"] != signature:
+                    raise ValueError("This duplicate group changed. Reopen the project before restoring its decision.")
+                intents = json.loads(row["member_intents"])
+                if intents.get(path) != "REMOVE":
+                    continue
+                intents.pop(path)
+                db.execute("UPDATE duplicate_group_reviews SET member_intents=?, reviewed=0 "
+                           "WHERE folder=? AND group_id=?",
+                           (json.dumps(intents, sort_keys=True), key, group_id))
+                duplicate_cleared = True
+        return blur_cleared, duplicate_cleared
+
+    def save_deletion_transaction(self, folder: str | Path, record: DeletionTransactionRecord) -> None:
+        """Append one history entry without rewriting live review decisions."""
+        key = str(Path(folder).resolve())
+        with self._database.connect() as db:
+            db.execute("INSERT OR IGNORE INTO folder_state(folder) VALUES (?)", (key,))
+            cursor = db.execute("INSERT INTO deletion_transactions(folder, created_at_utc) VALUES (?,?)",
+                                (key, record.created_at_utc))
+            db.executemany("INSERT INTO deletion_transaction_paths VALUES (?,?,?,?)", (
+                (cursor.lastrowid, kind, position, path)
+                for kind, values in (("paths", record.paths), ("failed_paths", record.failed_paths))
+                for position, path in enumerate(values)))
+
     @staticmethod
     def _load_legacy(path: Path, fallback_folder: str | None = None) -> FolderAutomaticState:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -187,14 +254,20 @@ class AutomaticStateStore:
                  item.duplicate_group_id, None if item.is_duplicate_keeper is None else int(item.is_duplicate_keeper),
                  item.review_state)
                 for item in state.image_decisions.values()))
-            db.execute("DELETE FROM deletion_transactions WHERE folder=?", (folder,))
+            # History is append-only: a review save must never erase a transaction
+            # recorded by the Trash worker after this state was loaded.
+            existing_transactions = {row[0] for row in db.execute(
+                "SELECT created_at_utc FROM deletion_transactions WHERE folder=?", (folder,))}
             for transaction in state.deletion_transactions:
+                if transaction.created_at_utc in existing_transactions:
+                    continue
                 cursor = db.execute("INSERT INTO deletion_transactions(folder, created_at_utc) VALUES (?,?)",
                                     (folder, transaction.created_at_utc))
                 db.executemany("INSERT INTO deletion_transaction_paths VALUES (?,?,?,?)", (
                     (cursor.lastrowid, kind, position, path)
                     for kind, values in (("paths", transaction.paths), ("failed_paths", transaction.failed_paths))
                     for position, path in enumerate(values)))
+                existing_transactions.add(transaction.created_at_utc)
 
     def _migrate_legacy_states(self) -> None:
         with self._database.connect() as db:

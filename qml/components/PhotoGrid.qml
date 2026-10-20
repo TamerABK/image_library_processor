@@ -9,6 +9,7 @@ GridView {
     objectName: "photoGrid"
     property var photoModel: null
     property var favoritesController: null
+    property var selectionController: null
     property string viewSize: "Medium"
     property bool openOnClick: false
     property bool selectOnImageClick: false
@@ -114,6 +115,7 @@ GridView {
             favorite: delegateRoot.favoriteValue
             favoriteBusy: delegateRoot.favoritePending
             showFavorite: root.favoritesController !== null && root.favoritesController.loaded
+            showCheckbox: root.selectionController === null || root.selectionController.isExecutable(delegateRoot.photoId)
             onFavoriteToggled: function(value) {
                 if (root.favoritesController) root.favoritesController.setFavorite(delegateRoot.photoId, value)
             }

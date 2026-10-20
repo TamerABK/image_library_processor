@@ -1,11 +1,12 @@
 """One project-scoped scheduler. Workers publish plain data through bounded queues."""
 from queue import Empty, Full, Queue
+import sqlite3
 import threading
 
 from PySide6.QtCore import QObject, Property, QThread, QTimer, Signal, Slot
 from automatic_scan.orchestrator import AutomaticScanOrchestrator
 from automatic_scan.project_pipeline import STAGES
-from automatic_scan.state_store import AutomaticStateStore, PersistedImageDecision
+from automatic_scan.state_store import AutomaticStateStore
 from automatic_scan.scan_logging import get_scan_logger
 from scan_controls import CancellationToken
 from .blur_model import BlurCandidateModel
@@ -223,15 +224,9 @@ class ProjectProcessingController(QObject):
         if len(rows) != len(identities) or not rows:
             return False
         try:
-            state = self._store.load(self._folder)
-            # Persist intent only; this controller has no deletion execution API.
-            for row in rows:
-                identity = row["photoId"]
-                state.image_decisions[identity] = PersistedImageDecision(identity, row["file_size"], row["mtime_ns"],
-                    intent == "REMOVE", False, intent == "KEEP", "keep" if intent == "KEEP" else None,
-                    review_state=intent)
-            self._store.save(state)
-        except (OSError, ValueError, KeyError, TypeError):
+            self._store.save_image_reviews(self._folder,
+                [(row["photoId"], row["file_size"], row["mtime_ns"]) for row in rows], intent)
+        except (OSError, sqlite3.Error, ValueError, KeyError, TypeError):
             self._message = "This review decision could not be saved. Check application data permissions."
             self.changed.emit()
             return False

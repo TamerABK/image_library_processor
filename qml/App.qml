@@ -19,6 +19,7 @@ ApplicationWindow {
     property var peopleController: null
     property var duplicateController: null
     property var favoritesController: null
+    property var trashController: null
     property var inspectorController: null
     property var activeProjectId: null
     property string activeProjectName: ""
@@ -173,6 +174,7 @@ ApplicationWindow {
             peopleController: window.peopleController
             duplicateController: window.duplicateController
             favoritesController: window.favoritesController
+            trashController: window.trashController
             inspectorController: window.inspectorController
             projectId: window.activeProjectId
             projectName: window.activeProjectName

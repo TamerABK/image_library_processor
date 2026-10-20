@@ -162,6 +162,20 @@ class PhotoListModel(QAbstractListModel):
         self.endRemoveRows()
         return True
 
+    def removePhotos(self, identities):
+        """Drop a completed Trash batch in one model reset before rediscovery."""
+        self._assert_owner()
+        removed = set(identities).intersection(self._positions)
+        if not removed:
+            return 0
+        self.beginResetModel()
+        self._cancel_all()
+        self._generation += 1
+        self._rows = [row for row in self._rows if row.identity not in removed]
+        self._reindex()
+        self.endResetModel()
+        return len(removed)
+
     @Slot(str, bool, result=bool)
     def setSelected(self, identity, selected):
         self._assert_owner()

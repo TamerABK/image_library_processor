@@ -144,6 +144,16 @@ class DuplicateReviewController(QObject):
                      explanation=row["explanation"] if path == row["representativePhotoId"] else [])
                 for path in row["paths"]]
 
+    def review_rows(self):
+        """Plain current group projections for other project-scoped review UIs."""
+        return [dict(row) for row in self._groups._all]
+
+    def reload_reviews(self):
+        self._assert_owner()
+        if self._folder:
+            self._persisted = self._store.duplicate_reviews(self._folder)
+            self._rebuild()
+
     @Slot()
     def _reset_session(self):
         self._assert_owner()

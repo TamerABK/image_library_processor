@@ -10,7 +10,7 @@ from PIL import Image
 from PySide6.QtCore import QThread
 from PySide6.QtTest import QAbstractItemModelTester
 from PySide6.QtWidgets import QApplication
-from automatic_scan.state_store import AutomaticStateStore
+from automatic_scan.state_store import AutomaticStateStore, PersistedImageDecision
 from ui.models import ResultItem
 from ui.phase6_test_support import FixtureRunner
 from ui.qt.blur_model import BlurCandidateModel
@@ -82,6 +82,22 @@ class ProcessingTests(unittest.TestCase):
         self.assertEqual(3, self.processing.routeCounts["blurry"])
         self.assertTrue(all(t == self.processing.thread() for t in threads))
         self.assertTrue(all(v["state"] == "COMPLETE" for v in self.processing.stages))
+
+    def test_blur_review_preserves_unrelated_persisted_photo_fields(self):
+        self.open()
+        self.finish()
+        identity = self.processing.blurModel.identities()[0]
+        state = self.store.load(self.folder)
+        result = self.processing.blurModel.results[identity]
+        state.image_decisions[identity] = PersistedImageDecision(
+            identity, result["file_size"], result["mtime_ns"], False, False, False, None,
+            duplicate_group_id="existing-group", is_duplicate_keeper=False)
+        self.store.save(state)
+        self.assertTrue(self.processing.setReview(identity, "REMOVE"))
+        saved = self.store.load(self.folder).image_decisions[identity]
+        self.assertEqual(saved.review_state, "REMOVE")
+        self.assertEqual(saved.duplicate_group_id, "existing-group")
+        self.assertFalse(saved.is_duplicate_keeper)
 
     def test_progressive_blur_before_face_completion(self):
         self.runner.gate = self.gate

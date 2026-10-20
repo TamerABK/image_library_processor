@@ -81,6 +81,8 @@ class LibraryShellTests(unittest.TestCase):
                 self.assertIsNotNone(self.item("nearDuplicatesPage"))
             elif route == "favorites":
                 self.assertIsNotNone(self.item("favoritesPage"))
+            elif route == "trash":
+                self.assertIsNotNone(self.item("trashPage"))
             elif route in ("knownPeople", "unknownPeople"):
                 page = "knownPeoplePage" if route == "knownPeople" else "unknownPeoplePage"
                 self.assertIsNotNone(self.item(page))

@@ -22,6 +22,7 @@ from .face_previews import FacePreviewService
 from .people_controller import PeopleController
 from .duplicate_controller import DuplicateReviewController
 from .favorites_controller import FavoritesController
+from .trash_controller import TrashController
 
 
 _VALID_START_PAGES = {"loading", "auth", "home", "library", "gallery"}
@@ -74,12 +75,15 @@ def run_app() -> int:
     processing.sessionChanged.connect(inspector.close)
     projects = ProjectController(photo_model, parent=application, processing=processing)
     favorites = FavoritesController(projects, photo_model, thumbnails, parent=application)
+    trash = TrashController(projects, photo_model, processing, duplicates, favorites,
+                            inspector, thumbnails, parent=application)
     application.aboutToQuit.connect(projects.shutdown)
     application.aboutToQuit.connect(inspector.close)
     application.aboutToQuit.connect(processing.shutdown)
     application.aboutToQuit.connect(people.shutdown)
     application.aboutToQuit.connect(duplicates.shutdown)
     application.aboutToQuit.connect(favorites.shutdown)
+    application.aboutToQuit.connect(trash.shutdown)
     application.aboutToQuit.connect(face_previews.shutdown)
     application.aboutToQuit.connect(previews.shutdown)
     application.aboutToQuit.connect(photo_model.close)
@@ -95,6 +99,7 @@ def run_app() -> int:
             "peopleController": people,
             "duplicateController": duplicates,
             "favoritesController": favorites,
+            "trashController": trash,
             "inspectorController": inspector,
             "startPage": _start_page_from_environment(),
             "useHomePreviewData": _home_preview_data_from_environment(),
@@ -114,6 +119,7 @@ def run_app() -> int:
         people.shutdown()
         duplicates.shutdown()
         favorites.shutdown()
+        trash.shutdown()
         face_previews.shutdown()
         previews.shutdown()
         photo_model.close()
