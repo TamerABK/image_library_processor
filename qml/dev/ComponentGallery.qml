@@ -244,7 +244,7 @@ Item {
                     }
 
                     Components.IconButton {
-                        source: theme.iconUrl("favorite.svg")
+                        source: theme.iconUrl("star_shape.svg")
                         accessibleLabel: "Favorite"
                     }
 

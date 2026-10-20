@@ -8,7 +8,7 @@ var entries = [
       message: "Blurry photo review will be added in Phase 6." },
     { routeId: "duplicates", label: "Near duplicates", title: "Near duplicates", icon: "view_medium.svg", section: "",
       message: "" },
-    { routeId: "favorites", label: "Favorites", title: "Favorites", icon: "favorite.svg", section: "",
+    { routeId: "favorites", label: "Favorites", title: "Favorites", icon: "star_shape.svg", section: "",
       message: "" },
     { routeId: "knownPeople", label: "Known people", title: "Known people", icon: "profile.svg", section: "People",
       message: "Known people content will be added in Phase 7." },

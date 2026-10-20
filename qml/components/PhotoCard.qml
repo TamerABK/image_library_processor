@@ -129,13 +129,19 @@ Item {
                 anchors.top: parent.top
                 anchors.rightMargin: metrics.spacingTiny
                 anchors.topMargin: metrics.spacingTiny
-                source: theme.iconUrl(root.favorite ? "favorite_filled.svg" : "favorite.svg")
+                source: theme.iconUrl(root.favorite ? "star_shape_filled.svg" : "star_shape.svg")
                 accessibleLabel: root.favorite ? "Remove favorite" : "Add favorite"
                 buttonSize: 32
                 iconSize: metrics.iconSizeMedium
                 visible: root.showFavorite
                 enabled: !root.favoriteBusy
                 onClicked: root.favoriteToggled(!root.favorite)
+                background: Rectangle {
+                    radius: width / 2
+                    color: Qt.rgba(0, 0, 142 / 255, 0.72)
+                    border.width: parent.activeFocus ? 1 : 0
+                    border.color: theme.focusRing
+                }
             }
         }
 

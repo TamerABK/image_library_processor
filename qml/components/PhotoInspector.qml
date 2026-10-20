@@ -64,12 +64,18 @@ FocusScope {
             }
             IconButton {
                 objectName: "inspectorFavoriteButton"
-                source: theme.iconUrl(root.currentFavorite ? "favorite_filled.svg" : "favorite.svg")
+                source: theme.iconUrl(root.currentFavorite ? "star_shape_filled.svg" : "star_shape.svg")
                 accessibleLabel: root.currentFavorite ? "Remove favorite" : "Add favorite"
                 visible: root.favoritesController !== null && root.favoritesController.loaded
                     && Boolean(root.photo.photoId)
                 enabled: !root.favoritePending
                 onClicked: root.favoritesController.setFavorite(root.photo.photoId, !root.currentFavorite)
+                background: Rectangle {
+                    radius: width / 2
+                    color: parent.down ? theme.midBlue : theme.mainBlue
+                    border.width: parent.activeFocus ? 1 : 0
+                    border.color: theme.focusRing
+                }
             }
         }
         RowLayout {
