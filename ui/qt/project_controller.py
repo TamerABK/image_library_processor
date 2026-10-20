@@ -67,6 +67,7 @@ class ProjectController(QObject):
     messageChanged = Signal()
     activeProjectChanged = Signal()
     projectOpened = Signal(str, str)
+    projectOpening = Signal(str)
 
     def __init__(self, photo_model, parent=None, *, registry_path=None, database_path=None, chooser=None,
                  discover=discover_photos, processing=None):
@@ -86,6 +87,7 @@ class ProjectController(QObject):
         self._closed = False
         self._active_id = ""
         self._active_name = ""
+        self._active_folder = ""
         self._generation = 0
         self._projects = ProjectListModel(self._load_projects(), self)
         self._tasks, self._results = Queue(maxsize=1), Queue(maxsize=1)
@@ -118,6 +120,10 @@ class ProjectController(QObject):
     @Property(str, notify=activeProjectChanged)
     def activeProjectName(self):
         return self._active_name
+
+    @Property(str, notify=activeProjectChanged)
+    def activeProjectFolder(self):
+        return self._active_folder
 
     def _set_message(self, text):
         if text != self._message:
@@ -238,6 +244,7 @@ class ProjectController(QObject):
         self._start(project)
 
     def _start(self, project):
+        self.projectOpening.emit(project.folder)
         if self._processing is not None:
             self._processing.invalidate()
         self._generation += 1
@@ -267,7 +274,7 @@ class ProjectController(QObject):
         # Selection is session state: never carry it into a different folder.
         self._photos.replace_items(items, preserve_selection=False)
         self._projects.register(project)
-        self._active_id, self._active_name = project.project_id, project.name
+        self._active_id, self._active_name, self._active_folder = project.project_id, project.name, project.folder
         self.activeProjectChanged.emit()
         self._set_message(self._save_projects())
         if self._processing is not None:

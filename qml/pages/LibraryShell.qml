@@ -16,17 +16,20 @@ Rectangle {
     property var processingController: null
     property var peopleController: null
     property var duplicateController: null
+    property var favoritesController: null
     property var inspectorController: null
     property string libraryViewSize: "Medium"
     property string blurViewSize: "Medium"
     property string knownPeopleViewSize: "Medium"
     property string unknownPeopleViewSize: "Medium"
     property string duplicateViewSize: "Medium"
+    property string favoritesViewSize: "Medium"
     property string projectName: ""
     property string currentRoute: "library"
     property var routeCounts: ({
         blurry: processingController ? processingController.routeCounts.blurry : -1,
         duplicates: duplicateController ? duplicateController.needsReviewCount : -1,
+        favorites: favoritesController ? favoritesController.count : -1,
         knownPeople: peopleController ? peopleController.knownCount : -1,
         unknownPeople: peopleController ? peopleController.unknownCount : -1
     })
@@ -83,7 +86,7 @@ Rectangle {
         height: implicitHeight
         projectName: root.projectName
         pageTitle: root.currentEntry.title
-        libraryControlsEnabled: ["library", "blurry", "duplicates", "knownPeople", "unknownPeople"].indexOf(root.currentRoute) >= 0
+        libraryControlsEnabled: ["library", "blurry", "duplicates", "favorites", "knownPeople", "unknownPeople"].indexOf(root.currentRoute) >= 0
         sortOptions: root.currentRoute === "blurry"
             ? ["Most problematic first", "Least problematic first", "Filename A–Z", "Filename Z–A"]
             : root.currentRoute === "duplicates"
@@ -97,6 +100,8 @@ Rectangle {
         onSortRequested: function(option) {
             if (root.currentRoute === "library" && root.photoModel && ["Name A–Z", "Name Z–A"].indexOf(option) >= 0)
                 root.photoModel.sortByFilename(option === "Name Z–A")
+            else if (root.currentRoute === "favorites" && root.favoritesController)
+                root.favoritesController.sortByFilename(option === "Name Z–A")
             else if (root.currentRoute === "blurry" && root.processingController)
                 root.processingController.blurModel.setSort(option)
             else if (root.currentRoute === "duplicates" && root.duplicateController)
@@ -110,6 +115,7 @@ Rectangle {
         onViewSizeRequested: function(option) {
             if (["Small", "Medium", "Large"].indexOf(option) >= 0) {
                 if (root.currentRoute === "library") root.libraryViewSize = option
+                else if (root.currentRoute === "favorites") root.favoritesViewSize = option
                 else if (root.currentRoute === "blurry") root.blurViewSize = option
                 else if (root.currentRoute === "duplicates") root.duplicateViewSize = option
                 else if (root.currentRoute === "knownPeople") root.knownPeopleViewSize = option
@@ -131,6 +137,7 @@ Rectangle {
         sourceComponent: root.currentRoute === "library" ? gridComponent
             : root.currentRoute === "blurry" && root.processingController ? blurComponent
             : root.currentRoute === "duplicates" ? duplicateComponent
+            : root.currentRoute === "favorites" ? favoritesComponent
             : root.currentRoute === "knownPeople" ? knownComponent
             : root.currentRoute === "unknownPeople" ? unknownComponent : placeholderComponent
     }
@@ -144,10 +151,20 @@ Rectangle {
     }
 
     Component {
+        id: favoritesComponent
+        FavoritesPage {
+            favorites: root.favoritesController
+            inspector: root.inspectorController
+            viewSize: root.favoritesViewSize
+        }
+    }
+
+    Component {
         id: blurComponent
         BlurryPhotosPage {
             processing: root.processingController
             inspector: root.inspectorController
+            favorites: root.favoritesController
             viewSize: root.blurViewSize
         }
     }
@@ -157,6 +174,7 @@ Rectangle {
         NearDuplicatesPage {
             duplicates: root.duplicateController
             inspector: root.inspectorController
+            favorites: root.favoritesController
             viewSize: root.duplicateViewSize
         }
     }
@@ -166,6 +184,7 @@ Rectangle {
         KnownPeoplePage {
             people: root.peopleController
             inspector: root.inspectorController
+            favorites: root.favoritesController
             viewSize: root.knownPeopleViewSize
         }
     }
@@ -175,6 +194,7 @@ Rectangle {
         UnknownPeoplePage {
             people: root.peopleController
             inspector: root.inspectorController
+            favorites: root.favoritesController
             viewSize: root.unknownPeopleViewSize
         }
     }
@@ -183,8 +203,21 @@ Rectangle {
         id: gridComponent
         Components.PhotoGrid {
             photoModel: root.photoModel
+            favoritesController: root.favoritesController
             viewSize: root.libraryViewSize
         }
+    }
+
+    Text {
+        objectName: "favoritesErrorMessage"
+        anchors.bottom: parent.bottom
+        anchors.horizontalCenter: parent.horizontalCenter
+        z: 10
+        visible: root.currentRoute !== "favorites" && root.favoritesController !== null
+            && root.favoritesController.error.length > 0
+        text: root.favoritesController ? root.favoritesController.error : ""
+        color: theme.mainBlue
+        Accessible.name: text
     }
 
     Component {

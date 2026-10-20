@@ -18,6 +18,7 @@ ApplicationWindow {
     property var processingController: null
     property var peopleController: null
     property var duplicateController: null
+    property var favoritesController: null
     property var inspectorController: null
     property var activeProjectId: null
     property string activeProjectName: ""
@@ -171,6 +172,7 @@ ApplicationWindow {
             processingController: window.processingController
             peopleController: window.peopleController
             duplicateController: window.duplicateController
+            favoritesController: window.favoritesController
             inspectorController: window.inspectorController
             projectId: window.activeProjectId
             projectName: window.activeProjectName

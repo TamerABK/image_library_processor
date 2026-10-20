@@ -8,9 +8,29 @@ FocusScope {
     id: root
     objectName: "photoInspector"
     property var controller: null
+    property var favoritesController: null
     property Component detailsComponent: null
     property bool showReviewActions: true
     readonly property var photo: controller ? controller.photo : ({})
+    property bool currentFavorite: false
+    property bool favoritePending: false
+    function refreshFavorite() {
+        const path = photo.photoId || ""
+        currentFavorite = favoritesController && path ? favoritesController.isFavorite(path) : false
+        favoritePending = favoritesController && path ? favoritesController.isPending(path) : false
+    }
+    onPhotoChanged: refreshFavorite()
+    onFavoritesControllerChanged: refreshFavorite()
+    Connections {
+        target: root.favoritesController
+        function onFavoriteChanged(path, favorite) {
+            if (path === root.photo.photoId) root.currentFavorite = favorite
+        }
+        function onPendingChanged(path, pending) {
+            if (path === root.photo.photoId) root.favoritePending = pending
+        }
+        function onChanged() { root.refreshFavorite() }
+    }
     signal reviewRequested(string identity, string intent)
     Room36Theme.Theme { id: theme }
     onVisibleChanged: if (visible) forceActiveFocus()
@@ -41,6 +61,15 @@ FocusScope {
                 color: theme.mainBlue
                 elide: Text.ElideMiddle
                 font.pixelSize: 22
+            }
+            IconButton {
+                objectName: "inspectorFavoriteButton"
+                source: theme.iconUrl(root.currentFavorite ? "favorite_filled.svg" : "favorite.svg")
+                accessibleLabel: root.currentFavorite ? "Remove favorite" : "Add favorite"
+                visible: root.favoritesController !== null && root.favoritesController.loaded
+                    && Boolean(root.photo.photoId)
+                enabled: !root.favoritePending
+                onClicked: root.favoritesController.setFavorite(root.photo.photoId, !root.currentFavorite)
             }
         }
         RowLayout {

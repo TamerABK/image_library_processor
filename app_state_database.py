@@ -37,6 +37,11 @@ class AppStateDatabase:
                     cluster_id TEXT NOT NULL,
                     PRIMARY KEY (folder, cluster_id)
                 );
+                CREATE TABLE IF NOT EXISTS favorite_photos (
+                    folder TEXT NOT NULL REFERENCES folder_state(folder) ON DELETE CASCADE,
+                    path TEXT NOT NULL,
+                    PRIMARY KEY (folder, path)
+                );
                 CREATE TABLE IF NOT EXISTS image_decisions (
                     folder TEXT NOT NULL REFERENCES folder_state(folder) ON DELETE CASCADE,
                     path TEXT NOT NULL,

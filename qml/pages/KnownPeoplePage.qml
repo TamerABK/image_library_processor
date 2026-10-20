@@ -10,6 +10,7 @@ Item {
     objectName: "knownPeoplePage"
     property var people: null
     property var inspector: null
+    property var favorites: null
     property string viewSize: "Medium"
     Room36Theme.Theme { id: theme }
     Room36Theme.Typography { id: typography }
@@ -86,6 +87,7 @@ Item {
         photoModel: root.people ? root.people.detailPhotoModel : null
         viewSize: root.viewSize
         inspector: root.inspector
+        favoritesController: root.favorites
         onBackRequested: if (root.people) root.people.back()
     }
 }

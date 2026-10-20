@@ -12,6 +12,7 @@ Item {
     property string filename: ""
     property bool selected: false
     property bool favorite: false
+    property bool favoriteBusy: false
     property bool showCheckbox: true
     property bool showFavorite: true
     property bool showMenu: true
@@ -123,15 +124,17 @@ Item {
             }
 
             IconButton {
+                objectName: "photoFavoriteButton"
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.rightMargin: metrics.spacingTiny
                 anchors.topMargin: metrics.spacingTiny
                 source: theme.iconUrl(root.favorite ? "favorite_filled.svg" : "favorite.svg")
-                accessibleLabel: "Favorite"
+                accessibleLabel: root.favorite ? "Remove favorite" : "Add favorite"
                 buttonSize: 32
                 iconSize: metrics.iconSizeMedium
                 visible: root.showFavorite
+                enabled: !root.favoriteBusy
                 onClicked: root.favoriteToggled(!root.favorite)
             }
         }

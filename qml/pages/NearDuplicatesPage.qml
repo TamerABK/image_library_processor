@@ -10,6 +10,7 @@ Item {
     objectName: "nearDuplicatesPage"
     property var duplicates: null
     property var inspector: null
+    property var favorites: null
     property string viewSize: "Medium"
     property string pendingNewKeeper: ""
     readonly property var group: duplicates ? duplicates.selectedGroup : ({})
@@ -153,6 +154,7 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 photoModel: root.duplicates ? root.duplicates.detailPhotoModel : null
+                favoritesController: root.favorites
                 viewSize: root.viewSize
                 openOnClick: true
                 emptyText: "No photos are available for this group."
@@ -304,6 +306,7 @@ Item {
     Components.PhotoInspector {
         anchors.fill: parent
         controller: root.inspector
+        favoritesController: root.favorites
         detailsComponent: duplicateInspectorDetails
         showReviewActions: false
         visible: root.detailOpen && controller !== null && controller.opened

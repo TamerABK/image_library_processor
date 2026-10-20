@@ -79,6 +79,8 @@ class LibraryShellTests(unittest.TestCase):
                 self.assertIsNotNone(self.item("photoGrid"))
             elif route == "duplicates":
                 self.assertIsNotNone(self.item("nearDuplicatesPage"))
+            elif route == "favorites":
+                self.assertIsNotNone(self.item("favoritesPage"))
             elif route in ("knownPeople", "unknownPeople"):
                 page = "knownPeoplePage" if route == "knownPeople" else "unknownPeoplePage"
                 self.assertIsNotNone(self.item(page))

@@ -9,7 +9,7 @@ var entries = [
     { routeId: "duplicates", label: "Near duplicates", title: "Near duplicates", icon: "view_medium.svg", section: "",
       message: "" },
     { routeId: "favorites", label: "Favorites", title: "Favorites", icon: "favorite.svg", section: "",
-      message: "Favorites will be connected in a later feature phase." },
+      message: "" },
     { routeId: "knownPeople", label: "Known people", title: "Known people", icon: "profile.svg", section: "People",
       message: "Known people content will be added in Phase 7." },
     { routeId: "unknownPeople", label: "Unknown people", title: "Unknown people", icon: "profile.svg", section: "",

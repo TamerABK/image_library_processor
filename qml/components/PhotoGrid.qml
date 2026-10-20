@@ -8,6 +8,7 @@ GridView {
     id: root
     objectName: "photoGrid"
     property var photoModel: null
+    property var favoritesController: null
     property string viewSize: "Medium"
     property bool openOnClick: false
     property bool selectOnImageClick: false
@@ -45,6 +46,16 @@ GridView {
         property var leaseModel: null
         property int lease: 0
         property bool mounted: false
+        property bool favoriteValue: root.favoritesController
+            ? root.favoritesController.isFavorite(photoId) : false
+        property bool favoritePending: root.favoritesController
+            ? root.favoritesController.isPending(photoId) : false
+        function refreshFavorite() {
+            favoriteValue = root.favoritesController
+                ? root.favoritesController.isFavorite(photoId) : false
+            favoritePending = root.favoritesController
+                ? root.favoritesController.isPending(photoId) : false
+        }
         width: root.cellWidth
         height: root.cellHeight
 
@@ -70,13 +81,24 @@ GridView {
             repeat: false
             onTriggered: delegateRoot.acquire()
         }
-        onPhotoIdChanged: scheduleAcquire()
+        onPhotoIdChanged: { scheduleAcquire(); refreshFavorite() }
         Component.onCompleted: { mounted = true; scheduleAcquire() }
         Component.onDestruction: { mounted = false; release() }
         Connections {
             target: root
             function onPhotoModelChanged() { delegateRoot.scheduleAcquire() }
             function onThumbnailEdgeChanged() { delegateRoot.scheduleAcquire() }
+            function onFavoritesControllerChanged() { delegateRoot.refreshFavorite() }
+        }
+        Connections {
+            target: root.favoritesController
+            function onFavoriteChanged(path, favorite) {
+                if (path === delegateRoot.photoId) delegateRoot.favoriteValue = favorite
+            }
+            function onPendingChanged(path, pending) {
+                if (path === delegateRoot.photoId) delegateRoot.favoritePending = pending
+            }
+            function onChanged() { delegateRoot.refreshFavorite() }
         }
 
         PhotoCard {
@@ -89,7 +111,12 @@ GridView {
             source: delegateRoot.thumbnailSource
             selected: delegateRoot.selected
             badgeText: delegateRoot.badgeText
-            showFavorite: false // No backend favorite contract exists yet.
+            favorite: delegateRoot.favoriteValue
+            favoriteBusy: delegateRoot.favoritePending
+            showFavorite: root.favoritesController !== null && root.favoritesController.loaded
+            onFavoriteToggled: function(value) {
+                if (root.favoritesController) root.favoritesController.setFavorite(delegateRoot.photoId, value)
+            }
             showMenu: false
             cacheImage: false // The service owns the bounded cache, not QML's URL cache.
             onSelectionToggled: function(value) {

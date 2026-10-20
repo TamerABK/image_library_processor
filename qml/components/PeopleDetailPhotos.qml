@@ -10,6 +10,7 @@ Item {
     property var person: ({})
     property var photoModel: null
     property var inspector: null
+    property var favoritesController: null
     property string viewSize: "Medium"
     property string title: ""
     property Component actions: null
@@ -67,6 +68,7 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             photoModel: root.photoModel
+            favoritesController: root.favoritesController
             viewSize: root.viewSize
             openOnClick: true
             emptyText: "No project photos are available for this person."
@@ -85,6 +87,7 @@ Item {
     PhotoInspector {
         anchors.fill: parent
         controller: root.inspector
+        favoritesController: root.favoritesController
         detailsComponent: inspectorDetails
         showReviewActions: false
         visible: controller !== null && controller.opened

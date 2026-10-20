@@ -12,6 +12,8 @@ class PhotoInspectorController(QObject):
         self._order, self._tickets = [], {}
         self._position = -1
         self._source, self._state = "", "idle"
+        self._snapshot = {}
+        self._observed_models = set()
         previews.completed.connect(self._completed)
         model.reviewChanged.connect(lambda *_: self.changed.emit())
 
@@ -21,7 +23,10 @@ class PhotoInspectorController(QObject):
 
     @Property("QVariantMap", notify=changed)
     def photo(self):
-        return self._model.photo(self._order[self._position]) if self.opened else {}
+        if not self.opened:
+            return {}
+        current = self._model.photo(self._order[self._position])
+        return current or self._snapshot
 
     @Property(str, notify=changed)
     def previewSource(self):
@@ -33,11 +38,11 @@ class PhotoInspectorController(QObject):
 
     @Property(bool, notify=changed)
     def hasPrevious(self):
-        return self._position > 0
+        return self._neighbor(-1) is not None
 
     @Property(bool, notify=changed)
     def hasNext(self):
-        return self.opened and self._position < len(self._order) - 1
+        return self._neighbor(1) is not None
 
     @Slot(str)
     def open(self, identity):
@@ -49,13 +54,28 @@ class PhotoInspectorController(QObject):
     def openFromModel(self, model, identity):
         self._assert_owner()
         self._model = model
+        if model not in self._observed_models:
+            model.rowsRemoved.connect(self.changed)
+            model.modelReset.connect(self.changed)
+            self._observed_models.add(model)
         self._open(identity)
+
+    def _neighbor(self, direction):
+        if not self.opened:
+            return None
+        available = set(self._model.identities())
+        for index in range(self._position + direction,
+                           len(self._order) if direction > 0 else -1, direction):
+            if self._order[index] in available:
+                return index
+        return None
 
     def _open(self, identity):
         order = self._model.identities()
         if identity not in order:
             return
         self._order, self._position = order, order.index(identity)
+        self._snapshot = self._model.photo(identity)
         self._load()
 
     def _assert_owner(self):
@@ -71,8 +91,12 @@ class PhotoInspectorController(QObject):
         self._cancel()
         self._source, self._state = "", "loading"
         current = self._order[self._position]
+        current_photo = self._model.photo(current)
+        if current_photo:
+            self._snapshot = current_photo
         # Request current first, then just its two neighbors.
-        indices = [self._position] + [i for i in (self._position - 1, self._position + 1) if 0 <= i < len(self._order)]
+        indices = [self._position] + [i for i in (self._neighbor(-1), self._neighbor(1))
+                                      if i is not None]
         for i in indices:
             identity = self._order[i]
             photo = self._model.photo(identity)
@@ -95,15 +119,17 @@ class PhotoInspectorController(QObject):
     @Slot()
     def previous(self):
         self._assert_owner()
-        if self.hasPrevious:
-            self._position -= 1
+        position = self._neighbor(-1)
+        if position is not None:
+            self._position = position
             self._load()
 
     @Slot()
     def next(self):
         self._assert_owner()
-        if self.hasNext:
-            self._position += 1
+        position = self._neighbor(1)
+        if position is not None:
+            self._position = position
             self._load()
 
     @Slot()
@@ -111,6 +137,7 @@ class PhotoInspectorController(QObject):
         self._assert_owner()
         self._cancel()
         self._order, self._position = [], -1
+        self._snapshot = {}
         self._model = self._default_model
         self._source, self._state = "", "idle"
         self.changed.emit()
