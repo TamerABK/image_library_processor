@@ -75,6 +75,11 @@ Button {
             visible: root.showChevron
             fillMode: Image.PreserveAspectFit
             opacity: root.enabled ? 1 : 0.36
+            layer.enabled: root.darkSurface
+            layer.effect: MultiEffect {
+                colorization: 1
+                colorizationColor: theme.white
+            }
         }
     }
 

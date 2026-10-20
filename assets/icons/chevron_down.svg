@@ -5,6 +5,7 @@
       .cls-1 {
         fill: none;
         stroke: #00008e;
+        stroke-width: 1.3px;
         stroke-linecap: round;
         stroke-miterlimit: 10;
       }
