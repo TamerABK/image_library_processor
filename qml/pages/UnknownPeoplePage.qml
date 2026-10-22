@@ -11,6 +11,7 @@ Item {
     property var people: null
     property var inspector: null
     property var favorites: null
+    property var exporter: null
     property string viewSize: "Medium"
     Room36Theme.Theme { id: theme }
     Room36Theme.Typography { id: typography }
@@ -91,6 +92,7 @@ Item {
         viewSize: root.viewSize
         inspector: root.inspector
         favoritesController: root.favorites
+        exporter: root.exporter
         onBackRequested: if (root.people) root.people.back()
         actions: RowLayout {
             Components.PillButton {

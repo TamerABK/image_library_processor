@@ -32,10 +32,6 @@ class BlurCandidateModel(PhotoListModel):
     def classificationFilter(self):
         return self._filter
 
-    @Property(int, notify=changed)
-    def selectedCount(self):
-        return len(self._selection)
-
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if index.isValid() and 0 <= index.row() < len(self._rows):
             row = self._rows[index.row()]
@@ -118,3 +114,13 @@ class BlurCandidateModel(PhotoListModel):
 
     def identities(self):
         return [row.identity for row in self._rows]
+
+    @Slot(result="QVariantList")
+    def selectedIdentities(self):
+        return [row.identity for row in self._rows if row.identity in self._selection]
+
+    @Slot()
+    def clearSelection(self):
+        self._selection.clear()
+        super().clearSelection()
+        self.changed.emit()

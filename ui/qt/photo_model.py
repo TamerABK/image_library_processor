@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, QThread, Qt, Slot
+from PySide6.QtCore import QAbstractListModel, QModelIndex, Property, QThread, Qt, Signal, Slot
 from shiboken6 import isValid
 
 from ui.models import ResultItem
@@ -34,6 +34,7 @@ class _Photo:
 
 
 class PhotoListModel(QAbstractListModel):
+    selectionChanged = Signal()
     ROLE_NAMES = ("photoId", "sourcePath", "filename", "title", "detail", "badgeText",
                   "personId", "selected", "thumbnailSource", "thumbnailState")
     ROLES = {int(Qt.ItemDataRole.UserRole) + i + 1: name.encode()
@@ -102,6 +103,23 @@ class PhotoListModel(QAbstractListModel):
     def identities(self):
         return [row.identity for row in self._rows]
 
+    @Property(int, notify=selectionChanged)
+    def selectedCount(self):
+        return sum(row.selected for row in self._rows)
+
+    @Slot(result="QVariantList")
+    def selectedIdentities(self):
+        return [row.identity for row in self._rows if row.selected]
+
+    @Slot()
+    def clearSelection(self):
+        self._assert_owner()
+        for row in self._rows:
+            if row.selected:
+                row.selected = False
+                self._changed(row, "selected")
+        self.selectionChanged.emit()
+
     def _changed(self, row, *roles):
         index = self.index(self._positions[row.identity])
         self.dataChanged.emit(index, index, [self.ROLE[name] for name in roles])
@@ -134,6 +152,7 @@ class PhotoListModel(QAbstractListModel):
         self._rows = rows
         self._reindex()
         self.endResetModel()
+        self.selectionChanged.emit()
 
     def append_items(self, items):
         self._assert_owner()
@@ -160,6 +179,7 @@ class PhotoListModel(QAbstractListModel):
         del self._rows[index]
         self._reindex()
         self.endRemoveRows()
+        self.selectionChanged.emit()
         return True
 
     def removePhotos(self, identities):
@@ -174,6 +194,7 @@ class PhotoListModel(QAbstractListModel):
         self._rows = [row for row in self._rows if row.identity not in removed]
         self._reindex()
         self.endResetModel()
+        self.selectionChanged.emit()
         return len(removed)
 
     @Slot(str, bool, result=bool)
@@ -185,6 +206,7 @@ class PhotoListModel(QAbstractListModel):
         if row.selected != selected:
             row.selected = selected
             self._changed(row, "selected")
+            self.selectionChanged.emit()
         return True
 
     @Slot(bool)

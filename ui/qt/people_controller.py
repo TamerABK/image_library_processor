@@ -224,6 +224,19 @@ class PeopleController(QObject):
     def selectedUnknown(self):
         return self._public_row(self._unknown.get_row(self._selected_unknown))
 
+    def known_export_groups(self):
+        """Current project membership, independent of the visible search filter."""
+        self._assert_owner()
+        if self._state != "COMPLETE":
+            return []
+        return [(row["key"], row["name"], tuple(row["paths"]))
+                for row in self._known._all]
+
+    def selected_known_export_group(self):
+        self._assert_owner()
+        row = self._known.get_row(self._selected_known) if self._state == "COMPLETE" else None
+        return (row["key"], row["name"], tuple(row["paths"])) if row else None
+
     @Property(int, notify=changed)
     def knownCount(self):
         return self._known.totalCount if self._state == "COMPLETE" else -1

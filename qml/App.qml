@@ -20,6 +20,7 @@ ApplicationWindow {
     property var duplicateController: null
     property var favoritesController: null
     property var trashController: null
+    property var exportController: null
     property var inspectorController: null
     property var activeProjectId: null
     property string activeProjectName: ""
@@ -175,6 +176,7 @@ ApplicationWindow {
             duplicateController: window.duplicateController
             favoritesController: window.favoritesController
             trashController: window.trashController
+            exportController: window.exportController
             inspectorController: window.inspectorController
             projectId: window.activeProjectId
             projectName: window.activeProjectName

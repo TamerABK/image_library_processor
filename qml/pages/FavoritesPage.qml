@@ -9,6 +9,7 @@ Item {
     objectName: "favoritesPage"
     property var favorites: null
     property var inspector: null
+    property var exporter: null
     property string viewSize: "Medium"
     Room36Theme.Theme { id: theme }
     Component.onDestruction: if (inspector) inspector.close()
@@ -16,6 +17,19 @@ Item {
     ColumnLayout {
         anchors.fill: parent
         spacing: 8
+        RowLayout {
+            Layout.fillWidth: true
+            Item { Layout.fillWidth: true }
+            Components.PillButton {
+                objectName: "favoritesExportSelected"
+                variant: "accent"
+                text: "Export selected"
+                enabled: root.exporter !== null && !root.exporter.busy && !root.exporter.preparing
+                    && root.favorites !== null && root.favorites.photoModel.selectedCount > 0
+                onClicked: root.exporter.prepareSelected(root.favorites.photoModel)
+                Accessible.name: "Export selected favorite photos"
+            }
+        }
         Text {
             objectName: "favoritesMessage"
             Layout.fillWidth: true

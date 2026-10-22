@@ -11,6 +11,8 @@ Item {
     property var photoModel: null
     property var inspector: null
     property var favoritesController: null
+    property var exporter: null
+    property bool allowPersonExport: false
     property string viewSize: "Medium"
     property string title: ""
     property Component actions: null
@@ -61,6 +63,24 @@ Item {
                     color: theme.mutedText
                     font.pixelSize: typography.body
                 }
+            }
+            PillButton {
+                objectName: "peopleExportSelected"
+                variant: "translucent"
+                text: "Export selected"
+                enabled: root.exporter !== null && !root.exporter.busy && !root.exporter.preparing
+                    && root.photoModel !== null && root.photoModel.selectedCount > 0
+                onClicked: root.exporter.prepareSelected(root.photoModel)
+                Accessible.name: "Export selected person photos"
+            }
+            PillButton {
+                objectName: "knownExportPerson"
+                visible: root.allowPersonExport
+                variant: "accent"
+                text: "Export person"
+                enabled: root.exporter !== null && !root.exporter.busy && !root.exporter.preparing
+                onClicked: root.exporter.preparePerson()
+                Accessible.name: "Export all photos of this known person"
             }
             Loader { sourceComponent: root.actions }
         }

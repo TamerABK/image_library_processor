@@ -11,6 +11,7 @@ Item {
     property var processing: null
     property var inspector: null
     property var favorites: null
+    property var exporter: null
     property string viewSize: "Medium"
     readonly property var blurStage: processing && processing.stages.length > 0
         ? processing.stages[0] : ({state: "NOT_STARTED", error: ""})
@@ -47,6 +48,15 @@ Item {
                 Accessible.name: "Filter blur candidates: " + label
             }
             Item { Layout.fillWidth: true }
+            Components.PillButton {
+                objectName: "blurExportSelected"
+                variant: "translucent"
+                text: "Export selected"
+                enabled: root.exporter !== null && !root.exporter.busy && !root.exporter.preparing
+                    && root.processing !== null && root.processing.blurModel.selectedCount > 0
+                onClicked: root.exporter.prepareSelected(root.processing.blurModel)
+                Accessible.name: "Export selected blurry photos"
+            }
             Components.PrimaryButton {
                 objectName: "bulkKeep"
                 text: "Keep"

@@ -11,6 +11,7 @@ Item {
     property var people: null
     property var inspector: null
     property var favorites: null
+    property var exporter: null
     property string viewSize: "Medium"
     Room36Theme.Theme { id: theme }
     Room36Theme.Typography { id: typography }
@@ -46,6 +47,16 @@ Item {
                 Accessible.name: "Sort known people: " + label
             }
             Item { Layout.fillWidth: true }
+            Components.PillButton {
+                objectName: "knownExportAll"
+                variant: "accent"
+                text: "Export all people"
+                enabled: root.exporter !== null && !root.exporter.busy && !root.exporter.preparing
+                    && root.people !== null && root.people.state === "COMPLETE"
+                    && root.people.knownCount > 0
+                onClicked: root.exporter.prepareAllPeople()
+                Accessible.name: "Export all known people into person folders"
+            }
         }
         Text {
             objectName: "knownPeopleStateText"
@@ -88,6 +99,8 @@ Item {
         viewSize: root.viewSize
         inspector: root.inspector
         favoritesController: root.favorites
+        exporter: root.exporter
+        allowPersonExport: true
         onBackRequested: if (root.people) root.people.back()
     }
 }

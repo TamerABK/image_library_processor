@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Layouts
 import "../layout" as Room36Layout
 import "../theme" as Room36Theme
 import "../dev" as Dev
@@ -18,6 +19,7 @@ Rectangle {
     property var duplicateController: null
     property var favoritesController: null
     property var trashController: null
+    property var exportController: null
     property var inspectorController: null
     property string libraryViewSize: "Medium"
     property string blurViewSize: "Medium"
@@ -157,10 +159,31 @@ Rectangle {
         controller: root.processingController
     }
 
+    Connections {
+        target: root.exportController
+        function onPlanReady() { exportDialog.open() }
+    }
+    Components.ExportDialog {
+        id: exportDialog
+        exporter: root.exportController
+    }
+    Text {
+        objectName: "exportShellError"
+        anchors.bottom: parent.bottom
+        anchors.horizontalCenter: parent.horizontalCenter
+        z: 11
+        visible: root.exportController !== null && root.exportController.error.length > 0
+            && !exportDialog.visible
+        text: root.exportController ? root.exportController.error : ""
+        color: theme.mainBlue
+        Accessible.name: text
+    }
+
     Component {
         id: favoritesComponent
         FavoritesPage {
             favorites: root.favoritesController
+            exporter: root.exportController
             inspector: root.inspectorController
             viewSize: root.favoritesViewSize
         }
@@ -180,6 +203,7 @@ Rectangle {
         id: blurComponent
         BlurryPhotosPage {
             processing: root.processingController
+            exporter: root.exportController
             inspector: root.inspectorController
             favorites: root.favoritesController
             viewSize: root.blurViewSize
@@ -190,6 +214,7 @@ Rectangle {
         id: duplicateComponent
         NearDuplicatesPage {
             duplicates: root.duplicateController
+            exporter: root.exportController
             inspector: root.inspectorController
             favorites: root.favoritesController
             viewSize: root.duplicateViewSize
@@ -200,6 +225,7 @@ Rectangle {
         id: knownComponent
         KnownPeoplePage {
             people: root.peopleController
+            exporter: root.exportController
             inspector: root.inspectorController
             favorites: root.favoritesController
             viewSize: root.knownPeopleViewSize
@@ -210,6 +236,7 @@ Rectangle {
         id: unknownComponent
         UnknownPeoplePage {
             people: root.peopleController
+            exporter: root.exportController
             inspector: root.inspectorController
             favorites: root.favoritesController
             viewSize: root.unknownPeopleViewSize
@@ -218,10 +245,28 @@ Rectangle {
 
     Component {
         id: gridComponent
-        Components.PhotoGrid {
-            photoModel: root.photoModel
-            favoritesController: root.favoritesController
-            viewSize: root.libraryViewSize
+        ColumnLayout {
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                Components.PillButton {
+                    objectName: "libraryExportSelected"
+                    variant: "accent"
+                    text: "Export selected"
+                    enabled: root.exportController !== null && !root.exportController.busy
+                        && !root.exportController.preparing && root.photoModel !== null
+                        && root.photoModel.selectedCount > 0
+                    onClicked: root.exportController.prepareSelected(root.photoModel)
+                    Accessible.name: "Export selected library photos"
+                }
+            }
+            Components.PhotoGrid {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                photoModel: root.photoModel
+                favoritesController: root.favoritesController
+                viewSize: root.libraryViewSize
+            }
         }
     }
 

@@ -11,6 +11,7 @@ Item {
     property var duplicates: null
     property var inspector: null
     property var favorites: null
+    property var exporter: null
     property string viewSize: "Medium"
     property string pendingNewKeeper: ""
     readonly property var group: duplicates ? duplicates.selectedGroup : ({})
@@ -107,6 +108,15 @@ Item {
                 text: root.group.photoCount + " photos in this group"
                 color: theme.mainBlue
                 font.pixelSize: 22
+            }
+            Components.PillButton {
+                objectName: "duplicateExportSelected"
+                variant: "translucent"
+                text: "Export selected"
+                enabled: root.exporter !== null && !root.exporter.busy && !root.exporter.preparing
+                    && root.duplicates !== null && root.duplicates.detailPhotoModel.selectedCount > 0
+                onClicked: root.exporter.prepareSelected(root.duplicates.detailPhotoModel)
+                Accessible.name: "Export selected duplicate-group photos"
             }
             Components.PillButton {
                 objectName: "duplicateConfirm"
