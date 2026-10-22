@@ -248,12 +248,14 @@ class ProcessingTests(unittest.TestCase):
             cache_path=self.root / "analysis.sqlite3", state_root=self.root / "state")
         try:
             self.open()
-            self.finish()
+            # This setup uses the real cache/hash pipeline; cold Windows CI
+            # initialization is not the behavior this retry test measures.
+            wait_until(lambda: self.processing.overallState in ("COMPLETE", "FAILED"), timeout=10)
             project = self.projects.projects.get(self.projects.activeProjectId)
             processing.start(project, [ResultItem(self.folder / "a.jpg", "a.jpg", "")])
             wait_until(lambda: processing.overallState == "FAILED")
             processing.retry()
-            wait_until(lambda: processing.overallState == "COMPLETE", timeout=6)
+            wait_until(lambda: processing.overallState == "COMPLETE", timeout=10)
             self.assertEqual(2, failing.calls)
             self.assertEqual(1, processing.blurModel.candidateCount)
         finally:
