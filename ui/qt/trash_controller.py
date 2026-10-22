@@ -93,7 +93,8 @@ def _trash_worker(tasks, results, stop, state_root):
             except (OSError, sqlite3.Error):
                 log.exception("trash_history_save_failed folder=%s", folder)
                 output["historyError"] = (
-                    "Files were moved to Trash, but Room 36 could not save the deletion history.")
+                    "Photos were moved to Trash, but Room 36 could not save the deletion history."
+                    if succeeded else "Room 36 could not save the deletion attempt history.")
         result = (generation, folder, action, output)
         while not stop.is_set():
             try:
@@ -217,10 +218,33 @@ class TrashController(QObject):
     def _schedule_refresh(self, *_):
         self._assert_owner()
         self._plan = None
+        if self._folder and not self._review_ready():
+            self._block_unready_rows()
         if self._folder and not self._closed and not self._busy:
             if self._pending_refresh:
                 self._refresh_dirty = True
             self._refresh_timer.start()
+
+    def _review_ready(self):
+        return bool(self._favorites.loaded and self._duplicates.state == "COMPLETE"
+                    and self._duplicates.reviewReady)
+
+    def _block_unready_rows(self):
+        """Invalidate executable rows synchronously when review metadata becomes unstable."""
+        rows = self._model.all_rows()
+        if not rows or all(not row["executable"] for row in rows):
+            return
+        reason = "Review choices are still loading or unavailable."
+        blocked = []
+        for row in rows:
+            row = dict(row)
+            if row["executable"]:
+                row["conflictReason"] = (row["conflictReason"] + " " + reason).strip()
+                row["executable"] = False
+                row["badgeText"] = "Needs attention"
+            blocked.append(row)
+        self._model.set_rows(blocked)
+        self.changed.emit()
 
     def _load(self):
         if not self._folder or self._busy:
@@ -241,7 +265,7 @@ class TrashController(QObject):
         revisions = {path: (row["file_size"], row["mtime_ns"])
                      for path, row in self._processing.blurModel.results.items()}
         favorites = {path for path in available if self._favorites.isFavorite(path)}
-        ready = self._favorites.loaded and self._duplicates.state == "COMPLETE"
+        ready = self._review_ready()
         rows = project_trash_rows(available, decisions, self._duplicates.review_rows(), favorites,
                                   revisions, review_ready=ready)
         for row in rows:
@@ -264,7 +288,8 @@ class TrashController(QObject):
     @Slot(str, result=bool)
     def isExecutable(self, path):
         row = self._model.row(path)
-        return bool(row and row["executable"] and not self._favorites.isPending(path))
+        return bool(self._review_ready() and row and row["executable"]
+                    and not self._favorites.isPending(path))
 
     @Slot(str, result=bool)
     def restorePhoto(self, path):

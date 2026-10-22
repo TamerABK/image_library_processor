@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -166,6 +167,33 @@ class DuplicateFlowTests(unittest.TestCase):
         self.processing.changed.emit()
         self.app.processEvents()
         self.assertEqual(self.duplicates.state, "COMPLETE")
+
+    def test_saved_review_readiness_is_separate_from_analysis_completion(self):
+        path = str(self.paths[0])
+        self.store.save_duplicate_review(self.folder, self.group_id, "saved-signature", [path],
+                                         {path: "KEEP"}, True)
+        self.assertFalse(self.duplicates.reviewReady)
+        with patch.object(self.duplicates._store, "duplicate_reviews",
+                          side_effect=sqlite3.OperationalError("unreadable")), patch(
+                "ui.qt.duplicate_controller.log"):
+            self.publish()
+        self.assertEqual(self.duplicates.state, "COMPLETE")
+        self.assertFalse(self.duplicates.reviewReady)
+        self.assertEqual(self.duplicates._persisted, {})
+        self.assertEqual(self.store.duplicate_reviews(self.folder)[self.group_id]["intents"][path], "KEEP")
+        self.duplicates.reload_reviews()
+        self.assertTrue(self.duplicates.reviewReady)
+        readiness = []
+        self.duplicates.changed.connect(lambda: readiness.append(self.duplicates.reviewReady))
+        self.duplicates.openGroup(self.group_id)
+        self.assertTrue(self.duplicates.setKeeper(str(self.paths[1])))
+        self.assertFalse(self.duplicates.reviewReady)
+        wait_until(lambda: not self.duplicates.busy)
+        self.assertTrue(self.duplicates.reviewReady)
+        self.assertIn(False, readiness)
+        self.assertIn(True, readiness)
+        self.processing.invalidate()
+        self.assertFalse(self.duplicates.reviewReady)
 
     def test_qml_route_group_inspector_keeper_confirm_filter_and_sort(self):
         self.publish()

@@ -68,6 +68,7 @@ class DuplicateReviewController(QObject):
         self._duplicates_payload = None
         self._ranking_payload = None
         self._persisted = {}
+        self._review_metadata_available = False
         self._selected = ""
         self._state = "NOT_STARTED"
         self._ranking_state = "NOT_STARTED"
@@ -122,6 +123,11 @@ class DuplicateReviewController(QObject):
     def busy(self):
         return self._busy
 
+    @Property(bool, notify=changed)
+    def reviewReady(self):
+        """Current project's saved review choices are loaded and stable."""
+        return bool(self._folder and self._review_metadata_available and not self._busy)
+
     @Property(int, notify=changed)
     def needsReviewCount(self):
         return self._groups.needsReviewCount if self._state == "COMPLETE" else -1
@@ -151,7 +157,17 @@ class DuplicateReviewController(QObject):
     def reload_reviews(self):
         self._assert_owner()
         if self._folder:
-            self._persisted = self._store.duplicate_reviews(self._folder)
+            self._review_metadata_available = False
+            self.changed.emit()
+            try:
+                self._persisted = self._store.duplicate_reviews(self._folder)
+            except (OSError, sqlite3.Error, ValueError, TypeError):
+                self._persisted = {}
+                self._error = "Saved duplicate reviews could not be loaded. Check application data permissions."
+                self.changed.emit()
+                raise
+            self._review_metadata_available = True
+            self._error = ""
             self._rebuild()
 
     @Slot()
@@ -163,6 +179,7 @@ class DuplicateReviewController(QObject):
         self._folder = ""
         self._duplicates_payload = self._ranking_payload = None
         self._persisted = {}
+        self._review_metadata_available = False
         self._selected = ""
         self._state = self._ranking_state = "NOT_STARTED"
         self._stage_error = self._error = ""
@@ -175,22 +192,27 @@ class DuplicateReviewController(QObject):
     def _sync(self):
         self._assert_owner()
         folder = self._processing.projectFolder
-        if folder and folder != self._folder:
+        stage = self._processing.stage("duplicates")
+        metadata_changed = False
+        if folder and stage["state"] != "NOT_STARTED" and folder != self._folder:
             self._folder = folder
+            self._review_metadata_available = False
+            metadata_changed = True
             try:
                 self._persisted = self._store.duplicate_reviews(folder)
+                self._review_metadata_available = True
+                self._error = ""
             except (OSError, sqlite3.Error, ValueError, TypeError):
                 log.exception("duplicate_review_load_failed folder=%s", folder)
                 self._persisted = {}
                 self._error = "Saved duplicate reviews could not be loaded. Check application data permissions."
-        stage = self._processing.stage("duplicates")
         ranking_stage = self._processing.stage("ranking")
         state = stage["state"]
         ranking_state = ranking_stage["state"]
         error = stage.get("error", "")
         duplicates = self._processing.results.get("duplicates") if state == "COMPLETE" else None
         ranking = self._processing.results.get("ranking") if ranking_state == "COMPLETE" else None
-        changed = (duplicates is not self._duplicates_payload or ranking is not self._ranking_payload or
+        changed = (metadata_changed or duplicates is not self._duplicates_payload or ranking is not self._ranking_payload or
                    state != self._state or ranking_state != self._ranking_state or error != self._stage_error)
         if not changed:
             return
@@ -359,6 +381,7 @@ class DuplicateReviewController(QObject):
             self._busy = False
             row = self._groups.get_row(group_id)
             if row is None or row["signature"] != signature:
+                self.changed.emit()
                 continue
             if error:
                 self._error = error

@@ -46,6 +46,20 @@ class FakeDuplicates(QObject):
         self.state = "COMPLETE"
         self.rows = []
         self.reloads = 0
+        self._review_ready = True
+        self._busy = False
+
+    @Property(bool, notify=changed)
+    def reviewReady(self):
+        return self._review_ready and not self._busy
+
+    @Property(bool, notify=changed)
+    def busy(self):
+        return self._busy
+
+    def set_busy(self, busy):
+        self._busy = busy
+        self.changed.emit()
 
     def review_rows(self):
         return self.rows
@@ -342,6 +356,61 @@ class TrashFlowTests(unittest.TestCase):
                    and self.trash.loaded)
         self.assertEqual(self.trash.count, 0)
 
+    def test_duplicate_metadata_load_failure_blocks_blur_remove(self):
+        path = photo_identity(self.a / "a.jpg")
+        self.mark_blur(path)
+        self.store.save_duplicate_review(self.a, "group", "signature", [path],
+                                         {path: "KEEP"}, True)
+        self.duplicates.rows = [dict(groupId="group", signature="signature",
+                                     intents={path: "KEEP"})]
+        self.duplicates.changed.emit()
+        wait_until(lambda: not self.trash.isExecutable(path))
+        self.assertEqual(self.duplicates.state, "COMPLETE")
+        self.duplicates._review_ready = False  # Simulates a persisted-review load failure.
+        self.duplicates.rows = []  # An empty projection must never mean safe to delete.
+        self.duplicates.changed.emit()
+        self.assertEqual(self.trash.count, 1)
+        self.assertFalse(self.trash.isExecutable(path))
+        self.assertEqual(self.trash.attentionCount, 1)
+        self.trash.photoModel.selectAllReady()
+        self.assertEqual(self.trash.photoModel.selectedCount, 0)
+        self.assertEqual(self.trash.prepareSelection(), {})
+        with patch("ui.qt.trash_controller.send2trash") as move:
+            self.assertFalse(self.trash.executeSelection())
+        move.assert_not_called()
+        self.assertEqual(self.store.load(self.a).image_decisions[path].review_state, "REMOVE")
+        self.assertEqual(self.store.duplicate_reviews(self.a)["group"]["intents"][path], "KEEP")
+
+    def test_pending_duplicate_write_blocks_previous_remove_projection(self):
+        path = photo_identity(self.a / "a.jpg")
+        self.mark_blur(path)
+        self.store.save_duplicate_review(self.a, "group", "signature", [path],
+                                         {path: "REMOVE"}, True)
+        self.duplicates.rows = [dict(groupId="group", signature="signature",
+                                     intents={path: "REMOVE"})]
+        self.duplicates.changed.emit()
+        wait_until(lambda: self.trash.isExecutable(path) and len(self.trash.row(path)["removalSources"]) == 2)
+        self.trash.photoModel.selectAllReady()
+        self.assertEqual(self.trash.prepareSelection()["count"], 1)
+        self.duplicates.set_busy(True)
+        self.assertFalse(self.trash.isExecutable(path))
+        self.assertEqual(self.trash.attentionCount, 1)
+        self.assertIn("Review choices", self.trash.row(path)["conflictReason"])
+        self.trash.photoModel.selectAllReady()
+        self.assertEqual(self.trash.photoModel.selectedCount, 0)
+        self.assertEqual(self.trash.prepareSelection(), {})
+        with patch("ui.qt.trash_controller.send2trash") as move:
+            self.assertFalse(self.trash.executeSelection())
+        move.assert_not_called()
+        self.store.save_duplicate_review(self.a, "group", "signature", [path],
+                                         {path: "KEEP"}, True)
+        self.duplicates.rows = [dict(groupId="group", signature="signature",
+                                     intents={path: "KEEP"})]
+        self.duplicates.set_busy(False)
+        wait_until(lambda: "Decision conflict" in self.trash.row(path).get("conflictReason", ""))
+        self.assertFalse(self.trash.isExecutable(path))
+        self.assertEqual(self.trash.attentionCount, 1)
+
     def test_removal_read_failure_is_local_and_blocks_execution(self):
         path = photo_identity(self.a / "a.jpg")
         self.mark_blur(path)
@@ -434,6 +503,21 @@ class TrashFlowTests(unittest.TestCase):
         self.assertEqual(moved, [path])
         self.assertIn("could not save the deletion history", self.trash.error)
         self.assertIn("1 photos moved", self.trash.summary)
+
+    def test_history_failure_without_move_reports_attempt_only(self):
+        path = photo_identity(self.a / "a.jpg")
+        self.mark_blur(path)
+        self.trash.photoModel.selectAllReady()
+        self.trash.prepareSelection()
+        with patch("ui.qt.trash_controller.send2trash", side_effect=OSError("denied")) as move, patch(
+                "ui.qt.trash_controller.log"), patch.object(
+                AutomaticStateStore, "save_deletion_transaction",
+                side_effect=sqlite3.OperationalError("read only")):
+            self.assertTrue(self.trash.executeSelection())
+            wait_until(lambda: not self.trash.busy and bool(self.trash.error))
+        move.assert_called_once_with(path)
+        self.assertEqual(self.trash.error, "Room 36 could not save the deletion attempt history.")
+        self.assertTrue(Path(path).exists())
 
     def test_project_switch_during_move_keeps_result_in_original_project(self):
         path = photo_identity(self.a / "a.jpg")
