@@ -102,7 +102,7 @@ class ProcessingTests(unittest.TestCase):
     def test_progressive_blur_before_face_completion(self):
         self.runner.gate = self.gate
         self.open()
-        wait_until(lambda: self.processing.stage("blur")["state"] == "COMPLETE")
+        wait_until(lambda: self.processing.stage("blur")["state"] == "COMPLETE", timeout=10)
         self.assertEqual(3, self.photos.rowCount())
         self.assertEqual(3, self.processing.blurModel.rowCount())
         self.assertEqual("RUNNING", self.processing.overallState)

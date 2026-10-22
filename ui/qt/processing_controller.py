@@ -13,6 +13,9 @@ from .blur_model import BlurCandidateModel
 from .photo_model import photo_identity
 
 
+PROCESSING_SHUTDOWN_TIMEOUT_SECONDS = 10.0
+
+
 def _processing_worker(tasks, results, stop, runner, store, cache_path):
     while not stop.is_set():
         try:
@@ -250,5 +253,9 @@ class ProjectProcessingController(QObject):
         self._stop.set()
         self._session += 1
         self._timer.stop()
-        self._worker.join(timeout=0.5)
+        self._worker.join(timeout=PROCESSING_SHUTDOWN_TIMEOUT_SECONDS)
         self._blur.close()
+        if self._worker.is_alive():
+            get_scan_logger().error("processing_worker_shutdown_timed_out timeout_seconds=%s",
+                                    PROCESSING_SHUTDOWN_TIMEOUT_SECONDS)
+            raise RuntimeError("Project processing worker did not stop during shutdown")

@@ -291,6 +291,7 @@ class PeopleFlowTests(unittest.TestCase):
         self.previews.shutdown()
         self.thumbnails.shutdown()
         self.assertFalse(self.people._worker.is_alive())
+        self.assertFalse(self.processing._worker.is_alive())
         self.temp.cleanup()
 
     items = phase5.ProjectFlowTests.items
@@ -496,6 +497,8 @@ class PeopleFlowTests(unittest.TestCase):
         self.assertEqual((self.people.knownModel.totalCount,
                           self.people.unknownModel.totalCount), (0, 0))
         self.assertEqual(self.people._pending, 0)
+        # The retry's processing session is not needed for this generation test.
+        self.processing.invalidate()
 
     def test_known_suggestion_uses_recognition_threshold(self):
         similarity = CosineEmbeddingSimilarity()

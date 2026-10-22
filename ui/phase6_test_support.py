@@ -1,4 +1,6 @@
 """Deterministic backend seams: real Blur/hash/cache, no external ONNX models."""
+import time
+
 from automatic_scan.config import AutomaticScanConfig
 from automatic_scan.orchestrator import AutomaticScanOrchestrator
 from automatic_scan.services import AutomaticScanServices
@@ -27,7 +29,13 @@ class FixtureRunner:
         self.services.append(service)
         if self.gate is not None:
             def wait():
-                self.gate.wait(10)
+                deadline = time.monotonic() + 10
+                while not self.gate.is_set():
+                    kwargs["cancellation_token"].raise_if_canceled()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self.gate.wait(min(0.05, remaining))
                 kwargs["cancellation_token"].raise_if_canceled()
             service.initialize_faces = wait
         return AutomaticScanOrchestrator(state_store=self.store).process_project(
