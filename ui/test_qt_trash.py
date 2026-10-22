@@ -84,6 +84,10 @@ class LargeTrashFixture(QObject):
         return True
 
     @Property(bool, constant=True)
+    def projectionReady(self):
+        return True
+
+    @Property(bool, constant=True)
     def busy(self):
         return False
 
@@ -162,6 +166,14 @@ class TrashDataTests(unittest.TestCase):
             self.assertEqual(len(model._requests), 0)
             model.setFilter("Needs attention")
             self.assertEqual(model.rowCount(), 3000)
+            self.assertEqual(model.selectedCount, 0)
+            model.selectAllReady()
+            self.assertEqual(model.selectedCount, 0)
+            model._selection.add(rows[1]["photoId"])
+            self.assertEqual(model.selected_rows(), [])
+            self.assertFalse(model.selection_is_visible())
+            model.setFilter("All")
+            self.assertEqual(model.selectedCount, 0)
         finally:
             model.close()
             thumbnails.shutdown()
@@ -284,6 +296,111 @@ class TrashFlowTests(unittest.TestCase):
         self.duplicates.changed.emit()
         wait_until(lambda: self.trash.count >= 1)
 
+    def change_blur(self, path, state):
+        path = photo_identity(path)
+        row = self.blur.results[path]
+        self.store.save_image_reviews(self.a,
+            [(path, row["file_size"], row["mtime_ns"])], state)
+        self.blur.apply_review(path, state)
+
+    def test_blur_change_immediately_invalidates_selected_delete_plan(self):
+        path = photo_identity(self.a / "a.jpg")
+        self.mark_blur(path)
+        self.trash.photoModel.selectAllReady()
+        self.assertEqual(self.trash.prepareSelection()["count"], 1)
+        self.change_blur(path, "KEEP")
+        self.assertEqual(self.trash.photoModel.selectedCount, 0)
+        self.assertFalse(self.trash.projectionReady)
+        self.assertFalse(self.trash.isExecutable(path))
+        self.assertEqual(self.trash.prepareSelection(), {})
+        with patch("ui.qt.trash_controller.send2trash") as move:
+            self.assertFalse(self.trash.executeSelection())
+        move.assert_not_called()
+        wait_until(lambda: self.trash.projectionReady and self.trash.count == 0)
+        self.assertEqual(self.store.load(self.a).image_decisions[path].review_state, "KEEP")
+
+    def test_favorite_pending_immediately_invalidates_selected_delete_plan(self):
+        path = photo_identity(self.a / "a.jpg")
+        self.mark_blur(path)
+        self.trash.photoModel.selectAllReady()
+        self.assertEqual(self.trash.prepareSelection()["count"], 1)
+        self.assertTrue(self.favorites.setFavorite(path, True))
+        self.assertEqual(self.trash.photoModel.selectedCount, 0)
+        self.assertFalse(self.trash.projectionReady)
+        self.assertFalse(self.trash.isExecutable(path))
+        self.assertEqual(self.trash.prepareSelection(), {})
+        with patch("ui.qt.trash_controller.send2trash") as move:
+            self.assertFalse(self.trash.executeSelection())
+        move.assert_not_called()
+        wait_until(lambda: self.favorites.isFavorite(path) and self.trash.loaded
+                   and self.trash.attentionCount == 1
+                   and "Favorite" in self.trash.row(path).get("conflictReason", ""))
+        self.assertIn("Favorite", self.trash.row(path)["conflictReason"])
+
+    def test_restore_immediately_invalidates_selected_delete_plan(self):
+        path = photo_identity(self.a / "a.jpg")
+        self.mark_blur(path)
+        self.trash.photoModel.selectAllReady()
+        self.assertEqual(self.trash.prepareSelection()["count"], 1)
+        self.assertTrue(self.trash.restorePhoto(path))
+        self.assertEqual(self.trash.photoModel.selectedCount, 0)
+        self.assertFalse(self.trash.projectionReady)
+        self.assertFalse(self.trash.isExecutable(path))
+        self.assertEqual(self.trash.prepareSelection(), {})
+        with patch("ui.qt.trash_controller.send2trash") as move:
+            self.assertFalse(self.trash.executeSelection())
+        move.assert_not_called()
+        wait_until(lambda: self.trash.projectionReady and self.trash.count == 0)
+
+    def test_filter_change_clears_hidden_destructive_selection(self):
+        a, b = photo_identity(self.a / "a.jpg"), photo_identity(self.a / "b.jpg")
+        self.mark_blur(a)
+        self.mark_blur(b)
+        self.assertTrue(self.favorites.setFavorite(b, True))
+        wait_until(lambda: self.trash.projectionReady and self.trash.attentionCount == 1)
+        self.assertTrue(self.trash.photoModel.setSelected(a, True))
+        self.assertEqual(self.trash.prepareSelection()["count"], 1)
+        self.trash.photoModel.setFilter("Needs attention")
+        self.assertEqual(self.trash.photoModel.selectedCount, 0)
+        self.trash.photoModel.selectAllReady()
+        self.assertEqual(self.trash.photoModel.selectedCount, 0)
+        self.assertEqual(self.trash.photoModel.selected_rows(), [])
+        self.assertEqual(self.trash.prepareSelection(), {})
+        with patch("ui.qt.trash_controller.send2trash") as move:
+            self.assertFalse(self.trash.executeSelection())
+        move.assert_not_called()
+
+    def test_older_load_cannot_commit_after_new_review_change(self):
+        path = photo_identity(self.a / "a.jpg")
+        self.mark_blur(path)
+        original = AutomaticStateStore.load
+        stale = original(self.store, self.a)
+        entered, release = threading.Event(), threading.Event()
+        calls = []
+
+        def delayed_load(store, folder):
+            calls.append(folder)
+            if len(calls) == 1:
+                entered.set()
+                release.wait(3)
+                return stale
+            return original(store, folder)
+
+        try:
+            with patch.object(AutomaticStateStore, "load", delayed_load):
+                self.trash._schedule_refresh()
+                wait_until(entered.is_set)
+                old_epoch = self.trash._projection_generation
+                self.change_blur(path, "KEEP")
+                self.assertGreater(self.trash._projection_generation, old_epoch)
+                self.assertFalse(self.trash.projectionReady)
+                release.set()
+                wait_until(lambda: self.trash.projectionReady and self.trash.count == 0)
+        finally:
+            release.set()
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertEqual(self.trash.photoModel.selectedCount, 0)
+
     def test_blur_restore_and_unrelated_fields_preserved(self):
         path = photo_identity(self.a / "a.jpg")
         self.mark_blur(path)
@@ -325,6 +442,29 @@ class TrashFlowTests(unittest.TestCase):
         self.assertEqual(self.store.load(self.a).image_decisions[path].review_state, "UNDECIDED")
         self.assertEqual(self.store.duplicate_reviews(self.a)["group"]["intents"], {})
         self.assertTrue(Path(path).exists())
+
+    def test_duplicate_reload_failure_after_restore_stays_closed(self):
+        path = photo_identity(self.a / "b.jpg")
+        self.mark_duplicate(path)
+
+        def fail_reload():
+            self.duplicates._review_ready = False
+            self.duplicates.changed.emit()
+            raise sqlite3.OperationalError("unreadable")
+
+        with patch.object(self.duplicates, "reload_reviews", side_effect=fail_reload), patch(
+                "ui.qt.trash_controller.log"), patch("ui.qt.trash_controller.send2trash") as move:
+            self.assertTrue(self.trash.restorePhoto(path))
+            wait_until(lambda: not self.trash.busy and bool(self.trash.error))
+        move.assert_not_called()
+        self.assertEqual(self.store.duplicate_reviews(self.a)["group"]["intents"], {})
+        self.assertFalse(self.duplicates.reviewReady)
+        self.assertFalse(self.trash.projectionReady)
+        self.assertFalse(self.trash.isExecutable(path))
+        self.assertTrue(Path(path).exists())
+        self.duplicates._review_ready = True
+        self.duplicates.reload_reviews()
+        wait_until(lambda: self.trash.projectionReady and self.trash.count == 0)
 
     def test_keep_and_review_conflicts_block_execution(self):
         for decision in ("KEEP", "REVIEW"):
@@ -470,7 +610,7 @@ class TrashFlowTests(unittest.TestCase):
             wait_until(lambda: not self.trash.busy and len(self.store.load(self.a).deletion_transactions) == 1)
         move.assert_not_called()
         self.assertEqual(self.store.load(self.a).deletion_transactions[0].failed_paths, [path])
-        wait_until(lambda: not self.trash.isExecutable(path))
+        wait_until(lambda: "Photo changed" in self.trash.row(path).get("conflictReason", ""))
         self.assertIn("Photo changed", self.trash.row(path)["conflictReason"])
 
     def test_missing_file_is_failed_and_excluded_after_refresh(self):
@@ -502,7 +642,7 @@ class TrashFlowTests(unittest.TestCase):
             wait_until(lambda: path not in self.master.identities() and self.trash.loaded)
         self.assertEqual(moved, [path])
         self.assertIn("could not save the deletion history", self.trash.error)
-        self.assertIn("1 photos moved", self.trash.summary)
+        self.assertIn("1 photo moved", self.trash.summary)
 
     def test_history_failure_without_move_reports_attempt_only(self):
         path = photo_identity(self.a / "a.jpg")
@@ -542,6 +682,87 @@ class TrashFlowTests(unittest.TestCase):
                 self.assertEqual(self.projects.activeProjectFolder, photo_identity(self.b))
         finally:
             release.set()
+
+    def test_overlapping_active_project_refreshes_after_old_batch_moves_photo(self):
+        nested = self.a / "event"
+        nested.mkdir()
+        photo = nested / "overlap.jpg"
+        Image.new("RGB", (32, 24), "green").save(photo)
+        path = photo_identity(photo)
+        self.projects.openFolder(str(self.a))
+        wait_until(lambda: not self.projects.busy and path in self.master.identities()
+                   and self.trash.projectionReady)
+        stat = photo.stat()
+        self.store.save_image_reviews(self.a, [(path, stat.st_size, stat.st_mtime_ns)], "REMOVE")
+        self.blur.results[path] = dict(photoId=path, file_size=stat.st_size,
+                                       mtime_ns=stat.st_mtime_ns, reviewState="REMOVE")
+        self.blur.reviewChanged.emit(path)
+        wait_until(lambda: self.trash.isExecutable(path))
+        self.assertTrue(self.trash.photoModel.setSelected(path, True))
+        self.assertEqual(self.trash.prepareSelection()["count"], 1)
+        entered, release = threading.Event(), threading.Event()
+
+        def move(value):
+            entered.set()
+            release.wait(3)
+            Path(value).rename(self.root / "moved-overlap.jpg")
+
+        try:
+            with patch("ui.qt.trash_controller.send2trash", side_effect=move):
+                self.assertTrue(self.trash.executeSelection())
+                self.assertTrue(entered.wait(2))
+                self.projects.openFolder(str(nested))
+                wait_until(lambda: self.projects.activeProjectFolder == photo_identity(nested)
+                           and not self.projects.busy and path in self.master.identities())
+                before_refresh = self.projects._generation
+                release.set()
+                wait_until(lambda: not self.projects.busy and path not in self.master.identities())
+            self.assertEqual(self.projects._generation, before_refresh + 1)
+            self.assertEqual(self.projects.activeProjectFolder, photo_identity(nested))
+            self.assertEqual(self.trash.summary, "")
+            self.assertEqual(self.trash.error, "")
+            self.assertEqual(self.store.load(self.a).deletion_transactions[-1].paths, [path])
+        finally:
+            release.set()
+
+    def test_partial_delete_message_shows_success_and_failure_in_qml(self):
+        a, b = photo_identity(self.a / "a.jpg"), photo_identity(self.a / "b.jpg")
+        self.mark_blur(a)
+        self.mark_blur(b)
+        wait_until(lambda: self.trash.count == 2 and self.trash.projectionReady)
+        engine = QQmlApplicationEngine()
+        engine.setInitialProperties(dict(startPage="library", projectController=self.projects,
+            photoModel=self.master, favoritesController=self.favorites,
+            inspectorController=self.inspector, trashController=self.trash))
+        engine.load(qml_path("App.qml").as_uri())
+        self.assertTrue(engine.rootObjects())
+        window = engine.rootObjects()[0]
+        try:
+            shell = window.findChild(QObject, "libraryShell")
+            shell.showRoute("trash")
+            self.trash.photoModel.selectAllReady()
+            self.assertEqual(self.trash.prepareSelection()["count"], 2)
+
+            def move(value):
+                if value == b:
+                    raise OSError("denied")
+                Path(value).rename(self.root / "moved-partial.jpg")
+
+            with patch("ui.qt.trash_controller.send2trash", side_effect=move), patch(
+                    "ui.qt.trash_controller.log"):
+                self.assertTrue(self.trash.executeSelection())
+                wait_until(lambda: not self.trash.busy and bool(self.trash.summary)
+                           and bool(self.trash.error))
+            self.app.processEvents()
+            status = window.findChild(QObject, "trashStateMessage")
+            self.assertIsNotNone(status)
+            text = status.property("text")
+            self.assertIn("1 photo moved to Trash", text)
+            self.assertIn("1 photo could not be moved", text)
+            self.assertIn("Check file permissions", text)
+        finally:
+            window.close()
+            engine.deleteLater()
 
     def test_qml_route_and_confirmation_controls(self):
         path = photo_identity(self.a / "a.jpg")

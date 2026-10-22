@@ -41,7 +41,8 @@ Item {
                 objectName: "trashSelectAllReady"
                 variant: "translucent"
                 text: "Select all ready"
-                enabled: root.trash !== null && !root.trash.busy && root.trash.readyCount > 0
+                enabled: root.trash !== null && root.trash.projectionReady && root.trash.readyCount > 0
+                    && root.trash.photoModel.candidateFilter !== "Needs attention"
                 onClicked: root.trash.photoModel.selectAllReady()
                 Accessible.name: "Select all photos ready to move to Trash"
             }
@@ -58,7 +59,8 @@ Item {
                 objectName: "trashMoveSelected"
                 variant: "accent"
                 text: "Move selected to Trash"
-                enabled: root.trash !== null && root.trash.photoModel.selectedCount > 0 && !root.trash.busy
+                enabled: root.trash !== null && root.trash.projectionReady
+                    && root.trash.photoModel.selectedCount > 0
                 onClicked: {
                     root.confirmPlan = root.trash.prepareSelection()
                     if (root.confirmPlan.count) trashConfirmation.open()
@@ -72,6 +74,8 @@ Item {
             visible: root.trash === null || !root.trash.loaded || root.trash.count === 0 || root.trash.error.length > 0
                 || root.trash.summary.length > 0 || root.trash.attentionCount > 0
             text: !root.trash ? "Loading removal decisions…"
+                : root.trash.error.length > 0 && root.trash.summary.length > 0
+                    ? root.trash.summary + "\n" + root.trash.error
                 : root.trash.error.length > 0 ? root.trash.error
                 : !root.trash.loaded ? "Loading removal decisions…"
                 : root.trash.summary.length > 0 ? root.trash.summary
@@ -164,7 +168,7 @@ Item {
                                 objectName: "trashRestorePhoto"
                                 variant: "translucent"
                                 text: "Cancel removal"
-                                enabled: root.trash !== null && !root.trash.busy
+                                enabled: root.trash !== null && root.trash.projectionReady
                                 onClicked: root.trash.restorePhoto(decisionRow.photoId)
                                 Accessible.name: "Cancel all removal decisions for " + decisionRow.filename
                             }

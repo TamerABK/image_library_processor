@@ -4,7 +4,7 @@ from pathlib import Path
 from PySide6.QtCore import Property, Signal, Slot, Qt
 
 from ui.models import ResultItem
-from .photo_model import PhotoListModel
+from .photo_model import PhotoListModel, photo_identity
 
 
 class TrashPhotoModel(PhotoListModel):
@@ -43,11 +43,19 @@ class TrashPhotoModel(PhotoListModel):
         return self._all.get(path)
 
     def selected_rows(self):
-        return [self._all[path] for path in sorted(self._selection) if path in self._all]
+        visible = self._visible_paths()
+        return [self._all[path] for path in sorted(self._selection) if path in visible]
+
+    def selection_is_visible(self):
+        return self._selection <= self._visible_paths()
+
+    def _visible_paths(self):
+        return {row.identity for row in self._rows}
 
     def set_rows(self, rows):
         self._assert_owner()
-        self._all = {row["photoId"]: row for row in rows}
+        self._all = {photo_identity(row["photoId"]): dict(row, photoId=photo_identity(row["photoId"]))
+                     for row in rows}
         self._selection = {path for path in self._selection
                            if path in self._all and self._all[path]["executable"]}
         self._rebuild()
@@ -66,6 +74,8 @@ class TrashPhotoModel(PhotoListModel):
     @Slot(str)
     def setFilter(self, value):
         if value in ("All", "Ready to remove", "Needs attention"):
+            if value != self._filter:
+                self._selection.clear()
             self._filter = value
             self._rebuild()
 
@@ -76,7 +86,8 @@ class TrashPhotoModel(PhotoListModel):
 
     @Slot(str, bool, result=bool)
     def setSelected(self, identity, selected):
-        if selected and (identity not in self._all or not self._all[identity]["executable"]):
+        if selected and (identity not in self._all or identity not in self._visible_paths()
+                         or not self._all[identity]["executable"]):
             return False
         if identity not in self._all:
             return False
@@ -90,7 +101,7 @@ class TrashPhotoModel(PhotoListModel):
 
     @Slot()
     def selectAllReady(self):
-        self._selection = {path for path, row in self._all.items() if row["executable"]}
+        self._selection = {path for path in self._visible_paths() if self._all[path]["executable"]}
         self._rebuild()
 
     @Slot()

@@ -112,7 +112,7 @@ Item {
                 objectName: "duplicateConfirm"
                 variant: "accent"
                 text: "Keep selected · Remove alternatives"
-                enabled: root.duplicates !== null && !root.duplicates.busy
+                enabled: root.duplicates !== null && root.duplicates.reviewReady
                     && root.group.recommendationState === "ready"
                 onClicked: root.duplicates.confirmGroup()
                 Accessible.name: "Confirm keepers and mark alternatives for future removal"
@@ -205,7 +205,7 @@ Item {
                                 variant: "translucent"
                                 text: root.group.currentKeepers && root.group.currentKeepers.length > 1
                                     ? "Replace keeper…" : "Set keeper"
-                                enabled: root.duplicates !== null && !root.duplicates.busy
+                                enabled: root.duplicates !== null && root.duplicates.reviewReady
                                     && root.group.recommendationState === "ready"
                                     && !memberRow.modelData.keeper
                                 onClicked: {
@@ -222,7 +222,7 @@ Item {
                                 objectName: "duplicateToggleRemove"
                                 variant: "translucent"
                                 text: memberRow.modelData.intent === "REMOVE" ? "Restore" : "Remove"
-                                enabled: root.duplicates !== null && !root.duplicates.busy
+                                enabled: root.duplicates !== null && root.duplicates.reviewReady
                                     && root.group.recommendationState === "ready"
                                     && (!memberRow.modelData.keeper || memberRow.modelData.intent === "REMOVE")
                                 onClicked: root.duplicates.setIntent(memberRow.modelData.photoId,
@@ -267,6 +267,7 @@ Item {
                     objectName: "duplicateReplaceKeeperOption"
                     Layout.fillWidth: true
                     variant: "translucent"
+                    enabled: root.duplicates !== null && root.duplicates.reviewReady
                     text: modelData.substring(Math.max(modelData.lastIndexOf("/"), modelData.lastIndexOf("\\")) + 1)
                     onClicked: {
                         root.duplicates.replaceKeeper(modelData, root.pendingNewKeeper)

@@ -27,7 +27,7 @@ def _trash_worker(tasks, results, stop, state_root):
             if stop.is_set():
                 return
             continue
-        output = {}
+        output = {"projectionGeneration": payload} if action == "load" else {}
         try:
             store = AutomaticStateStore(state_root)
         except (OSError, sqlite3.Error):
@@ -115,6 +115,8 @@ class TrashController(QObject):
         self._model = TrashPhotoModel(thumbnails, self)
         self._folder = ""
         self._generation = 0
+        self._projection_generation = 0
+        self._projection_ready = False
         self._loaded = False
         self._busy = False
         self._error = ""
@@ -125,6 +127,7 @@ class TrashController(QObject):
         self._refresh_after_delete = ""
         self._preserve_error_after_delete = False
         self._failed_reasons = {}
+        self._pending_overlap_paths = set()
         self._closed = False
         self._tasks, self._results = Queue(maxsize=4), Queue(maxsize=4)
         self._stop = threading.Event()
@@ -185,12 +188,18 @@ class TrashController(QObject):
     def loaded(self):
         return self._loaded
 
+    @Property(bool, notify=changed)
+    def projectionReady(self):
+        return self._destructive_ready()
+
     @Slot(str)
     def _project_opening(self, folder):
         self._assert_owner()
         same_refresh = self._refresh_after_delete == photo_identity(folder)
         self._refresh_after_delete = ""
         self._generation += 1
+        self._projection_generation += 1
+        self._projection_ready = False
         self._folder = ""
         self._loaded = False
         self._plan = None
@@ -213,28 +222,40 @@ class TrashController(QObject):
         if folder and not self._closed:
             self._folder = photo_identity(folder)
             self._schedule_refresh()
+            self._refresh_active_overlap()
 
     @Slot()
     def _schedule_refresh(self, *_):
         self._assert_owner()
+        self._projection_generation += 1
+        self._projection_ready = False
         self._plan = None
-        if self._folder and not self._review_ready():
-            self._block_unready_rows()
+        self._block_stale_rows()
         if self._folder and not self._closed and not self._busy:
             if self._pending_refresh:
                 self._refresh_dirty = True
             self._refresh_timer.start()
 
+    def _refresh_active_overlap(self):
+        if not self._pending_overlap_paths or self._projects.busy:
+            return
+        active = self._projects.activeProjectFolder
+        if not active:
+            return
+        overlapping = self._pending_overlap_paths.intersection(self._master.identities())
+        self._pending_overlap_paths.clear()
+        if overlapping:
+            self._projects.openFolder(active)
+
     def _review_ready(self):
-        return bool(self._favorites.loaded and self._duplicates.state == "COMPLETE"
+        return bool(self._favorites.loaded and self._favorites.pendingCount == 0
+                    and self._duplicates.state == "COMPLETE"
                     and self._duplicates.reviewReady)
 
-    def _block_unready_rows(self):
-        """Invalidate executable rows synchronously when review metadata becomes unstable."""
+    def _block_stale_rows(self):
+        """Invalidate every prior executable row and destructive selection synchronously."""
         rows = self._model.all_rows()
-        if not rows or all(not row["executable"] for row in rows):
-            return
-        reason = "Review choices are still loading or unavailable."
+        reason = "Review choices changed. Refreshing removal status."
         blocked = []
         for row in rows:
             row = dict(row)
@@ -252,7 +273,8 @@ class TrashController(QObject):
         if self._pending_refresh:
             return
         try:
-            self._tasks.put_nowait((self._generation, self._folder, "load", None))
+            self._tasks.put_nowait((self._generation, self._folder, "load",
+                                    self._projection_generation))
         except Full:
             self._error = "Removal decisions are busy. Try again shortly."
             self.changed.emit()
@@ -276,7 +298,13 @@ class TrashController(QObject):
                 row["badgeText"] = "Needs attention"
         self._model.set_rows(rows)
         self._loaded = True
+        self._projection_ready = ready
         self.changed.emit()
+
+    def _destructive_ready(self):
+        return bool(self._projection_ready and self._loaded and not self._busy
+                    and self._folder and self._folder == self._projects.activeProjectFolder
+                    and self._review_ready())
 
     @Slot(str, result="QVariantMap")
     def row(self, path):
@@ -288,14 +316,14 @@ class TrashController(QObject):
     @Slot(str, result=bool)
     def isExecutable(self, path):
         row = self._model.row(path)
-        return bool(self._review_ready() and row and row["executable"]
-                    and not self._favorites.isPending(path))
+        return bool(self._destructive_ready() and row and row["executable"]
+                    and self._master.photo(path) and not self._favorites.isPending(path))
 
     @Slot(str, result=bool)
     def restorePhoto(self, path):
         self._assert_owner()
         row = self._model.row(path)
-        if self._busy or not row or not self._folder:
+        if not self._destructive_ready() or not row:
             return False
         payload = (path, row["revision"], row["revision"] if row["blurRemove"] else None,
                    dict(row["duplicateGroups"]))
@@ -306,7 +334,7 @@ class TrashController(QObject):
             self.changed.emit()
             return False
         self._busy = True
-        self._plan = None
+        self._schedule_refresh()
         self._timer.start()
         self.changed.emit()
         return True
@@ -316,9 +344,14 @@ class TrashController(QObject):
         self._assert_owner()
         rows = self._model.selected_rows()
         self._plan = None
-        if self._busy or not rows or any(not self.isExecutable(row["photoId"]) for row in rows):
+        if (not self._destructive_ready() or not self._model.selection_is_visible()
+                or not rows or len(rows) != self._model.selectedCount
+                or any(not self.isExecutable(row["photoId"]) for row in rows)):
+            if not self._model.selection_is_visible():
+                self._model.clearSelection()
             return {}
-        self._plan = (self._generation, self._folder, tuple(dict(row) for row in rows))
+        self._plan = (self._generation, self._folder, self._projection_generation,
+                      tuple(dict(row) for row in rows))
         blur = sum(row["removalSources"] == ["Blur"] for row in rows)
         duplicates = sum(row["removalSources"] == ["Near duplicates"] for row in rows)
         both = len(rows) - blur - duplicates
@@ -330,11 +363,15 @@ class TrashController(QObject):
         self._assert_owner()
         plan = self._plan
         self._plan = None
-        if self._busy or not plan or plan[:2] != (self._generation, self._folder):
+        if (not self._destructive_ready() or not plan or
+                plan[:3] != (self._generation, self._folder, self._projection_generation)):
             return False
-        rows = plan[2]
-        if any(not self.isExecutable(row["photoId"]) or
-               self._model.row(row["photoId"]) != row for row in rows):
+        rows = plan[3]
+        if (not self._model.selection_is_visible() or
+                {row["photoId"] for row in rows} !=
+                {row["photoId"] for row in self._model.selected_rows()} or
+                any(not self.isExecutable(row["photoId"]) or
+                    self._model.row(row["photoId"]) != row for row in rows)):
             self._error = "Review choices changed. Select the photos again before moving them."
             self.changed.emit()
             return False
@@ -360,12 +397,20 @@ class TrashController(QObject):
             except Empty:
                 break
             if generation != self._generation or folder != self._folder or self._closed:
+                if action == "execute" and not self._closed and output.get("succeeded"):
+                    self._pending_overlap_paths.update(output["succeeded"])
+                    self._refresh_active_overlap()
                 continue
             if action == "load":
                 self._pending_refresh = False
+                if output["projectionGeneration"] != self._projection_generation:
+                    self._refresh_dirty = False
+                    self._refresh_timer.start()
+                    continue
                 if output.get("error"):
                     self._error = output["error"]
                     self._loaded = False
+                    self._projection_ready = False
                     self._model.set_rows([])
                 else:
                     if not self._preserve_error_after_delete:
@@ -388,11 +433,14 @@ class TrashController(QObject):
                         except (OSError, sqlite3.Error, ValueError, TypeError):
                             log.exception("trash_duplicate_reload_failed folder=%s", folder)
                             self._error = "Duplicate review could not be refreshed. Reopen the project."
-                    self._schedule_refresh()
+                self._schedule_refresh()
             elif action == "execute":
                 self._busy = False
                 moved, failed = output["succeeded"], output["failed"]
-                self._summary = f"{len(moved)} photos moved to Trash. {len(failed)} could not be moved."
+                moved_word = "photo" if len(moved) == 1 else "photos"
+                failed_word = "photo" if len(failed) == 1 else "photos"
+                self._summary = (f"{len(moved)} {moved_word} moved to Trash. "
+                                 f"{len(failed)} {failed_word} could not be moved.")
                 self._error = output.get("historyError", "")
                 self._failed_reasons.update({path: reason for path, reason in output["reasons"].items()
                                               if reason.startswith("Photo changed")})

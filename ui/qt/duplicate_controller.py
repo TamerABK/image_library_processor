@@ -270,8 +270,18 @@ class DuplicateReviewController(QObject):
         self._detail.replace_items([], preserve_selection=False)
         self.changed.emit()
 
+    def _require_review_metadata(self):
+        self._assert_owner()
+        if not self._review_metadata_available or not self._folder:
+            self._error = "Saved duplicate reviews are unavailable. Reopen the project before changing this group."
+            self.changed.emit()
+            return False
+        return True
+
     def _submit(self, keepers, intents, reviewed):
         self._assert_owner()
+        if not self._require_review_metadata():
+            return False
         row = self._groups.get_row(self._selected)
         if self._busy or not row or self._state != "COMPLETE" or not row["signature"]:
             return False
@@ -308,6 +318,8 @@ class DuplicateReviewController(QObject):
 
     @Slot(str, result=bool)
     def setKeeper(self, path):
+        if not self._require_review_metadata():
+            return False
         row = self._groups.get_row(self._selected)
         if not row or path not in row["paths"]:
             return False
@@ -322,6 +334,8 @@ class DuplicateReviewController(QObject):
 
     @Slot(str, str, result=bool)
     def replaceKeeper(self, old_path, new_path):
+        if not self._require_review_metadata():
+            return False
         row = self._groups.get_row(self._selected)
         if not row or old_path not in row["currentKeepers"] or new_path not in row["paths"] or (
                 new_path in row["currentKeepers"]):
@@ -336,6 +350,8 @@ class DuplicateReviewController(QObject):
 
     @Slot(str, str, result=bool)
     def setIntent(self, path, intent):
+        if not self._require_review_metadata():
+            return False
         row = self._groups.get_row(self._selected)
         if not row or path not in row["paths"] or intent not in ("KEEP", "REMOVE", "UNDECIDED"):
             return False
@@ -352,6 +368,8 @@ class DuplicateReviewController(QObject):
 
     @Slot(result=bool)
     def confirmGroup(self):
+        if not self._require_review_metadata():
+            return False
         row = self._groups.get_row(self._selected)
         if not row:
             return False

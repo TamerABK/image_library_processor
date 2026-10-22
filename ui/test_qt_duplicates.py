@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from PIL import Image
-from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtCore import QEvent, QObject, QPointF, Qt
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
@@ -194,6 +194,48 @@ class DuplicateFlowTests(unittest.TestCase):
         self.assertIn(True, readiness)
         self.processing.invalidate()
         self.assertFalse(self.duplicates.reviewReady)
+
+    def test_unavailable_saved_reviews_block_every_duplicate_mutation(self):
+        self.publish()
+        self.duplicates.openGroup(self.group_id)
+        self.assertTrue(self.duplicates.confirmGroup())
+        wait_until(lambda: not self.duplicates.busy)
+        saved = self.store.duplicate_reviews(self.folder)[self.group_id]
+        self.assertEqual(saved["keepers"], [str(self.paths[0])])
+        self.assertEqual(saved["intents"][str(self.paths[1])], "REMOVE")
+        with patch.object(self.duplicates._store, "duplicate_reviews",
+                          side_effect=sqlite3.OperationalError("unreadable")), patch(
+                "ui.qt.duplicate_controller.log"):
+            self.publish()
+        self.assertEqual(self.duplicates.state, "COMPLETE")
+        self.assertFalse(self.duplicates.reviewReady)
+        self.duplicates.openGroup(self.group_id)
+        self.assertFalse(self.duplicates.setKeeper(str(self.paths[0])))
+        self.assertFalse(self.duplicates.replaceKeeper(str(self.paths[0]), str(self.paths[1])))
+        self.assertFalse(self.duplicates.setIntent(str(self.paths[1]), "UNDECIDED"))
+        self.assertFalse(self.duplicates.confirmGroup())
+        self.assertEqual(self.store.duplicate_reviews(self.folder)[self.group_id], saved)
+        shell = self.window.findChild(QObject, "libraryShell")
+        shell.showRoute("duplicates")
+        for name in ("duplicateConfirm", "duplicateSetKeeper", "duplicateToggleRemove"):
+            self.assertFalse(self.item(name).property("enabled"), name)
+        self.duplicates.reload_reviews()
+        self.assertTrue(self.duplicates.reviewReady)
+        self.assertTrue(self.duplicates.setIntent(str(self.paths[1]), "UNDECIDED"))
+        wait_until(lambda: not self.duplicates.busy)
+        self.assertNotIn(str(self.paths[1]), self.store.duplicate_reviews(self.folder)[self.group_id]["intents"])
+
+    def test_reload_failure_keeps_duplicate_mutations_blocked(self):
+        self.publish()
+        self.duplicates.openGroup(self.group_id)
+        with patch.object(self.duplicates._store, "duplicate_reviews",
+                          side_effect=sqlite3.OperationalError("unreadable")):
+            with self.assertRaises(sqlite3.OperationalError):
+                self.duplicates.reload_reviews()
+        self.assertFalse(self.duplicates.reviewReady)
+        self.assertFalse(self.duplicates.confirmGroup())
+        self.duplicates.reload_reviews()
+        self.assertTrue(self.duplicates.reviewReady)
 
     def test_qml_route_group_inspector_keeper_confirm_filter_and_sort(self):
         self.publish()

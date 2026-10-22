@@ -98,6 +98,10 @@ class FavoritesController(QObject):
     def loaded(self):
         return self._loaded
 
+    @Property(int, notify=changed)
+    def pendingCount(self):
+        return len(self._pending)
+
     def _item(self, path):
         photo = self._master.photo(path)
         return ResultItem(Path(path), photo.get("title", Path(path).name), photo.get("detail", ""),
