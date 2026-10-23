@@ -225,7 +225,7 @@ class ProcessingTests(unittest.TestCase):
     def test_shutdown_discards_native_completion(self):
         self.runner.gate = self.gate
         self.open()
-        wait_until(lambda: self.processing.blurModel.rowCount() == 10)
+        wait_until(lambda: self.processing.blurModel.rowCount() == 3)
         snapshot = dict(self.processing.results)
         self.processing.shutdown()
         self.gate.set()

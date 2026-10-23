@@ -6,7 +6,7 @@ import os
 import sys
 from multiprocessing import freeze_support
 from pathlib import Path
-
+from platform import python_version
 
 _WINDOWS_DLL_DIRECTORIES: list[object] = []
 
@@ -163,5 +163,6 @@ def run_app() -> int:
 
 
 if __name__ == "__main__":
+    print(python_version())
     freeze_support()
     raise SystemExit(run_app())
