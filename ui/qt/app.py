@@ -79,6 +79,9 @@ def run_app() -> int:
     trash = TrashController(projects, photo_model, processing, duplicates, favorites,
                             inspector, thumbnails, parent=application)
     exports = ExportController(projects, photo_model, people, processing, parent=application)
+    from .project_watcher import ProjectFilesystemWatcher
+    watcher = ProjectFilesystemWatcher(projects, parent=application)
+    application.aboutToQuit.connect(watcher.shutdown)
     application.aboutToQuit.connect(projects.shutdown)
     application.aboutToQuit.connect(inspector.close)
     application.aboutToQuit.connect(processing.shutdown)
@@ -117,6 +120,7 @@ def run_app() -> int:
             raise RuntimeError(f"Failed to load QML root object from {app_qml_path}")
         return application.exec()
     finally:
+        watcher.shutdown()
         projects.shutdown()
         inspector.close()
         processing.shutdown()

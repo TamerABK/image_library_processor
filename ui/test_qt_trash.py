@@ -613,6 +613,38 @@ class TrashFlowTests(unittest.TestCase):
         wait_until(lambda: "Photo changed" in self.trash.row(path).get("conflictReason", ""))
         self.assertIn("Photo changed", self.trash.row(path)["conflictReason"])
 
+    def test_external_os_restore_reapplies_review_without_reselecting_or_deleting(self):
+        from ui.qt.project_watcher import ProjectFilesystemWatcher
+        from ui.test_qt_project_watcher import FakeDirectoryWatcher
+        backend = FakeDirectoryWatcher()
+        watcher = ProjectFilesystemWatcher(self.projects, watcher=backend, debounce_ms=25)
+        try:
+            wait_until(lambda: photo_identity(self.a) in backend.paths)
+            path = photo_identity(self.a / "a.jpg")
+            self.mark_blur(path)
+            self.trash.photoModel.selectAllReady()
+            self.assertEqual(self.trash.prepareSelection()["count"], 1)
+            relocated = self.root / "os-trash-stub.jpg"
+
+            def move_to_trash(source):
+                Path(source).rename(relocated)
+
+            with patch("ui.qt.trash_controller.send2trash", side_effect=move_to_trash) as move:
+                self.assertTrue(self.trash.executeSelection())
+                wait_until(lambda: not self.trash.busy and path not in self.master.identities(), timeout=8)
+                self.assertEqual(move.call_count, 1)
+                relocated.rename(path)
+                watcher.notifyDirectoryChanged(str(self.a))
+                wait_until(lambda: path in self.master.identities() and self.trash.count == 1, timeout=8)
+                self.assertEqual(self.trash.photoModel.selectedCount, 0)
+                self.assertEqual(move.call_count, 1)
+            self.assertEqual(self.store.load(self.a).image_decisions[path].review_state, "REMOVE")
+            self.assertTrue(self.trash.restorePhoto(path))
+            wait_until(lambda: self.trash.count == 0)
+            self.assertTrue(Path(path).exists())
+        finally:
+            watcher.shutdown()
+
     def test_missing_file_is_failed_and_excluded_after_refresh(self):
         path = photo_identity(self.a / "a.jpg")
         self.mark_blur(path)

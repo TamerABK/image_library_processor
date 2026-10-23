@@ -24,6 +24,9 @@ from .photo_model import photo_identity
 from .project_model import Project, ProjectListModel
 
 
+DISCOVERY_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+
+
 def discover_photos(folder):
     """Worker boundary: validate/enumerate without reading image metadata/pixels."""
     root = Path(folder)
@@ -89,6 +92,8 @@ class ProjectController(QObject):
         self._active_name = ""
         self._active_folder = ""
         self._generation = 0
+        self._refresh_pending = False
+        self._refresh_pending_folder = ""
         self._projects = ProjectListModel(self._load_projects(), self)
         self._tasks, self._results = Queue(maxsize=1), Queue(maxsize=1)
         self._stop = threading.Event()
@@ -244,6 +249,9 @@ class ProjectController(QObject):
         self._start(project)
 
     def _start(self, project):
+        if self._refresh_pending_folder and self._refresh_pending_folder != project.folder:
+            self._refresh_pending = False
+            self._refresh_pending_folder = ""
         self.projectOpening.emit(project.folder)
         if self._processing is not None:
             self._processing.invalidate()
@@ -257,6 +265,27 @@ class ProjectController(QObject):
         self._tasks.put_nowait((self._generation, project))
         self._timer.start()
 
+    @Slot(result=bool)
+    def refreshActiveProject(self):
+        """Coalesce external changes into at most one follow-up discovery."""
+        if self._closed or not self._active_id:
+            return False
+        if self._busy:
+            self._refresh_pending = True
+            self._refresh_pending_folder = self._active_folder
+            return True
+        project = self._projects.get(self._active_id)
+        if project is None:
+            return False
+        self._start(project)
+        return True
+
+    def _finish_pending_refresh(self):
+        if self._refresh_pending and self._refresh_pending_folder == self._active_folder:
+            self._refresh_pending = False
+            self._refresh_pending_folder = ""
+            QTimer.singleShot(0, self.refreshActiveProject)
+
     @Slot()
     def _drain(self):
         try:
@@ -269,6 +298,7 @@ class ProjectController(QObject):
         self._set_busy(False)
         if error:
             self._set_message(error)
+            self._finish_pending_refresh()
             return
         project = replace(project, last_opened=time.time(), photo_count=len(items))
         # Selection is session state: never carry it into a different folder.
@@ -280,6 +310,7 @@ class ProjectController(QObject):
         if self._processing is not None:
             self._processing.start(project, items)
         self.projectOpened.emit(project.project_id, project.name)
+        self._finish_pending_refresh()
 
     @Slot()
     def shutdown(self):
@@ -289,4 +320,6 @@ class ProjectController(QObject):
         self._generation += 1
         self._stop.set()
         self._timer.stop()
-        self._worker.join(timeout=0.2)
+        self._worker.join(timeout=DISCOVERY_SHUTDOWN_TIMEOUT_SECONDS)
+        if self._worker.is_alive():
+            raise RuntimeError("Project discovery worker did not stop during shutdown")

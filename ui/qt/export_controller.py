@@ -69,6 +69,8 @@ class ExportPlacement:
     size: int
     mtime_ns: int
     person_key: str = ""
+    device: int = -1
+    inode: int = -1
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,13 +95,13 @@ def snapshot_plan(project_folder, generation, mode, requested, people_count):
                 info = os.stat(source)
                 if not stat.S_ISREG(info.st_mode):
                     raise OSError("not a regular file")
-                snapshots[source] = (info.st_size, info.st_mtime_ns)
+                snapshots[source] = (info.st_size, info.st_mtime_ns, info.st_dev, info.st_ino)
             except OSError:
-                snapshots[source] = (-1, -1)
-        size, mtime_ns = snapshots[source]
-        placements.append(ExportPlacement(source, folder, size, mtime_ns, person_key))
+                snapshots[source] = (-1, -1, -1, -1)
+        size, mtime_ns, device, inode = snapshots[source]
+        placements.append(ExportPlacement(source, folder, size, mtime_ns, person_key, device, inode))
     return ExportPlan(project_folder, generation, mode, tuple(placements), people_count,
-                      len(snapshots), sum(size for size, _ in snapshots.values() if size >= 0))
+                      len(snapshots), sum(value[0] for value in snapshots.values() if value[0] >= 0))
 
 
 def _next_filename(source: str, attempt: int) -> str:
@@ -108,33 +110,89 @@ def _next_filename(source: str, attempt: int) -> str:
     return f"{stem}{'_' + str(attempt) if attempt else ''}{extension}"
 
 
-def _export_one(item: ExportPlacement, directory: Path, method: str) -> str:
+def _same_identity(first, second):
+    return (first.st_dev, first.st_ino) == (second.st_dev, second.st_ino) and first.st_ino != 0
+
+
+def _valid_source(item, info):
+    return (stat.S_ISREG(info.st_mode) and item.size >= 0 and
+            (info.st_size, info.st_mtime_ns, info.st_dev, info.st_ino) ==
+            (item.size, item.mtime_ns, item.device, item.inode))
+
+
+def _owned_path(target, created):
     try:
-        info = os.stat(item.source)
-    except OSError as exc:
-        raise ValueError("Photo is missing or unavailable. Select it again before exporting.") from exc
-    if (not stat.S_ISREG(info.st_mode) or item.size < 0 or
-            (info.st_size, info.st_mtime_ns) != (item.size, item.mtime_ns)):
-        raise ValueError("Photo changed since export was prepared. Select it again before exporting.")
+        return _same_identity(created, os.stat(target, follow_symlinks=False))
+    except OSError:
+        return False
+
+
+def _remove_owned_output(target, created):
+    if _owned_path(target, created):
+        target.unlink()
+
+
+def output_directory_safe(directory, destination, project_folder):
+    root = os.path.normcase(os.path.realpath(destination))
+    output = os.path.normcase(os.path.realpath(directory))
+    try:
+        return os.path.commonpath((root, output)) == root and destination_outside_project(output, project_folder)
+    except ValueError:
+        return False
+
+
+def _export_one(item: ExportPlacement, directory: Path, method: str) -> str:
     directory.mkdir(parents=True, exist_ok=True)
     if not directory.is_dir():
         raise OSError("Export destination is not a directory.")
-    if method == "hardlink" and info.st_dev != directory.stat().st_dev:
-        raise OSError("Hard links require the source and destination to be on the same drive.")
+    try:
+        source = open(item.source, "rb")
+    except OSError as exc:
+        raise ValueError("Photo is missing or unavailable. Select it again before exporting.") from exc
+    with source:
+        info = os.fstat(source.fileno())
+        if not _valid_source(item, info):
+            raise ValueError("Photo changed since export was prepared. Select it again before exporting.")
+        if method == "hardlink" and info.st_dev != directory.stat().st_dev:
+            raise OSError("Hard links require the source and destination to be on the same drive.")
+        return _write_export(item, directory, method, source, info)
+
+
+def _write_export(item, directory, method, source, source_info):
     for attempt in range(MAX_COLLISION_ATTEMPTS):
         target = directory / _next_filename(item.source, attempt)
         try:
             if method == "hardlink":
                 os.link(item.source, target)
+                created = os.stat(target, follow_symlinks=False)
+                if not (_same_identity(source_info, created) and _valid_source(item, created) and
+                        _same_identity(source_info, os.fstat(source.fileno())) and
+                        _same_identity(source_info, os.stat(item.source))):
+                    _remove_owned_output(target, created)
+                    raise ValueError("Photo changed since export was prepared. Select it again before exporting.")
             else:
-                # Reserve the name exclusively before copy2; existing files are
-                # never opened as copy destinations.
                 descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
-                os.close(descriptor)
+                created = os.fstat(descriptor)
                 try:
-                    shutil.copy2(item.source, target)
+                    with os.fdopen(descriptor, "wb") as output:
+                        shutil.copyfileobj(source, output, length=1024 * 1024)
+                        output.flush()
+                        if not (_valid_source(item, os.fstat(source.fileno())) and
+                                _same_identity(source_info, os.stat(item.source)) and _owned_path(target, created)):
+                            raise ValueError("Photo changed or export destination changed during export.")
+                        os.fsync(output.fileno())
+                        if hasattr(os, "fchmod"):
+                            os.fchmod(output.fileno(), stat.S_IMODE(source_info.st_mode))
+                        if os.utime in os.supports_fd:
+                            os.utime(output.fileno(), ns=(source_info.st_atime_ns, source_info.st_mtime_ns))
+                    if not _owned_path(target, created):
+                        raise ValueError("Export destination changed during export.")
                 except Exception:
-                    target.unlink(missing_ok=True)  # Only our incomplete output.
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+                    _remove_owned_output(target, created)
                     raise
             return str(target)
         except FileExistsError:
@@ -149,13 +207,34 @@ def _export_one(item: ExportPlacement, directory: Path, method: str) -> str:
 def execute_plan(plan: ExportPlan, destination: str, method: str, canceled, report):
     completed = 0
     failures = []
+    if not destination_outside_project(destination, plan.project_folder):
+        raise ValueError("Choose a destination outside the current project folder.")
+    root = Path(destination)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ValueError("Export destination could not be created. Check folder permissions.") from exc
+    if not root.is_dir() or not output_directory_safe(root, root, plan.project_folder):
+        raise ValueError("Choose a destination outside the current project folder.")
+    # One preflight prevents a large batch of identical per-photo write errors.
+    probe = root / (".room36-export-" + os.urandom(8).hex())
+    try:
+        descriptor = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        created_probe = os.fstat(descriptor)
+        os.close(descriptor)
+        _remove_owned_output(probe, created_probe)
+    except OSError as exc:
+        raise ValueError("Export destination is not writable. Check folder permissions.") from exc
     for index, item in enumerate(plan.placements):
         if canceled.is_set():
             break
         try:
-            if not destination_outside_project(destination, plan.project_folder):
-                raise ValueError("Choose a destination outside the current project folder.")
             output_dir = Path(destination) / item.folder if item.folder else Path(destination)
+            if not output_directory_safe(output_dir, root, plan.project_folder):
+                raise ValueError("Export folder would enter the project or leave the chosen destination.")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            if not output_directory_safe(output_dir, root, plan.project_folder):
+                raise ValueError("Export folder would enter the project or leave the chosen destination.")
             _export_one(item, output_dir, method)
             completed += 1
         except (OSError, ValueError) as exc:
@@ -198,7 +277,9 @@ def _export_worker(tasks, results, stop):
             try:
                 outcome = execute_plan(plan, destination, method, canceled,
                                        lambda done, total: publish(("progress", generation, (done, total))))
-                publish(("finished", generation, outcome))
+                publish(("finished", generation, (outcome, destination, method)))
+            except ValueError as exc:
+                publish(("error", generation, str(exc)))
             except Exception:
                 get_scan_logger().exception("export_batch_failed folder=%s", plan.project_folder)
                 publish(("error", generation, "Export could not finish. Check the destination and try again."))
@@ -366,7 +447,7 @@ class ExportController(QObject):
     @Slot(str, result=bool)
     def setDestination(self, destination):
         self._assert_owner()
-        if not destination:
+        if self._busy or not destination:
             return False
         target = photo_identity(destination)
         if not destination_outside_project(target, self._folder):
@@ -385,6 +466,8 @@ class ExportController(QObject):
     @Slot(result=bool)
     def chooseDestination(self):
         self._assert_owner()
+        if self._busy:
+            return False
         selected = self._chooser()
         return self.setDestination(selected) if selected else False
 
@@ -456,16 +539,17 @@ class ExportController(QObject):
                 self._progress_done, self._progress_total = value
                 self.changed.emit()
             elif kind == "finished":
+                outcome, used_destination, used_method = value
                 self._busy = False
-                self._progress_done = value["done"]
-                self._failures = value["failures"]
-                count = value["exported"]
-                self._summary = (f"Created {count} hard link{'s' if count != 1 else ''}" if self._method == "hardlink"
+                self._progress_done = outcome["done"]
+                self._failures = outcome["failures"]
+                count = outcome["exported"]
+                self._summary = (f"Created {count} hard link{'s' if count != 1 else ''}" if used_method == "hardlink"
                                  else f"Exported {count} photo{'s' if count != 1 else ''}")
-                self._summary += f" to {self._destination}."
-                if value["failed"]:
-                    self._summary += f" {value['failed']} could not be exported."
-                if value["canceled"]:
+                self._summary += f" to {used_destination}."
+                if outcome["failed"]:
+                    self._summary += f" {outcome['failed']} could not be exported."
+                if outcome["canceled"]:
                     self._summary += " Export canceled; completed files remain at the destination."
                 self._plan = None
                 self.changed.emit()

@@ -8,7 +8,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtCore import QObject, Property, QPointF, Qt, Signal, Slot
+from PySide6.QtCore import QObject, Property, QPointF, Qt, QUrl, Signal, Slot
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
@@ -21,6 +21,8 @@ from ui.qt.export_controller import (ExportController, destination_outside_proje
 from ui.qt.favorites_controller import FavoritesController
 from ui.qt.favorites_store import FavoritesStore
 from ui.qt.face_previews import FacePreviewService
+from ui.qt.blur_model import BlurCandidateModel
+from ui.qt.duplicate_model import DuplicateGroupModel
 from ui.qt.people_model import PeopleListModel
 from ui.qt.photo_model import PhotoListModel, photo_identity
 from ui.qt.thumbnails import ThumbnailService
@@ -127,6 +129,114 @@ class PeoplePresentationStub(QObject):
         self.previews.shutdown()
 
 
+class BlurPageStub(QObject):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    @Property(QObject, constant=True)
+    def blurModel(self):
+        return self.model
+
+    @Property("QVariantList", constant=True)
+    def stages(self):
+        return [{"state": "COMPLETE", "error": ""}]
+
+    @Property(str, constant=True)
+    def message(self):
+        return ""
+
+
+class DuplicatePageStub(QObject):
+    def __init__(self, thumbnails, detail):
+        super().__init__()
+        self.groups = DuplicateGroupModel(thumbnails)
+        self.detail = detail
+
+    @Property(QObject, constant=True)
+    def groupModel(self):
+        return self.groups
+
+    @Property(QObject, constant=True)
+    def detailPhotoModel(self):
+        return self.detail
+
+    @Property("QVariantMap", constant=True)
+    def selectedGroup(self):
+        return {"groupId": "test", "photoCount": self.detail.rowCount(),
+                "recommendationState": "ready", "explanation": [], "members": []}
+
+    @Property(str, constant=True)
+    def state(self):
+        return "COMPLETE"
+
+    @Property(str, constant=True)
+    def rankingState(self):
+        return "COMPLETE"
+
+    @Property(bool, constant=True)
+    def reviewReady(self):
+        return False
+
+    @Property(bool, constant=True)
+    def busy(self):
+        return False
+
+    @Property(str, constant=True)
+    def error(self):
+        return ""
+
+    def shutdown(self):
+        self.groups.close()
+
+
+class UnknownPageStub(QObject):
+    changed = Signal()
+
+    def __init__(self, thumbnails, detail):
+        super().__init__()
+        self.previews = FacePreviewService()
+        self.model = PeopleListModel(self.previews, "unknown")
+        self.detail = detail
+
+    @Property(QObject, constant=True)
+    def unknownModel(self):
+        return self.model
+
+    @Property(QObject, constant=True)
+    def detailPhotoModel(self):
+        return self.detail
+
+    @Property("QVariantMap", notify=changed)
+    def selectedUnknown(self):
+        return {"key": "test", "faceCount": 1, "photoCount": self.detail.rowCount(),
+                "ignored": False, "paths": self.detail.identities(), "previewSource": ""}
+
+    @Property(str, constant=True)
+    def state(self):
+        return "COMPLETE"
+
+    @Property(bool, constant=True)
+    def busy(self):
+        return False
+
+    @Property(str, constant=True)
+    def error(self):
+        return ""
+
+    @Property("QVariantMap", constant=True)
+    def suggestion(self):
+        return {}
+
+    @Property("QVariantList", constant=True)
+    def knownOptions(self):
+        return []
+
+    def shutdown(self):
+        self.model.close()
+        self.previews.shutdown()
+
+
 class ExportFilesystemTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -164,6 +274,8 @@ class ExportFilesystemTests(unittest.TestCase):
         attempts = []
 
         def race(path, flags, mode=0o777):
+            if Path(path).name.startswith(".room36-export-"):
+                return real_open(path, flags, mode)
             attempts.append(Path(path).name)
             if len(attempts) == 1:
                 raise FileExistsError(path)
@@ -174,6 +286,84 @@ class ExportFilesystemTests(unittest.TestCase):
         self.assertEqual(outcome["exported"], 1)
         self.assertEqual(attempts, ["photo.jpg", "photo_1.jpg"])
         self.assertEqual((self.destination / "photo_1.jpg").read_bytes(), b"original photo")
+
+    def test_post_reservation_replacement_is_never_overwritten_or_removed(self):
+        real_copy = __import__("shutil").copyfileobj
+        external = self.root / "external"
+        external.write_bytes(b"another process owns this")
+
+        def replaced(source, output, length=0):
+            # Model a rebind after exclusive creation, even on Windows where a
+            # normal open handle usually prevents this replacement.
+            os.close(output.fileno())
+            os.replace(external, self.destination / "photo.jpg")
+            return real_copy(source, output, length)
+
+        with patch("ui.qt.export_controller.shutil.copyfileobj", side_effect=replaced):
+            outcome = self.run_plan(self.plan([self.a]))
+        self.assertEqual((outcome["exported"], outcome["failed"]), (0, 1))
+        self.assertEqual((self.destination / "photo.jpg").read_bytes(), b"another process owns this")
+
+    def test_source_replacement_with_same_revision_is_rejected(self):
+        plan = self.plan([self.a])
+        original = self.a.stat()
+        replacement = self.root / "replacement"
+        replacement.write_bytes(b"replaced photo")
+        os.utime(replacement, ns=(original.st_atime_ns, original.st_mtime_ns))
+        os.replace(replacement, self.a)
+        outcome = self.run_plan(plan)
+        self.assertEqual(outcome["failed"], 1)
+        self.assertFalse((self.destination / "photo.jpg").exists())
+
+    def test_source_modified_during_copy_removes_only_owned_partial_output(self):
+        real_copy = __import__("shutil").copyfileobj
+
+        def change_during_copy(source, output, length=0):
+            real_copy(source, output, length)
+            self.a.write_bytes(b"changed while exporting")
+
+        with patch("ui.qt.export_controller.shutil.copyfileobj", side_effect=change_during_copy):
+            outcome = self.run_plan(self.plan([self.a]))
+        self.assertEqual((outcome["exported"], outcome["failed"]), (0, 1))
+        self.assertFalse((self.destination / "photo.jpg").exists())
+
+    def test_hardlink_source_replacement_during_link_is_rejected(self):
+        plan = self.plan([self.a])
+        original = self.a.stat()
+        real_link = os.link
+
+        def replace_then_link(source, target):
+            replacement = self.root / "replacement"
+            replacement.write_bytes(b"replaced photo")
+            os.utime(replacement, ns=(original.st_atime_ns, original.st_mtime_ns))
+            os.replace(replacement, source)
+            real_link(source, target)
+
+        with patch("ui.qt.export_controller.os.link", side_effect=replace_then_link):
+            outcome = self.run_plan(plan, "hardlink")
+        self.assertEqual(outcome["failed"], 1)
+        self.assertFalse((self.destination / "photo.jpg").exists())
+
+    def test_person_folder_cannot_reenter_project(self):
+        plan = snapshot_plan(str(self.project), 1, "all_people", [(str(self.a), "project", "1")], 1)
+        outcome = execute_plan(plan, str(self.root), "copy", threading.Event(), lambda *_: None)
+        self.assertEqual((outcome["exported"], outcome["failed"]), (0, 1))
+        self.assertEqual(set(self.project.iterdir()), {self.a, self.b})
+
+    def test_resolved_person_folder_escape_is_rejected(self):
+        from ui.qt import export_controller as module
+        plan = snapshot_plan(str(self.project), 1, "all_people", [(str(self.a), "Alice", "1")], 1)
+        real_realpath = os.path.realpath
+
+        def escaped(path, *args, **kwargs):
+            if Path(path) == self.destination / "Alice":
+                return str(self.project)
+            return real_realpath(path, *args, **kwargs)
+
+        with patch.object(module.os.path, "realpath", side_effect=escaped):
+            outcome = self.run_plan(plan)
+        self.assertEqual(outcome["failed"], 1)
+        self.assertFalse((self.destination / "Alice").exists())
 
     def test_hard_link_shares_file_identity_when_supported(self):
         outcome = self.run_plan(self.plan([self.a]), "hardlink")
@@ -203,14 +393,14 @@ class ExportFilesystemTests(unittest.TestCase):
     def test_copy_permission_failure_continues(self):
         third = self.project / "third.jpg"
         third.write_bytes(b"third")
-        real_copy = __import__("shutil").copy2
+        real_copy = __import__("shutil").copyfileobj
 
-        def fail_middle(source, destination):
-            if Path(source).name == "other.jpg":
+        def fail_middle(source, destination, length=0):
+            if Path(source.name).name == "other.jpg":
                 raise PermissionError("not writable")
-            return real_copy(source, destination)
+            return real_copy(source, destination, length)
 
-        with patch("ui.qt.export_controller.shutil.copy2", side_effect=fail_middle):
+        with patch("ui.qt.export_controller.shutil.copyfileobj", side_effect=fail_middle):
             outcome = self.run_plan(self.plan([self.a, self.b, third]))
         self.assertEqual((outcome["exported"], outcome["failed"]), (2, 1))
         self.assertFalse((self.destination / "other.jpg").exists())
@@ -218,10 +408,10 @@ class ExportFilesystemTests(unittest.TestCase):
     def test_destination_inside_project_and_equal_root_blocked(self):
         for destination in (self.project, self.project / "exports"):
             self.assertFalse(destination_outside_project(str(destination), str(self.project)))
-            with patch("ui.qt.export_controller.shutil.copy2") as copied:
-                result = execute_plan(self.plan([self.a]), str(destination), "copy",
-                                      threading.Event(), lambda *_: None)
-            self.assertEqual(result["exported"], 0)
+            with patch("ui.qt.export_controller.shutil.copyfileobj") as copied:
+                with self.assertRaisesRegex(ValueError, "outside the current project"):
+                    execute_plan(self.plan([self.a]), str(destination), "copy",
+                                 threading.Event(), lambda *_: None)
             copied.assert_not_called()
 
     def test_person_names_and_overlapping_membership(self):
@@ -401,19 +591,44 @@ class ExportControllerTests(unittest.TestCase):
         self.assertTrue(self.exporter.prepareSelected(self.master))
         self.wait_plan()
         self.exporter.setDestination(str(self.destination))
-        real_copy = __import__("shutil").copy2
+        real_copy = __import__("shutil").copyfileobj
 
-        def fail_second(source, target):
-            if Path(source).name == "b.jpg":
+        def fail_second(source, target, length=0):
+            if Path(source.name).name == "b.jpg":
                 raise PermissionError("not writable")
-            return real_copy(source, target)
+            return real_copy(source, target, length)
 
-        with patch("ui.qt.export_controller.shutil.copy2", side_effect=fail_second):
+        with patch("ui.qt.export_controller.shutil.copyfileobj", side_effect=fail_second):
             self.assertTrue(self.exporter.execute())
             self.wait_done()
         self.assertIn("Exported 1 photo", self.exporter.summary)
         self.assertIn("1 could not be exported", self.exporter.summary)
         self.assertEqual(len(self.exporter.failures), 1)
+
+    def test_active_export_configuration_cannot_change(self):
+        self.master.setSelected(photo_identity(self.photos_paths[0]), True)
+        self.assertTrue(self.exporter.prepareSelected(self.master))
+        self.wait_plan()
+        self.assertTrue(self.exporter.setDestination(str(self.destination)))
+        entered, release = threading.Event(), threading.Event()
+        from ui.qt import export_controller as module
+        original = module._export_one
+
+        def held(item, directory, method):
+            entered.set()
+            release.wait(5)
+            return original(item, directory, method)
+
+        with patch("ui.qt.export_controller._export_one", side_effect=held):
+            self.assertTrue(self.exporter.execute())
+            self.assertTrue(entered.wait(3))
+            self.assertFalse(self.exporter.setDestination(str(self.root / "different")))
+            self.assertFalse(self.exporter.chooseDestination())
+            self.assertFalse(self.exporter.setMethod("hardlink"))
+            release.set()
+            self.wait_done()
+        self.assertIn(str(self.destination).lower(), self.exporter.summary.lower())
+        self.assertIn("Exported 1 photo", self.exporter.summary)
 
     def test_only_current_model_members_and_safe_destination(self):
         other = PhotoListModel(self.thumbnails)
@@ -451,6 +666,128 @@ class ExportControllerTests(unittest.TestCase):
                     return found
             return None
         return visit(window.contentItem()) or window.findChild(QObject, name)
+
+    def load_isolated_page(self, page, **objects):
+        engine = QQmlApplicationEngine()
+        for name, value in objects.items():
+            engine.rootContext().setContextProperty(name, value)
+        source_property = {"BlurryPhotosPage": "processing: processingObject",
+                           "NearDuplicatesPage": "duplicates: duplicatesObject",
+                           "UnknownPeoplePage": "people: peopleObject"}[page]
+        source = ("import QtQuick\nimport QtQuick.Window\nimport \"pages\" as Pages\n"
+                  "Window { width: 1280; height: 720; visible: true; "
+                  f"Pages.{page} {{ anchors.fill: parent; exporter: exportObject; "
+                  f"{source_property} }} }}")
+        engine.loadData(source.encode(), QUrl.fromLocalFile(str(qml_path("App.qml"))))
+        self.assertTrue(engine.rootObjects())
+        return engine, engine.rootObjects()[0]
+
+    def test_qml_blur_duplicate_and_unknown_detail_selected_actions(self):
+        source = photo_identity(self.photos_paths[0])
+        blur = BlurCandidateModel(self.thumbnails)
+        blur.set_results([dict(photoId=source, filename="a.jpg", status="Blurry", final_score=0.1)])
+        blur.setSelected(source, True)
+        self.assertEqual(blur.selectedCount, 1)
+        detail = PhotoListModel(self.thumbnails)
+        detail.replace_items([ResultItem(self.photos_paths[0], "a.jpg", "")])
+        detail.setSelected(source, True)
+        duplicate = DuplicatePageStub(self.thumbnails, detail)
+        unknown = UnknownPageStub(self.thumbnails, detail)
+        processing_page = BlurPageStub(blur)
+        cases = [("BlurryPhotosPage", "blurExportSelected"),
+                 ("NearDuplicatesPage", "duplicateExportSelected"),
+                 ("UnknownPeoplePage", "peopleExportSelected")]
+        try:
+            for page, action in cases:
+                engine, window = self.load_isolated_page(page, exportObject=self.exporter,
+                    processingObject=processing_page, duplicatesObject=duplicate, peopleObject=unknown)
+                try:
+                    button = self.find_item(window, action)
+                    self.assertIsNotNone(button, page)
+                    self.assertTrue(button.property("enabled"), page)
+                    self.click_qml(window, button)
+                    self.wait_plan()
+                    self.assertEqual(self.exporter.planInfo["placements"], 1)
+                    self.exporter._plan = None
+                    self.exporter.changed.emit()
+                finally:
+                    window.close()
+                    engine.deleteLater()
+                    self.app.processEvents()
+        finally:
+            duplicate.shutdown()
+            unknown.shutdown()
+            detail.close()
+            blur.close()
+
+    def test_qml_progress_cancel_and_partial_result_are_visible(self):
+        for path in self.photos_paths[:2]:
+            self.master.setSelected(photo_identity(path), True)
+        engine = QQmlApplicationEngine()
+        engine.setInitialProperties(dict(startPage="library", photoModel=self.master,
+                                         exportController=self.exporter))
+        entered, release = threading.Event(), threading.Event()
+        from ui.qt import export_controller as module
+        original = module._export_one
+
+        def held(item, directory, method):
+            entered.set()
+            release.wait(5)
+            return original(item, directory, method)
+
+        try:
+            engine.load(qml_path("App.qml").as_uri())
+            self.assertTrue(engine.rootObjects())
+            window = engine.rootObjects()[0]
+            self.click_qml(window, self.find_item(window, "libraryExportSelected"))
+            self.wait_plan()
+            self.exporter.setDestination(str(self.destination))
+            with patch("ui.qt.export_controller._export_one", side_effect=held):
+                self.click_qml(window, self.find_item(window, "exportConfirm"))
+                self.assertTrue(entered.wait(3))
+                self.app.processEvents()
+                self.assertTrue(self.find_item(window, "exportProgress").property("visible"))
+                cancel = self.find_item(window, "exportCancel")
+                self.assertEqual(cancel.property("text"), "Cancel export")
+                self.click_qml(window, cancel)
+                release.set()
+                self.wait_done()
+            self.assertIn("Export canceled", self.find_item(window, "exportSummary").property("text"))
+            window.close()
+        finally:
+            release.set()
+            engine.deleteLater()
+
+    def test_qml_partial_failure_reports_success_and_failure(self):
+        for path in self.photos_paths[:2]:
+            self.master.setSelected(photo_identity(path), True)
+        engine = QQmlApplicationEngine()
+        engine.setInitialProperties(dict(startPage="library", photoModel=self.master,
+                                         exportController=self.exporter))
+        real_copy = __import__("shutil").copyfileobj
+
+        def fail_second(source, output, length=0):
+            if Path(source.name).name == "b.jpg":
+                raise PermissionError("not writable")
+            return real_copy(source, output, length)
+
+        try:
+            engine.load(qml_path("App.qml").as_uri())
+            self.assertTrue(engine.rootObjects())
+            window = engine.rootObjects()[0]
+            self.click_qml(window, self.find_item(window, "libraryExportSelected"))
+            self.wait_plan()
+            self.exporter.setDestination(str(self.destination))
+            with patch("ui.qt.export_controller.shutil.copyfileobj", side_effect=fail_second):
+                self.click_qml(window, self.find_item(window, "exportConfirm"))
+                self.wait_done()
+            summary = self.find_item(window, "exportSummary")
+            self.assertTrue(summary.property("visible"))
+            self.assertIn("Exported 1 photo", summary.property("text"))
+            self.assertIn("1 could not be exported", summary.property("text"))
+            window.close()
+        finally:
+            engine.deleteLater()
 
     def test_qml_library_action_opens_shared_export_dialog(self):
         self.master.setSelected(photo_identity(self.photos_paths[0]), True)
