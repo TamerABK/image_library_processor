@@ -22,6 +22,7 @@ from image_loader import default_image_loader
 from ui.models import ResultItem
 from .photo_model import photo_identity
 from .project_model import Project, ProjectListModel
+from .project_covers import ProjectCoverService
 
 
 DISCOVERY_SHUTDOWN_TIMEOUT_SECONDS = 5.0
@@ -94,7 +95,8 @@ class ProjectController(QObject):
         self._generation = 0
         self._refresh_pending = False
         self._refresh_pending_folder = ""
-        self._projects = ProjectListModel(self._load_projects(), self)
+        self._covers = ProjectCoverService(self._database.path, self) if self._database else None
+        self._projects = ProjectListModel(self._load_projects(), self, covers=self._covers)
         self._tasks, self._results = Queue(maxsize=1), Queue(maxsize=1)
         self._stop = threading.Event()
         self._worker = threading.Thread(target=_discovery_worker,
@@ -205,12 +207,16 @@ class ProjectController(QObject):
                 self._message = "Some saved projects could not be read and were skipped."
         return projects
 
-    def _save_projects(self):
+    def _save_projects(self, pending=None):
         if self._database is None:
             return "Project opened, but its details could not be saved. Check application data permissions."
         try:
             with self._database.connect() as db:
-                for project in self._projects.metadata():
+                records = self._projects.metadata()
+                if pending is not None:
+                    records = [record for record in records if record["project_id"] != pending.project_id]
+                    records.append(pending.metadata())
+                for project in records:
                     db.execute("""INSERT INTO projects VALUES (?,?,?,?,?,?)
                         ON CONFLICT(project_id) DO UPDATE SET folder=excluded.folder, name=excluded.name,
                         created_at=excluded.created_at, last_opened=excluded.last_opened,
@@ -301,12 +307,13 @@ class ProjectController(QObject):
             self._finish_pending_refresh()
             return
         project = replace(project, last_opened=time.time(), photo_count=len(items))
+        save_message = self._save_projects(project)
         # Selection is session state: never carry it into a different folder.
         self._photos.replace_items(items, preserve_selection=False)
         self._projects.register(project)
         self._active_id, self._active_name, self._active_folder = project.project_id, project.name, project.folder
         self.activeProjectChanged.emit()
-        self._set_message(self._save_projects())
+        self._set_message(save_message)
         if self._processing is not None:
             self._processing.start(project, items)
         self.projectOpened.emit(project.project_id, project.name)
@@ -321,5 +328,7 @@ class ProjectController(QObject):
         self._stop.set()
         self._timer.stop()
         self._worker.join(timeout=DISCOVERY_SHUTDOWN_TIMEOUT_SECONDS)
+        if self._covers is not None:
+            self._covers.shutdown()
         if self._worker.is_alive():
             raise RuntimeError("Project discovery worker did not stop during shutdown")

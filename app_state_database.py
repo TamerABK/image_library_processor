@@ -28,6 +28,13 @@ class AppStateDatabase:
                     last_opened REAL NOT NULL DEFAULT 0,
                     photo_count INTEGER NOT NULL DEFAULT -1 CHECK (photo_count >= -1)
                 );
+                CREATE TABLE IF NOT EXISTS project_covers (
+                    project_id TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,
+                    source_path TEXT NOT NULL,
+                    file_size INTEGER NOT NULL,
+                    mtime_ns INTEGER NOT NULL,
+                    cache_path TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS folder_state (
                     folder TEXT PRIMARY KEY,
                     current_tab TEXT NOT NULL DEFAULT 'Scenes'

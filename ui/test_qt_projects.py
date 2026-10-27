@@ -64,6 +64,80 @@ class ProjectTests(unittest.TestCase):
             return [dict(row) for row in db.execute(
                 "SELECT * FROM projects ORDER BY created_at, project_id")]
 
+    def cover(self, controller=None, row=0):
+        model = (controller or self.controller).projects
+        role = next(key for key, name in model.ROLES.items() if name == b"thumbnailUrl")
+        return model.data(model.index(row), role)
+
+    def test_cover_generation_cache_revision_and_missing_source(self):
+        self.open_folder()
+        wait_until(lambda: bool(self.cover()))
+        first = self.cover()
+        self.assertTrue(Path(first.removeprefix("file:///" )).name.endswith(".png"))
+        with closing(sqlite3.connect(self.database)) as db:
+            record = db.execute("SELECT source_path, file_size, mtime_ns, cache_path FROM project_covers").fetchone()
+        self.assertEqual(str(self.folder / "one.jpg").casefold(), record[0].casefold())
+        self.assertTrue(Path(record[3]).is_file())
+        reloaded = self.make_controller()
+        wait_until(lambda: bool(self.cover(reloaded)))
+        self.assertEqual(first, self.cover(reloaded))
+        Image.new("RGB", (30, 20), "blue").save(self.folder / "one.jpg")
+        reloaded.projects.refresh_cover(self.controller.activeProjectId)
+        wait_until(lambda: self.cover(reloaded) != first)
+        (self.folder / "one.jpg").unlink()
+        reloaded.projects.refresh_cover(self.controller.activeProjectId)
+        wait_until(lambda: self.cover(reloaded) == "")
+
+    def test_cover_backfills_existing_project_and_updates_by_identity(self):
+        self.open_folder()
+        wait_until(lambda: bool(self.cover()))
+        with closing(sqlite3.connect(self.database)) as db:
+            db.execute("DELETE FROM project_covers")
+            db.commit()
+        second_folder = self.root / "Second"
+        second_folder.mkdir()
+        Image.new("RGB", (16, 20), "green").save(second_folder / "b.png")
+        self.open_folder(second_folder)
+        reloaded = self.make_controller()
+        reloaded.projects.setSort("Name")
+        reloaded.projects.setSearch("Second")
+        wait_until(lambda: bool(self.cover(reloaded)))
+        self.assertEqual(1, reloaded.projects.rowCount())
+        self.assertEqual("Second", reloaded.projects.data(reloaded.projects.index(0),
+            next(key for key, name in reloaded.projects.ROLES.items() if name == b"name")))
+        reloaded.projects.setSearch("")
+        wait_until(lambda: all(self.cover(reloaded, i) for i in range(2)))
+        self.assertNotEqual(self.cover(reloaded, 0), self.cover(reloaded, 1))
+
+    def test_cached_cover_does_not_rescan_folder(self):
+        self.open_folder()
+        wait_until(lambda: bool(self.cover()))
+        with patch("ui.qt.project_covers.find_supported_files",
+                   side_effect=AssertionError("Cached cover rescanned project")):
+            reloaded = self.make_controller()
+            wait_until(lambda: bool(self.cover(reloaded)))
+
+    def test_empty_offline_and_corrupt_projects_keep_placeholder(self):
+        empty = self.root / "Empty"
+        empty.mkdir()
+        self.open_folder(empty)
+        self.assertEqual("", self.cover())
+        wait_until(lambda: not self.controller._covers._pending)
+        self.assertEqual("", self.cover())
+        corrupt = self.root / "Corrupt"
+        corrupt.mkdir()
+        (corrupt / "bad.jpg").write_bytes(b"bad")
+        self.open_folder(corrupt)
+        self.assertEqual("", self.cover())
+        wait_until(lambda: not self.controller._covers._pending)
+        self.assertEqual("", self.cover())
+        corrupt.rename(self.root / "Offline")
+        reloaded = self.make_controller()
+        for row in range(reloaded.projects.rowCount()):
+            self.cover(reloaded, row)
+        wait_until(lambda: not reloaded._covers._pending)
+        self.assertTrue(all(self.cover(reloaded, row) == "" for row in range(reloaded.projects.rowCount())))
+
     def test_create_cancel_and_supported_file_discovery(self):
         (self.folder / "notes.txt").write_text("unsupported", encoding="utf-8")
         nested = self.folder / "nested"
@@ -98,9 +172,17 @@ class ProjectTests(unittest.TestCase):
         gui_thread = threading.get_ident()
         model_threads = []
         self.photos.modelReset.connect(lambda: model_threads.append(threading.get_ident()))
+        from image_loader import ImageLoader
+        original_metadata = ImageLoader.read_metadata
+        original_decode = ImageLoader.load_pil_for_hashing
+        def worker_only(method):
+            def checked(loader, *args, **kwargs):
+                self.assertNotEqual(gui_thread, threading.get_ident(), "Image work ran on the GUI thread")
+                return method(loader, *args, **kwargs)
+            return checked
         with patch("ui.qt.project_controller.QFileDialog.getExistingDirectory", return_value=str(self.folder)) as chooser, \
-             patch("image_loader.ImageLoader.read_metadata", side_effect=AssertionError("Discovery decoded metadata")), \
-             patch("image_loader.ImageLoader.load_pil_for_hashing", side_effect=AssertionError("Discovery decoded pixels")):
+             patch.object(ImageLoader, "read_metadata", worker_only(original_metadata)), \
+             patch.object(ImageLoader, "load_pil_for_hashing", worker_only(original_decode)):
             controller.newProject()
             wait_until(lambda: not controller.busy)
         chooser.assert_called_once()

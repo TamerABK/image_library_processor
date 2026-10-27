@@ -34,13 +34,19 @@ class ProjectListModel(QAbstractListModel):
     ROLES = {int(Qt.ItemDataRole.UserRole) + i + 1: role.encode() for i, role in enumerate(
         ("projectId", "name", "photoCount", "thumbnailUrl", "lastOpened"))}
 
-    def __init__(self, projects=(), parent=None):
+    def __init__(self, projects=(), parent=None, *, covers=None):
         super().__init__(parent)
+        self._covers = covers
+        self._cover_sources = {}
+        self._cover_tickets = {}
+        self._cover_attempted = set()
         self._projects = list(projects)
         self._visible = []
         self._query = ""
         self._sort = "Newest"
         self._refresh()
+        if covers is not None:
+            covers.completed.connect(self._cover_completed)
 
     def roleNames(self):
         return self.ROLES
@@ -52,10 +58,14 @@ class ProjectListModel(QAbstractListModel):
         if not index.isValid() or not 0 <= index.row() < len(self._visible):
             return None
         project = self._visible[index.row()]
+        name = self.ROLES.get(role, b"").decode()
+        if name == "thumbnailUrl" and project.project_id not in self._cover_attempted:
+            self._request_cover(project)
         return {"projectId": project.project_id, "name": project.name,
-                "photoCount": project.photo_count, "thumbnailUrl": "",
+                "photoCount": project.photo_count,
+                "thumbnailUrl": self._cover_sources.get(project.project_id, ""),
                 "lastOpened": _last_opened_label(project.last_opened)
-                }.get(self.ROLES.get(role, b"").decode())
+                }.get(name)
 
     @Property(str, notify=searchChanged)
     def searchQuery(self):
@@ -95,8 +105,35 @@ class ProjectListModel(QAbstractListModel):
         return next((project for project in self._projects if project.folder == folder), None)
 
     def register(self, project):
+        self._cover_sources.pop(project.project_id, None)
+        self._cover_tickets.pop(project.project_id, None)
+        self._cover_attempted.discard(project.project_id)
         self._projects = [item for item in self._projects if item.project_id != project.project_id] + [project]
         self._refresh()
+
+    def refresh_cover(self, project_id, preferred_path=""):
+        project = self.get(project_id)
+        if project is not None:
+            self._request_cover(project, preferred_path)
+
+    def _request_cover(self, project, preferred_path=""):
+        if self._covers is not None:
+            self._cover_attempted.add(project.project_id)
+            ticket = self._covers.request(project.project_id, project.folder, preferred_path)
+            self._cover_tickets[project.project_id] = ticket
+
+    def _cover_completed(self, ticket, source):
+        project_id = next((key for key, value in self._cover_tickets.items() if value == ticket), None)
+        if project_id is None:
+            return
+        self._cover_tickets.pop(project_id, None)
+        self._cover_sources[project_id] = source
+        for row, project in enumerate(self._visible):
+            if project.project_id == project_id:
+                index = self.index(row)
+                role = next(key for key, value in self.ROLES.items() if value == b"thumbnailUrl")
+                self.dataChanged.emit(index, index, [role])
+                break
 
     def metadata(self):
         return [project.metadata() for project in self._projects]
