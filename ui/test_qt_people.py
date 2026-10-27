@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 from PySide6.QtCore import QEvent, QObject, QPointF, Qt
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtTest import QTest
@@ -24,7 +24,8 @@ from face_detector.face_database_sqlite import SQLiteFaceDatabase
 from face_processing.cache import FaceScanCache
 from face_processing.models import EmbeddedFace
 from ui.qt.app import configure_quick_controls_style
-from ui.qt.face_previews import FacePreviewService, decode_face_preview
+from ui.qt.face_previews import FacePreviewService, decode_face_preview, face_crop_bounds
+from image_loader import ImageLoader
 from ui.qt.people_model import PeopleListModel
 from ui.qt.inspector_controller import PhotoInspectorController
 from ui.qt.people_controller import PeopleController, validate_person_name
@@ -118,11 +119,57 @@ class FacePreviewTests(unittest.TestCase):
             crop = Image.open(BytesIO(base64.b64decode(source.split(",", 1)[1])))
             self.assertLessEqual(max(crop.size), 64)
             self.assertGreater(min(crop.size), 0)
-            self.assertLess(crop.width / crop.height, 0.5)  # EXIF-rotated coordinate space.
+            self.assertLess(crop.width / crop.height, 0.9)  # Oriented source limits the crop.
             self.assertEqual(decode_face_preview(json.dumps([str(path) + "-missing", [1, 1, 2, 2]]), 64), "")
             corrupt = Path(temporary) / "bad.jpg"
             corrupt.write_bytes(b"invalid")
             self.assertEqual(decode_face_preview(json.dumps([str(corrupt), [1, 1, 2, 2]]), 64), "")
+
+    def test_detection_space_boxes_frame_multiple_faces_and_edges(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            for name, size, faces in (
+                ("landscape", (600, 360), [(10, 30, 65, 75), (400, 190, 90, 100)]),
+                ("portrait", (360, 600), [(230, 20, 65, 75), (15, 460, 55, 60)]),
+                ("small", (600, 360), [(300, 120, 22, 25)]),
+                ("narrow", (178, 218), [(51, 56, 88, 132)]),
+            ):
+                path = Path(temporary) / (name + ".png")
+                image = Image.new("RGB", size, "black")
+                draw = ImageDraw.Draw(image)
+                for x, y, width, height in faces:
+                    draw.rectangle((x, y, x + width - 1, y + height - 1), fill="red")
+                image.save(path)
+                for bbox in faces:
+                    source = decode_face_preview(json.dumps([str(path), bbox]), 192)
+                    crop = Image.open(BytesIO(base64.b64decode(source.split(",", 1)[1])))
+                    if name != "narrow":
+                        self.assertAlmostEqual(crop.width / crop.height, 1.55, delta=0.05)
+                    self.assertGreater(np.asarray(crop)[:, :, 0].max(), 100)
+                    bounds = face_crop_bounds(size, bbox)
+                    self.assertLessEqual(bounds[0], bbox[0])
+                    self.assertGreaterEqual(bounds[2], bbox[0] + bbox[2])
+                    self.assertLessEqual(bounds[1], bbox[1])
+                    self.assertGreaterEqual(bounds[3], bbox[1] + bbox[3])
+
+    def test_reduced_jpeg_and_rotated_exif_use_detector_coordinates(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            for rotated in (False, True):
+                path = Path(temporary) / ("rotated.jpg" if rotated else "large.jpg")
+                image = Image.new("RGB", (4200, 2800), "black")
+                ImageDraw.Draw(image).rectangle((2500, 900, 3100, 1500), fill="red")
+                exif = Image.Exif()
+                if rotated:
+                    exif[274] = 6
+                image.save(path, exif=exif, quality=95)
+                detection = ImageLoader().load_for_detection(path)
+                # Find the colored region in the actual oriented detector image.
+                red = (detection[:, :, 2] > 130) & (detection[:, :, 1] < 60)
+                ys, xs = np.where(red)
+                bbox = [int(xs.min()), int(ys.min()), int(xs.max() - xs.min() + 1),
+                        int(ys.max() - ys.min() + 1)]
+                source = decode_face_preview(json.dumps([str(path), bbox]), 192)
+                crop = Image.open(BytesIO(base64.b64decode(source.split(",", 1)[1])))
+                self.assertGreater(np.asarray(crop)[:, :, 0].max(), 100)
 
     def test_bounded_cache_queue_and_cancellation(self):
         QApplication.instance() or QApplication([])

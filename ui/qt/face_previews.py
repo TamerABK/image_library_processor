@@ -9,6 +9,29 @@ from pathlib import Path
 from image_loader import ImageLoader
 from .thumbnails import ThumbnailService
 
+CARD_ASPECT = 1.55
+
+
+def face_crop_bounds(image_size, bbox, aspect=CARD_ASPECT):
+    """Frame a detector-space xywh box with context in the card's aspect ratio."""
+    image_width, image_height = image_size
+    x, y, width, height = bbox
+    if width <= 0 or height <= 0 or image_width <= 0 or image_height <= 0:
+        return None
+    # Fit the entire face even at an edge. Give the vertical span enough room
+    # for hair and chin; the horizontal span follows the card aspect ratio.
+    desired_height = max(height * 1.85, width * 2.1 / aspect)
+    # Clamp each axis independently. Scaling both axes to keep the aspect
+    # ratio on a narrow source can make the crop smaller than the face itself.
+    crop_width = min(image_width, desired_height * aspect)
+    crop_height = min(image_height, desired_height)
+    center_x = x + width / 2
+    center_y = y + height / 2
+    left = min(max(0, center_x - crop_width / 2), image_width - crop_width)
+    top = min(max(0, center_y - crop_height / 2), image_height - crop_height)
+    return (int(left), int(top), min(image_width, int(left + crop_width + 0.5)),
+            min(image_height, int(top + crop_height + 0.5)))
+
 
 def decode_face_preview(request: str, edge: int) -> str:
     try:
@@ -24,12 +47,10 @@ def decode_face_preview(request: str, edge: int) -> str:
             Path(path), max_dimension=2048)
         if image is None:
             return ""
-        side = max(width, height) * 1.36  # 18% context on each side.
-        center_x, center_y = x + width / 2, y + height / 2
-        left = max(0, int(center_x - side / 2))
-        top = max(0, int(center_y - side / 2))
-        right = min(image.width, int(center_x + side / 2 + 0.5))
-        bottom = min(image.height, int(center_y + side / 2 + 0.5))
+        bounds = face_crop_bounds(image.size, (x, y, width, height))
+        if bounds is None:
+            return ""
+        left, top, right, bottom = bounds
         if right <= left or bottom <= top:
             return ""
         crop = image.crop((left, top, right, bottom))

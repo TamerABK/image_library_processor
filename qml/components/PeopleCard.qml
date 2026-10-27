@@ -38,7 +38,7 @@ Item {
             source: root.previewSource
             cache: false
             asynchronous: true
-            fillMode: Image.PreserveAspectCrop
+            fillMode: Image.PreserveAspectFit
             Accessible.name: (root.title.length > 0 ? root.title : "Unknown cluster") + " face preview"
         }
         Text {
