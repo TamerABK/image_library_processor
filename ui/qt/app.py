@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import os
+import json
+from pathlib import Path
+import statistics
 import sys
+import time
 from functools import cache
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWidgets import QApplication
@@ -118,6 +122,55 @@ def run_app() -> int:
         engine.load(app_qml_path.as_uri())
         if not engine.rootObjects():
             raise RuntimeError(f"Failed to load QML root object from {app_qml_path}")
+        # Opt-in benchmark hook: run the actual Qt discovery/processing lifecycle
+        # with isolated application data supplied by the benchmark launcher.
+        benchmark_folder = os.environ.get("ROOM36_BENCHMARK_PROJECT")
+        if benchmark_folder:
+            heartbeat_path = os.environ.get("ROOM36_BENCHMARK_UI_METRICS")
+            if heartbeat_path:
+                intervals_ms = []
+                heartbeat = QTimer(application)
+                heartbeat.setInterval(50)
+                heartbeat.setTimerType(Qt.TimerType.PreciseTimer)
+                last_tick = time.perf_counter_ns()
+
+                def sample_ui_delay():
+                    nonlocal last_tick
+                    now = time.perf_counter_ns()
+                    if processing.overallState in {"QUEUED", "RUNNING"} and len(intervals_ms) < 30_000:
+                        intervals_ms.append(max(0.0, (now - last_tick) / 1e6 - 50.0))
+                    last_tick = now
+
+                def save_ui_delays():
+                    if not intervals_ms:
+                        payload = {"sample_count": 0, "note": "No processing heartbeat samples"}
+                    else:
+                        ordered = sorted(intervals_ms)
+                        payload = {"sample_count": len(ordered),
+                            "median_delay_ms": statistics.median(ordered),
+                            "p95_delay_ms": ordered[int(.95 * (len(ordered) - 1))],
+                            "p99_delay_ms": ordered[int(.99 * (len(ordered) - 1))],
+                            "max_delay_ms": ordered[-1],
+                            "over_50ms": sum(value > 50 for value in ordered),
+                            "over_100ms": sum(value > 100 for value in ordered),
+                            "over_250ms": sum(value > 250 for value in ordered),
+                            "timer_interval_ms": 50}
+                    output = Path(heartbeat_path)
+                    output.parent.mkdir(parents=True, exist_ok=True)
+                    output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+                heartbeat.timeout.connect(sample_ui_delay)
+                heartbeat.start()
+                application.aboutToQuit.connect(save_ui_delays)
+            def finish_benchmark():
+                if projects.busy:
+                    return
+                state = processing.overallState
+                if state in {"COMPLETE", "FAILED", "CANCELLED"}:
+                    application.exit(0 if state == "COMPLETE" else 2)
+            processing.changed.connect(finish_benchmark)
+            QTimer.singleShot(0, lambda: projects.openFolder(benchmark_folder))
+            QTimer.singleShot(1_200_000, lambda: application.exit(3))
         return application.exec()
     finally:
         watcher.shutdown()

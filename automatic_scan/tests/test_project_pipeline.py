@@ -109,6 +109,35 @@ class ProjectPipelineTests(unittest.TestCase):
         self.assertEqual("Sharp", sharp.status)
         self.assertGreaterEqual(sharp.final_score, detector.sharp_threshold)
 
+    def test_cache_batch_and_legacy_have_identical_stage_results_and_warm_hits(self):
+        paths = [self.path]
+        for name in ("second.jpg", "third.jpg"):
+            path = self.photos / name
+            Image.new("RGB", (80, 40), "gray").save(path)
+            paths.append(path)
+        outputs = {}
+        for mode in ("legacy", "256"):
+            state_root = self.root / mode
+            cache_path = state_root / "analysis.sqlite3"
+            service = NoFacesServices(AutomaticScanConfig(), lazy_models=True,
+                cache_path=cache_path, face_database_path=state_root / "faces.sqlite3")
+            orchestrator = AutomaticScanOrchestrator(
+                state_store=AutomaticStateStore(state_root / "state"))
+            with patch.dict(os.environ, {"ROOM36_CACHE_WRITE_BATCH_SIZE": mode}):
+                def run():
+                    events = []
+                    stats = orchestrator.process_project(self.photos, paths, services=service,
+                        cache_path=cache_path, cancellation_token=CancellationToken(),
+                        emit=lambda *args: events.append(args))
+                    return stats, {event[0]: event[5] for event in events
+                        if event[1] == StageState.COMPLETE}
+                cold_stats, cold_results = run()
+                warm_stats, warm_results = run()
+            self.assertEqual(cold_results, warm_results)
+            self.assertEqual(warm_stats["blur"]["cache_hits"], len(paths))
+            outputs[mode] = cold_results
+        self.assertEqual(outputs["legacy"], outputs["256"])
+
     def test_valid_cache_reuses_pixels_and_project_aggregates(self):
         self.run_project()
         with patch.object(self.service, "analyze_blur", side_effect=AssertionError("recomputed blur")), \

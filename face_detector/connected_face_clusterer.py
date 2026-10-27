@@ -5,6 +5,12 @@ import numpy as np
 from face_processing.interfaces import EmbeddingSimilarity, FaceClusterer
 from face_processing.models import EmbeddedFace, UnknownCluster
 
+MAX_GRAPH_EDGES = 4_000_000
+
+
+class ClusterCapacityError(RuntimeError):
+    """A dense similarity graph would consume unsafe amounts of memory."""
+
 
 class ConnectedComponentFaceClusterer(FaceClusterer):
 
@@ -26,6 +32,7 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
     def cluster(
         self,
         faces: list[EmbeddedFace],
+        cancellation_token=None,
     ) -> list[UnknownCluster]:
 
         if not faces:
@@ -41,15 +48,20 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
                 )
             ]
 
+        if cancellation_token is not None:
+            cancellation_token.raise_if_canceled()
         similarity_matrix = self._build_similarity_matrix(faces)
-        strong_graph, weak_edges = self._build_graphs(similarity_matrix)
+        if cancellation_token is not None:
+            cancellation_token.raise_if_canceled()
+        strong_graph, weak_edges = self._build_graphs(similarity_matrix, cancellation_token)
 
-        labels = self._strong_components(strong_graph, len(faces))
+        labels = self._strong_components(strong_graph, len(faces), cancellation_token)
 
         labels = self._attach_weak_faces(
             labels,
             strong_graph,
             weak_edges,
+            cancellation_token,
         )
 
         grouped_indices = defaultdict(list)
@@ -60,6 +72,8 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
         clusters = []
 
         for cluster_id, cluster_face_indices in grouped_indices.items():
+            if cancellation_token is not None:
+                cancellation_token.raise_if_canceled()
             cluster_faces = [faces[index] for index in cluster_face_indices]
             representative = self._representative(
                 cluster_face_indices,
@@ -96,20 +110,29 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
     def _build_graphs(
         self,
         similarity_matrix: np.ndarray,
+        cancellation_token=None,
     ) -> tuple[dict[int, list[int]], list[tuple[int, int]]]:
 
         strong = defaultdict(list)
         weak = []
+        edge_count = 0
         # At 10,000 faces, triu_indices_from alone allocates about 800 MiB.
         # Iterate rows to preserve edge order and thresholds with bounded
         # temporary arrays; the similarity matrix remains the main allocation.
         for i in range(len(similarity_matrix) - 1):
+            if cancellation_token is not None and i % 32 == 0:
+                cancellation_token.raise_if_canceled()
             scores = similarity_matrix[i, i + 1:]
-            for offset in np.flatnonzero(scores >= self._strong):
+            strong_offsets = np.flatnonzero(scores >= self._strong)
+            weak_offsets = np.flatnonzero((scores >= self._weak) & (scores < self._strong))
+            edge_count += len(strong_offsets) + len(weak_offsets)
+            if edge_count > MAX_GRAPH_EDGES:
+                raise ClusterCapacityError("Unknown-face similarity graph exceeds its memory safety limit")
+            for offset in strong_offsets:
                 j = i + 1 + int(offset)
                 strong[i].append(j)
                 strong[j].append(i)
-            for offset in np.flatnonzero((scores >= self._weak) & (scores < self._strong)):
+            for offset in weak_offsets:
                 weak.append((i, i + 1 + int(offset)))
 
         return strong, weak
@@ -118,6 +141,7 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
             self,
             graph,
             num_faces,
+            cancellation_token=None,
     ):
 
         labels = [-1] * num_faces
@@ -126,6 +150,8 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
         cluster = 0
 
         for start in range(num_faces):
+            if cancellation_token is not None and start % 256 == 0:
+                cancellation_token.raise_if_canceled()
 
             if visited[start]:
                 continue
@@ -154,6 +180,7 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
         labels,
         strong_graph,
         weak_edges,
+        cancellation_token=None,
     ):
 
         changed = True
@@ -162,7 +189,9 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
 
             changed = False
 
-            for a, b in weak_edges:
+            for index, (a, b) in enumerate(weak_edges):
+                if cancellation_token is not None and index % 1024 == 0:
+                    cancellation_token.raise_if_canceled()
 
                 la = labels[a]
                 lb = labels[b]

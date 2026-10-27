@@ -1,10 +1,13 @@
 import base64
+import json
+import os
 from io import BytesIO
 from pathlib import Path
 import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from PIL import Image
 from PySide6.QtCore import QThread
@@ -82,6 +85,20 @@ class ProcessingTests(unittest.TestCase):
         self.assertEqual(3, self.processing.routeCounts["blurry"])
         self.assertTrue(all(t == self.processing.thread() for t in threads))
         self.assertTrue(all(v["state"] == "COMPLETE" for v in self.processing.stages))
+
+    def test_opt_in_processing_profile_writes_bounded_private_report(self):
+        output = self.root / "profiles"
+        with patch.dict(os.environ, {"ROOM36_PROFILE_DIR": str(output),
+                                  "ROOM36_PROFILE_DETAIL": "deep"}):
+            self.open()
+            self.finish()
+        reports = list(output.glob("project-session-*.json"))
+        self.assertEqual(1, len([path for path in reports if not path.name.endswith(".trace.json")]))
+        report = json.loads(next(path for path in reports if not path.name.endswith(".trace.json")).read_text())
+        self.assertEqual(3, report["image_count"])
+        self.assertIn("qt.processing.worker", report["timings"])
+        self.assertNotIn(str(self.folder), json.dumps(report))
+        self.assertTrue(list(output.glob("*.trace.json")))
 
     def test_blur_review_preserves_unrelated_persisted_photo_fields(self):
         self.open()

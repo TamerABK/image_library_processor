@@ -144,7 +144,9 @@ class BlurFlowTests(unittest.TestCase):
         self.choice = str(second)
         self.create()
         self.click("libraryNav_blurry")
-        self.assertEqual(0, self.processing.blurModel.rowCount())
+        # The new project's Blur stage may already have finished. Its result
+        # must never contain candidates from the previous project.
+        self.assertTrue(old.isdisjoint(self.processing.blurModel.results))
         self.gate.set()
         wait_until(lambda: self.processing.overallState == "COMPLETE", timeout=6)
         self.assertEqual(1, self.processing.blurModel.rowCount())

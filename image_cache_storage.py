@@ -7,6 +7,8 @@ from pathlib import Path
 
 from app_paths import app_data_path
 from automatic_scan.perf import InstrumentedSqliteConnection, get_active_profiler
+from automatic_scan.profiling import profile_count, profile_scope
+from image_cache_batch import active_cache_session
 
 
 UNIFIED_CACHE_DB_FILENAME = "image_analysis_cache.sqlite3"
@@ -14,9 +16,25 @@ UNIFIED_CACHE_DB_FILENAME = "image_analysis_cache.sqlite3"
 
 class _CacheConnection(InstrumentedSqliteConnection):
     def __exit__(self, *args):
+        had_transaction = self.in_transaction
+        started = time.perf_counter()
+        succeeded = False
         try:
-            return super().__exit__(*args)
+            with profile_scope("cache.sqlite_transaction_exit", detail="deep"):
+                result = super().__exit__(*args)
+            succeeded = True
+            return result
         finally:
+            if had_transaction:
+                if not succeeded:
+                    profile_count("cache.transaction_exit_failures")
+                elif args and args[0] is not None:
+                    profile_count("cache.transaction_rollbacks")
+                else:
+                    profile_count("cache.transaction_commits")
+                    profiler = get_active_profiler()
+                    if profiler is not None:
+                        profiler.record_commit(time.perf_counter() - started)
             self.close()
 
 
@@ -52,19 +70,27 @@ class SharedImageCacheDatabase:
             )
 
     def connect(self) -> sqlite3.Connection:
+        session = active_cache_session(self._db_path)
+        if session is not None:
+            return session.connection()
+        return self._open_connection()
+
+    def _open_connection(self) -> sqlite3.Connection:
         started = time.perf_counter()
-        connection = sqlite3.connect(
-            self._db_path,
-            timeout=30,
-            factory=_CacheConnection,
-        )
+        with profile_scope("cache.sqlite_connect", detail="deep"):
+            connection = sqlite3.connect(
+                self._db_path,
+                timeout=30,
+                factory=_CacheConnection,
+            )
         profiler = get_active_profiler()
         if profiler is not None:
             profiler.record_database_connect(time.perf_counter() - started)
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA busy_timeout = 30000")
+        with profile_scope("cache.sqlite_pragmas", detail="deep"):
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA busy_timeout = 30000")
         return connection
 
     def using_connection(self, connection: sqlite3.Connection | None = None):

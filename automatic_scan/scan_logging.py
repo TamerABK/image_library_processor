@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from threading import Lock
@@ -16,7 +17,7 @@ _SETUP_LOCK = Lock()
 def get_scan_logger() -> logging.Logger:
     """Return a bounded local log; fall back to stderr if app data is unwritable."""
     try:
-        path = Path(app_data_path(LOG_FILENAME))
+        path = Path(os.environ["ROOM36_SCAN_LOG_PATH"]) if os.environ.get("ROOM36_SCAN_LOG_PATH") else Path(app_data_path(LOG_FILENAME))
     except OSError:
         path = None
     name = "room36.automatic_scan." + hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
@@ -39,3 +40,13 @@ def get_scan_logger() -> logging.Logger:
                 "%(asctime)s %(levelname)s [%(threadName)s] %(message)s"))
             logger.addHandler(handler)
     return logger
+
+
+def close_scan_logger_for_path(path: Path) -> None:
+    """Release an isolated benchmark log before its temp directory is removed."""
+    name = "room36.automatic_scan." + hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
+    logger = logging.getLogger(name)
+    with _SETUP_LOCK:
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+            handler.close()

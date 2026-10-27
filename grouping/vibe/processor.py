@@ -372,7 +372,10 @@ class VibeGroupingProcessor:
             },
             sort_keys=True,
         )
-        return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+        return hashlib.sha1(
+            payload.encode("utf-8"),
+            usedforsecurity=False,
+        ).hexdigest()[:12]
 
     def _build_cache_key(self, paths: list[Path]) -> str:
         membership = []

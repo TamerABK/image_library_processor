@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import logging
 import os
+import itertools
 from collections import OrderedDict
 from pathlib import Path
 import sys
 import threading
 import time
+import weakref
 from typing import Any, Sequence
 
 from automatic_scan.perf import get_active_profiler
+from automatic_scan.profiling import profile_scope, profile_lock_wait
 from automatic_scan.scan_logging import get_scan_logger
 from .onnx_directml_compat import compatible_model_path
 
@@ -30,6 +33,8 @@ _OVERRIDE_PROVIDERS = {
 }
 _PRELOAD_ATTEMPTED = False
 _STARTUP_LOGGED = False
+_PROFILED_SESSIONS: list[weakref.ReferenceType] = []
+_PROFILE_COUNTER = itertools.count()
 
 
 def _resolve_runtime_attribute(name: str) -> Any:
@@ -165,6 +170,11 @@ def create_session_options(providers: Sequence[Provider] | None = None) -> Any:
     if optimization is not None:
         options.graph_optimization_level = optimization.ORT_ENABLE_ALL
     options.log_severity_level = 3
+    # Native operator traces are a separate, explicit deep-profiling run.
+    profile_prefix = os.environ.get("ROOM36_ORT_PROFILE_PREFIX")
+    if profile_prefix:
+        options.enable_profiling = True
+        options.profile_file_prefix = f"{profile_prefix}-{next(_PROFILE_COUNTER)}"
     _configure_options(options, select_providers() if providers is None else providers)
     return options
 
@@ -187,6 +197,8 @@ class InferenceSession:
         self._options = options
         self._batch_sessions: OrderedDict[int, InferenceSession] = OrderedDict()
         self._batch_symbol = None
+        if os.environ.get("ROOM36_ORT_PROFILE_PREFIX"):
+            _PROFILED_SESSIONS.append(weakref.ref(self))
         if self._run_lock is not None and not batch_variant and callable(getattr(session, "get_inputs", None)):
             shape = session.get_inputs()[0].shape
             # An older ArcFace export uses the literal symbol "None" for its
@@ -209,7 +221,9 @@ class InferenceSession:
         batch = str(shape[0]) if shape else "unknown"
         started = time.perf_counter()
         try:
-            result = call(*args, **kwargs)
+            with profile_scope("onnx." + self._model_name + ".host_run", detail="deep",
+                               batch_size=int(batch) if batch.isdigit() else 0):
+                result = call(*args, **kwargs)
         except Exception:
             self._scan_logger.exception(
                 "onnx_inference_failed model=%s operation=%s provider=%s device=%s providers=%s batch_size=%s",
@@ -226,7 +240,7 @@ class InferenceSession:
     def run(self, *args: Any, **kwargs: Any) -> Any:
         if self._run_lock is None:
             return self._execute_inference("run", self._session.run, *args, **kwargs)
-        with self._run_lock:
+        with profile_lock_wait("onnx.dml_lock_wait", self._run_lock):
             feeds = args[1] if len(args) > 1 else kwargs.get("input_feed", {})
             for value in feeds.values():
                 if any(size == 0 for size in getattr(value, "shape", ())):
@@ -256,7 +270,7 @@ class InferenceSession:
         if self._run_lock is None:
             return self._execute_inference("run_with_iobinding", self._session.run_with_iobinding,
                                            *args, **kwargs)
-        with self._run_lock:
+        with profile_lock_wait("onnx.dml_lock_wait", self._run_lock):
             return self._execute_inference("run_with_iobinding", self._session.run_with_iobinding,
                                            *args, **kwargs)
 
@@ -269,6 +283,21 @@ class InferenceSession:
         self._scan_logger.info("onnx_inference_submitted model=%s operation=run_async provider=%s device=%s providers=%s",
                                self._model_name, primary, provider_device(primary), ",".join(providers))
         return result
+
+
+def finish_native_profiling() -> list[str]:
+    """Flush opt-in ORT operator traces after all benchmark inference completes."""
+    files = []
+    while _PROFILED_SESSIONS:
+        session = _PROFILED_SESSIONS.pop()()
+        if session is not None:
+            try:
+                path = session._session.end_profiling()
+                if path:
+                    files.append(path)
+            except Exception:
+                LOGGER.exception("Could not finish ONNX Runtime native profiling")
+    return files
 
 
 def _copy_session_options(source: Any | None, providers: Sequence[Provider] = (DML, CPU)) -> Any:

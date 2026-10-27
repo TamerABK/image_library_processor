@@ -1,13 +1,20 @@
 """One project-scoped scheduler. Workers publish plain data through bounded queues."""
 from queue import Empty, Full, Queue
+import json
+import os
+from pathlib import Path
 import sqlite3
 import threading
+import time
 
 from PySide6.QtCore import QObject, Property, QThread, QTimer, Signal, Slot
 from automatic_scan.orchestrator import AutomaticScanOrchestrator
 from automatic_scan.project_pipeline import STAGES
 from automatic_scan.state_store import AutomaticStateStore
 from automatic_scan.scan_logging import get_scan_logger
+from automatic_scan.perf import active_profiler
+from automatic_scan.profiling import HierarchicalProfiler, profile_scope
+from automatic_scan.profiling_resources import ResourceSampler
 from scan_controls import CancellationToken
 from .blur_model import BlurCandidateModel
 from .photo_model import photo_identity
@@ -19,10 +26,27 @@ PROCESSING_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 def _processing_worker(tasks, results, stop, runner, store, cache_path):
     while not stop.is_set():
         try:
-            session, folder, paths, token = tasks.get(timeout=0.05)
+            session, folder, paths, token, queued_ns = tasks.get(timeout=0.05)
         except Empty:
             continue
+        profile_dir = os.environ.get("ROOM36_PROFILE_DIR")
+        detail = os.environ.get("ROOM36_PROFILE_DETAIL", "normal")
+        if detail not in {"stages", "normal", "deep"}:
+            detail = "normal"
+        try:
+            max_events = max(1000, min(500000, int(os.environ.get("ROOM36_PROFILE_MAX_EVENTS", "100000"))))
+            sample_interval = max(.1, min(5.0, float(os.environ.get("ROOM36_PROFILE_SAMPLE_INTERVAL", ".25"))))
+        except ValueError:
+            max_events, sample_interval = 100000, .25
+        profiler = HierarchicalProfiler(detail=detail, max_events=max_events) if profile_dir else None
+        sampler = ResourceSampler(interval=sample_interval, dataset=folder) if profiler else None
+        face_count = None
+        if profiler:
+            profiler.add_count("qt.processing.queue_wait_ns", time.perf_counter_ns() - queued_ns)
         def emit(stage, state, done, total, error, data, stats):
+            nonlocal face_count
+            if stage == "faces" and str(state) == "COMPLETE" and isinstance(data, dict):
+                face_count = int(data.get("face_count", 0))
             if stop.is_set():
                 token.cancel()
                 return
@@ -32,22 +56,44 @@ def _processing_worker(tasks, results, stop, runner, store, cache_path):
                 return
             while not stop.is_set() and not token.is_canceled:
                 try:
-                    results.put(value, timeout=0.05)
+                    with profile_scope("qt.progress.enqueue_wait", detail="deep"):
+                        results.put(value, timeout=0.05)
                     return
                 except Full:
                     continue
+        if sampler:
+            sampler.start()
         try:
-            get_scan_logger().info("processing_session_started session=%s folder=%s photo_count=%d",
-                                   session, folder, len(paths))
-            orchestrator = runner or AutomaticScanOrchestrator(state_store=store)
-            orchestrator.process_project(folder, paths, emit=emit,
-                cancellation_token=token, cache_path=cache_path)
-            get_scan_logger().info("processing_session_finished session=%s folder=%s", session, folder)
-        except Exception:
-            get_scan_logger().exception("processing_worker_failed session=%s folder=%s photo_count=%d",
-                                        session, folder, len(paths))
-            for stage in STAGES:
-                emit(stage, "FAILED", 0, 0, "Processing could not start. Check that application data is writable.", None, {})
+            with active_profiler(profiler):
+                with profile_scope("qt.processing.worker", detail="stages"):
+                    try:
+                        get_scan_logger().info("processing_session_started session=%s folder=%s photo_count=%d",
+                                               session, folder, len(paths))
+                        orchestrator = runner or AutomaticScanOrchestrator(state_store=store)
+                        orchestrator.process_project(folder, paths, emit=emit,
+                            cancellation_token=token, cache_path=cache_path)
+                        get_scan_logger().info("processing_session_finished session=%s folder=%s", session, folder)
+                    except Exception:
+                        get_scan_logger().exception("processing_worker_failed session=%s folder=%s photo_count=%d",
+                                                    session, folder, len(paths))
+                        for stage in STAGES:
+                            emit(stage, "FAILED", 0, 0, "Processing could not start. Check that application data is writable.", None, {})
+        finally:
+            if sampler:
+                sampler.stop()
+            if profiler:
+                try:
+                    output = Path(profile_dir)
+                    output.mkdir(parents=True, exist_ok=True)
+                    prefix = f"project-session-{session}-{int(time.time())}"
+                    report = profiler.report(image_count=len(paths), face_count=face_count)
+                    report["resources"] = sampler.report()
+                    (output / f"{prefix}.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+                    trace = profiler.trace()
+                    trace["traceEvents"].extend(sampler.trace_events(profiler.started_ns))
+                    (output / f"{prefix}.trace.json").write_text(json.dumps(trace), encoding="utf-8")
+                except Exception:
+                    get_scan_logger().exception("processing_profile_write_failed session=%s", session)
         emit("", "FINISHED", 0, 0, "", None, {})
 
 
@@ -158,7 +204,8 @@ class ProjectProcessingController(QObject):
             self._tasks.get_nowait()
         except Empty:
             pass
-        self._tasks.put_nowait((self._session, self._folder, list(self._paths), self._token))
+        self._tasks.put_nowait((self._session, self._folder, list(self._paths), self._token,
+                               time.perf_counter_ns()))
         self._timer.start()
         self.changed.emit()
 

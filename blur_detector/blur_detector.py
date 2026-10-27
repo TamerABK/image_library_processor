@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from automatic_scan.perf import get_active_profiler
+from automatic_scan.profiling import profile_scope
 from image_file_utils import find_supported_files
 from image_loader import default_image_loader
 from scan_controls import CancellationToken
@@ -121,9 +122,12 @@ class BlurDetector:
             if profiler is not None:
                 profiler.record_resize(path, time.perf_counter() - resize_started)
 
-        lap_score = self._laplacian(gray)
-        sobel_score = self._sobel(gray)
-        contrast_score = self._local_contrast(gray)
+        with profile_scope("blur.laplacian", detail="deep", width=gray.shape[1], height=gray.shape[0]):
+            lap_score = self._laplacian(gray)
+        with profile_scope("blur.sobel", detail="deep"):
+            sobel_score = self._sobel(gray)
+        with profile_scope("blur.local_contrast", detail="deep"):
+            contrast_score = self._local_contrast(gray)
 
         lap_norm = min(lap_score / self.lap_max, 1.0)
         sobel_norm = min(sobel_score / self.sobel_max, 1.0)

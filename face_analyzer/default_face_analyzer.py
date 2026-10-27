@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Sequence
 
 import numpy as np
+from automatic_scan.profiling import profile_scope
 
 from .classical_metrics import ClassicalFaceQualityAssessor
 from .config import FaceAnalyzerConfig
@@ -144,18 +145,13 @@ class DefaultFaceAnalyzer(FaceAnalyzer):
         face: DetectedFace,
     ) -> FaceAnalysisResult:
         validate_image(image)
-        head_pose = self._safe_head_pose(image, face)
-        eye_state = self._safe_eye_state(
-            image,
-            face,
-            head_pose=head_pose,
-        )
-        return self._build_analysis(
-            image,
-            face,
-            head_pose=head_pose,
-            eye_state=eye_state,
-        )
+        with profile_scope("faces.head_pose", detail="deep", batch_size=1):
+            head_pose = self._safe_head_pose(image, face)
+        with profile_scope("faces.eye_state", detail="deep", batch_size=1):
+            eye_state = self._safe_eye_state(image, face, head_pose=head_pose)
+        with profile_scope("faces.classical_quality", detail="deep"):
+            return self._build_analysis(image, face, head_pose=head_pose,
+                                        eye_state=eye_state)
 
     def analyze_many(
         self,
@@ -167,17 +163,15 @@ class DefaultFaceAnalyzer(FaceAnalyzer):
         if not faces:
             return []
 
-        head_poses = self._head_poses_for_faces(image, faces)
-        eye_states = self._eye_states_for_faces(image, faces, head_poses)
-        return [
-            self._build_analysis(
-                image,
-                face,
-                head_pose=head_pose,
-                eye_state=eye_state,
-            )
-            for face, head_pose, eye_state in zip(faces, head_poses, eye_states)
-        ]
+        with profile_scope("faces.head_pose", detail="deep", batch_size=len(faces)):
+            head_poses = self._head_poses_for_faces(image, faces)
+        with profile_scope("faces.eye_state", detail="deep", batch_size=len(faces)):
+            eye_states = self._eye_states_for_faces(image, faces, head_poses)
+        with profile_scope("faces.classical_quality", detail="deep", batch_size=len(faces)):
+            return [
+                self._build_analysis(image, face, head_pose=head_pose, eye_state=eye_state)
+                for face, head_pose, eye_state in zip(faces, head_poses, eye_states)
+            ]
 
     def _safe_head_pose(
         self,

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import threading
+from contextlib import contextmanager
 import time
 
 import cv2
@@ -11,6 +12,7 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from automatic_scan.perf import get_active_profiler
+from automatic_scan.profiling import profile_scope
 
 try:
     import rawpy
@@ -81,6 +83,23 @@ class ImageLoader:
         self._max_decode_dimension = max_decode_dimension
         self._metadata_cache: dict[Path, _MetadataCacheEntry] = {}
         self._lock = threading.Lock()
+        self._prefetched = threading.local()
+
+    @contextmanager
+    def use_prefetched(self, path: Path, image: np.ndarray | None, *,
+                       max_dimension: int | None = None, grayscale: bool = False):
+        """Use an already decoded image only on this processing thread.
+
+        A matching failed decode is also retained as None, so a corrupt photo
+        is not silently opened a second time. All other requests use the
+        unchanged loader path.
+        """
+        previous = getattr(self._prefetched, "value", None)
+        self._prefetched.value = (str(path), max_dimension, grayscale, image)
+        try:
+            yield
+        finally:
+            self._prefetched.value = previous
 
     @property
     def max_decode_dimension(self) -> int | None:
@@ -132,6 +151,9 @@ class ImageLoader:
         max_dimension: int | None = None,
         grayscale: bool = False,
     ) -> np.ndarray | None:
+        prefetched = getattr(self._prefetched, "value", None)
+        if prefetched is not None and prefetched[:3] == (str(path), max_dimension, grayscale):
+            return prefetched[3]
         suffix = path.suffix.lower()
         if suffix in RAW_EXTENSIONS and rawpy is not None:
             return self._load_raw_preview(
@@ -272,7 +294,8 @@ class ImageLoader:
             )
 
         decode_started = time.perf_counter()
-        image = cv2.imread(str(path), read_flag)
+        with profile_scope("image.cv2_imread", detail="deep"):
+            image = cv2.imread(str(path), read_flag)
         if image is None:
             return None
         profiler = get_active_profiler()
