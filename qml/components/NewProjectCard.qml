@@ -4,6 +4,7 @@ import "../theme" as Room36Theme
 
 Item {
     id: root
+    property string viewSize: "Medium"
 
     signal clicked()
 
@@ -46,8 +47,8 @@ Item {
 
             Image {
                 Layout.alignment: Qt.AlignHCenter
-                Layout.preferredWidth: 58
-                Layout.preferredHeight: 58
+                Layout.preferredWidth: root.viewSize === "Small" ? 46 : root.viewSize === "Large" ? 70 : 58
+                Layout.preferredHeight: Layout.preferredWidth
                 source: theme.iconUrl("import_home.svg")
                 cache: true
                 fillMode: Image.PreserveAspectFit
@@ -58,7 +59,8 @@ Item {
                 text: "New project"
                 color: theme.white
                 font.family: typography.bodyFamily
-                font.pixelSize: typography.sectionTitle
+                font.pixelSize: root.viewSize === "Small" ? typography.body
+                    : root.viewSize === "Large" ? typography.sectionTitle + 2 : typography.sectionTitle
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 elide: Text.ElideRight

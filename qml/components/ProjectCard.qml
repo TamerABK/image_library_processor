@@ -13,8 +13,11 @@ Item {
     property int photoCount: -1
     property bool selected: false
     property bool menuEnabled: true
+    property string viewSize: "Medium"
     property color cornerMaskColor: theme.homeBackground
     readonly property bool hasImageSource: String(source).length > 0
+    readonly property real footerHeight: viewSize === "Small" ? 56
+        : viewSize === "Large" ? 78 : metrics.projectCardFooterHeight
 
     signal clicked()
     signal menuRequested()
@@ -56,7 +59,7 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
-            height: metrics.projectCardImageHeight
+            height: root.height - root.footerHeight
             color: theme.imagePlaceholder
 
             Loader {
@@ -68,6 +71,7 @@ Item {
                     anchors.fill: parent
                     source: root.source
                     cache: true
+                    asynchronous: true
                     fillMode: Image.PreserveAspectCrop
                 }
             }
@@ -102,7 +106,7 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
-            height: metrics.projectCardFooterHeight
+            height: root.footerHeight
             radius: metrics.projectCardRadius
             color: theme.footerFill
 
@@ -125,7 +129,8 @@ Item {
                     text: root.title
                     color: theme.white
                     font.family: typography.cardTitleFamily
-                    font.pixelSize: typography.body
+                    font.pixelSize: root.viewSize === "Small" ? typography.caption
+                        : root.viewSize === "Large" ? typography.body + 2 : typography.body
                     elide: Text.ElideRight
                     verticalAlignment: Text.AlignVCenter
                 }

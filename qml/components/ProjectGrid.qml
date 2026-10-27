@@ -9,10 +9,17 @@ Flickable {
 
     property var projectModel: null
     property bool newProjectEnabled: true
+    property string viewSize: "Medium"
+    readonly property real preferredWidth: viewSize === "Small" ? 310
+        : viewSize === "Large" ? 510 : metrics.projectCardReferenceWidth
+    readonly property real preferredHeight: viewSize === "Small" ? 254
+        : viewSize === "Large" ? 418 : metrics.projectCardReferenceHeight
     readonly property int columnCount: Math.max(
         1,
-        Math.floor((width + metrics.projectCardHorizontalGap) / (metrics.projectCardReferenceWidth + metrics.projectCardHorizontalGap))
+        Math.floor((width + metrics.projectCardHorizontalGap) / (preferredWidth + metrics.projectCardHorizontalGap))
     )
+    readonly property real cardWidth: Math.min(preferredWidth,
+        Math.max(1, (width - (columnCount - 1) * metrics.projectCardHorizontalGap) / columnCount))
     readonly property int occupiedColumns: Math.min(columnCount, 1 + projectRepeater.count)
 
     signal newProjectRequested()
@@ -28,7 +35,7 @@ Flickable {
 
     GridLayout {
         id: grid
-        width: root.occupiedColumns * metrics.projectCardReferenceWidth
+        width: root.occupiedColumns * root.cardWidth
             + (root.occupiedColumns - 1) * metrics.projectCardHorizontalGap
         columns: root.columnCount
         columnSpacing: metrics.projectCardHorizontalGap
@@ -37,8 +44,9 @@ Flickable {
         NewProjectCard {
             objectName: "newProjectCard"
             enabled: root.newProjectEnabled
-            Layout.preferredWidth: metrics.projectCardReferenceWidth
-            Layout.preferredHeight: metrics.projectCardReferenceHeight
+            viewSize: root.viewSize
+            Layout.preferredWidth: root.cardWidth
+            Layout.preferredHeight: root.preferredHeight
             onClicked: root.newProjectRequested()
         }
 
@@ -55,8 +63,9 @@ Flickable {
                 property var row: model || ({})
                 property var projectIdentifier: row && row.projectId !== undefined ? row.projectId : index
 
-                Layout.preferredWidth: metrics.projectCardReferenceWidth
-                Layout.preferredHeight: metrics.projectCardReferenceHeight
+                viewSize: root.viewSize
+                Layout.preferredWidth: root.cardWidth
+                Layout.preferredHeight: root.preferredHeight
                 source: row && row.thumbnailUrl !== undefined ? row.thumbnailUrl : ""
                 menuEnabled: false
                 title: row && row.name !== undefined ? row.name : ""

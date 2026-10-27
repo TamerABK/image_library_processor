@@ -24,6 +24,7 @@ ApplicationWindow {
     property var inspectorController: null
     property var activeProjectId: null
     property string activeProjectName: ""
+    property string homeViewSize: "Medium"
     // Unavailable account/settings/menu actions remain explicit contracts.
     signal newProjectRequested()
     signal projectMenuRequested(var projectId)
@@ -143,11 +144,13 @@ ApplicationWindow {
             projectModel: window.projectModel
             newProjectEnabled: window.projectController !== null && !window.projectController.busy
             searchText: window.projectController ? window.projectController.projects.searchQuery : ""
+            viewSize: window.homeViewSize
             onProjectActivated: function(projectId, projectName) { window.activateProject(projectId, projectName) }
             onNewProjectRequested: window.newProjectRequested()
             onProjectMenuRequested: function(projectId) { window.projectMenuRequested(projectId) }
             onSearchChanged: function(text) { if (window.projectController) window.projectController.projects.setSearch(text) }
             onSortChanged: function(order) { if (window.projectController) window.projectController.projects.setSort(order) }
+            onViewSizeSelected: function(size) { window.homeViewSize = size }
             onSubscriptionRequested: window.subscriptionRequested()
             onSettingsRequested: window.settingsRequested()
             onProfileRequested: window.profileRequested()

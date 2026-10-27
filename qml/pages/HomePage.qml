@@ -11,13 +11,14 @@ Item {
     property var projectModel: null
     property bool newProjectEnabled: true
     property string searchText: ""
+    property string viewSize: "Medium"
 
     signal newProjectRequested()
     signal projectActivated(var projectId, string projectName)
     signal projectMenuRequested(var projectId)
     signal searchChanged(string text)
     signal sortChanged(string value)
-    signal viewSizeChanged(string value)
+    signal viewSizeSelected(string value)
     signal subscriptionRequested()
     signal settingsRequested()
     signal profileRequested()
@@ -92,21 +93,22 @@ Item {
 
         Components.ToolbarDropdownButton {
             objectName: "homeViewButton"
-            enabled: false // Project-card size variants are not implemented.
             label: "View"
             iconSource: theme.iconUrl("view.svg")
             options: ["Small", "Medium", "Large"]
-            onOptionSelected: function(option) { root.viewSizeChanged(option) }
+            onOptionSelected: function(option) { root.viewSizeSelected(option) }
         }
     }
 
     Components.ProjectGrid {
         id: projectGrid
+        objectName: "homeProjectGrid"
         x: root.pageMargin
         y: root.gridTop
         width: root.width - root.pageMargin * 2
         height: Math.max(0, root.height - y - 40)
         projectModel: root.projectModel
+        viewSize: root.viewSize
         newProjectEnabled: root.newProjectEnabled
         onNewProjectRequested: root.newProjectRequested()
         onProjectActivated: function(projectId, projectName) { root.projectActivated(projectId, projectName) }

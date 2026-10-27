@@ -141,7 +141,7 @@ class ProjectFlowTests(unittest.TestCase):
         self.window.settingsRequested.connect(lambda: events.append("settings"))
         self.window.profileRequested.connect(lambda: events.append("profile"))
         self.window.projectMenuRequested.connect(lambda *_: events.append("project menu"))
-        for name in ("homeViewButton", "homeSubscriptionButton", "homeSettingsButton", "homeProfileButton"):
+        for name in ("homeSubscriptionButton", "homeSettingsButton", "homeProfileButton"):
             self.click(name)
             self.assertEqual("home", self.window.property("currentPage"))
         self.assertEqual([], events)
@@ -165,9 +165,9 @@ class ProjectFlowTests(unittest.TestCase):
     def test_home_search_sort_and_disabled_actions(self):
         self.create()
         self.home()
-        for name in ("homeViewButton", "homeSubscriptionButton", "homeSettingsButton", "homeProfileButton", "projectMenuButton"):
+        for name in ("homeSubscriptionButton", "homeSettingsButton", "homeProfileButton", "projectMenuButton"):
             self.assertFalse(self.item(name).property("enabled"), name)
-        for name in ("newProjectCard", "homeSortButton", "homeSearchField"):
+        for name in ("newProjectCard", "homeSortButton", "homeViewButton", "homeSearchField"):
             self.assertTrue(self.item(name).property("enabled"), name)
         self.item("homeSearchField").setProperty("text", "REAL")
         self.assertEqual(1, self.controller.projects.rowCount())
@@ -187,6 +187,33 @@ class ProjectFlowTests(unittest.TestCase):
         self.item("homeSettingsButton").clicked.emit()
         self.item("homeProfileButton").clicked.emit()
         self.assertEqual(["subscription", "settings", "profile"], signals)
+
+    def test_home_view_dropdown_resizes_cards_and_persists(self):
+        self.create()
+        self.home()
+        grid = self.item("homeProjectGrid")
+        widths = {}
+        for size in ("Small", "Medium", "Large"):
+            self.click("homeViewButton")
+            self.click("toolbarDropdownOption_" + size)
+            self.assertEqual(size, self.window.property("homeViewSize"))
+            self.assertEqual(size, grid.property("viewSize"))
+            QTest.qWait(30)
+            card = self.item("projectCard_0")
+            new_card = self.item("newProjectCard")
+            widths[size] = card.width()
+            self.assertAlmostEqual(card.width(), new_card.width(), delta=1)
+            self.assertLessEqual(grid.property("contentWidth"), grid.width() + 1)
+        self.assertLess(widths["Small"], widths["Medium"])
+        self.assertLess(widths["Medium"], widths["Large"])
+        self.click("projectCard_0")
+        wait_until(lambda: self.window.property("currentPage") == "library" and not self.controller.busy)
+        self.home()
+        self.assertEqual("Large", self.item("homeProjectGrid").property("viewSize"))
+        self.window.resize(950, 700)
+        QTest.qWait(50)
+        grid = self.item("homeProjectGrid")
+        self.assertLessEqual(grid.property("contentWidth"), grid.width() + 1)
 
     def test_cancel_empty_and_missing_folder_error(self):
         self.choice = ""
