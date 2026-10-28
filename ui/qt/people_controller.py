@@ -15,6 +15,7 @@ from automatic_scan.state_store import AutomaticStateStore
 from face_detector.cosine_similarity import CosineEmbeddingSimilarity
 from face_detector.face_database_sqlite import SQLiteFaceDatabase
 from face_processing.cache import FaceScanCache
+from image_cache_storage import UNIFIED_CACHE_DB_FILENAME
 from ui.models import ResultItem
 from .people_data import project_people_rows, stable_cluster_id
 from .people_model import PeopleListModel
@@ -134,6 +135,8 @@ class PeopleController(QObject):
         super().__init__(parent)
         self._processing = processing
         self._cache_path = cache_path if cache_path is not None else processing._cache_path
+        face_previews.set_quality_cache_path(
+            self._cache_path or app_data_path(UNIFIED_CACHE_DB_FILENAME))
         self._database_path = face_database_path or app_data_path("face_embeddings.sqlite3")
         self._store = AutomaticStateStore(state_root)
         self._database = SQLiteFaceDatabase(self._database_path, CosineEmbeddingSimilarity())

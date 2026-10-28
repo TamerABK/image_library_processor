@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import closing
 from io import BytesIO
 import json
 from pathlib import Path
@@ -203,6 +204,28 @@ class FacePreviewTests(unittest.TestCase):
             preview = Image.open(BytesIO(base64.b64decode(source.split(",", 1)[1])))
             red, green, _ = preview.getpixel((preview.width // 2, preview.height // 2))
             self.assertGreater(green, red)
+
+    def test_cached_quality_prefers_clear_face_over_larger_dark_face(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dark = Path(temporary) / "dark.png"
+            clear = Path(temporary) / "clear.png"
+            Image.new("RGB", (240, 160), (8, 8, 8)).save(dark)
+            Image.new("RGB", (240, 160), (170, 200, 90)).save(clear)
+            database = Path(temporary) / "quality.sqlite3"
+            with closing(sqlite3.connect(database)) as db:
+                db.execute("CREATE TABLE face_scan_cache_faces (entry_path TEXT, bbox_x INTEGER, "
+                           "bbox_y INTEGER, bbox_w INTEGER, bbox_h INTEGER, "
+                           "selection_score REAL, exposure_ranking_score REAL)")
+                db.executemany("INSERT INTO face_scan_cache_faces VALUES (?,?,?,?,?,?,?)", [
+                    (str(dark), 60, 30, 120, 100, 0.35, 0.07),
+                    (str(clear), 80, 45, 80, 70, 0.89, 0.93),
+                ])
+                db.commit()
+            source = decode_face_preview(json.dumps({"quality_cache": str(database),
+                "candidates": [[str(dark), [60, 30, 120, 100]],
+                               [str(clear), [80, 45, 80, 70]]]}), 128)
+            preview = Image.open(BytesIO(base64.b64decode(source.split(",", 1)[1])))
+            self.assertGreater(preview.getpixel((preview.width // 2, preview.height // 2))[1], 150)
 
     def test_bounded_cache_queue_and_cancellation(self):
         QApplication.instance() or QApplication([])

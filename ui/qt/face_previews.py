@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import base64
+from contextlib import closing
 from io import BytesIO
 import json
 from pathlib import Path
+import sqlite3
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
@@ -32,8 +34,31 @@ def preview_bbox(loader: ImageLoader, path: Path, image_size, bbox):
     return (x * scale_x, y * scale_y, width * scale_x, height * scale_y)
 
 
-def select_face_candidate(loader: ImageLoader, candidates):
-    """Prefer a fully visible detector box among a bounded set of faces."""
+def _cached_preview_quality(cache_path, candidates):
+    """Read existing analysis scores for the few visible-card candidates."""
+    if not cache_path or not Path(cache_path).is_file():
+        return {}
+    quality = {}
+    try:
+        with closing(sqlite3.connect(str(cache_path), timeout=0.1)) as db:
+            db.execute("PRAGMA query_only=ON")
+            for path_text, bbox in candidates:
+                row = db.execute("SELECT selection_score, exposure_ranking_score "
+                    "FROM face_scan_cache_faces WHERE entry_path=? AND bbox_x=? AND "
+                    "bbox_y=? AND bbox_w=? AND bbox_h=? LIMIT 1",
+                    (path_text, *(int(value) for value in bbox))).fetchone()
+                if row and row[0] is not None:
+                    selection = float(row[0])
+                    exposure = float(row[1]) if row[1] is not None else selection
+                    quality[(path_text, tuple(bbox))] = 0.7 * selection + 0.3 * exposure
+    except (OSError, ValueError, sqlite3.DatabaseError):
+        return {}
+    return quality
+
+
+def select_face_candidate(loader: ImageLoader, candidates, quality_cache_path=None):
+    """Prefer a clear, fully visible detector box among bounded candidates."""
+    quality = _cached_preview_quality(quality_cache_path, candidates)
     best = None
     for index, (path_text, bbox) in enumerate(candidates):
         path = Path(path_text)
@@ -56,8 +81,10 @@ def select_face_candidate(loader: ImageLoader, candidates):
             continue
         margin = min(x, y, detector_width - x - width, detector_height - y - height)
         context_ratio = margin / min(width, height)
+        quality_score = quality.get((path_text, tuple(bbox)), 0.5)
         score = (visible_ratio >= 0.9 and context_ratio >= 0.25,
-                 visible_ratio >= 0.9, visible_ratio * width * height,
+                 visible_ratio >= 0.9, quality_score,
+                 visible_ratio * width * height,
                  context_ratio, -index)
         if best is None or score > best[0]:
             best = (score, str(path), (x, y, width, height))
@@ -118,7 +145,8 @@ def decode_face_preview(request: str, edge: int) -> str:
         # explicit preview bound can select JPEG 1/2, 1/4 or 1/8 decoding,
         # which has different dimensions even with the same maximum edge.
         loader = ImageLoader(max_decode_dimension=DETECTION_EDGE)
-        selected = select_face_candidate(loader, candidates[:8])
+        selected = select_face_candidate(loader, candidates[:8],
+                                         payload.get("quality_cache") if isinstance(payload, dict) else None)
         if selected is None:
             return ""
         path, bbox = selected
@@ -139,13 +167,23 @@ def decode_face_preview(request: str, edge: int) -> str:
 
 class FacePreviewService(ThumbnailService):
     def __init__(self, parent=None, **kwargs):
+        self._quality_cache_path = ""
         options = dict(workers=2, max_pending=64, cache_bytes=16 * 1024 * 1024,
                        cache_entries=96, max_edge=256, decoder=decode_face_preview)
         options.update(kwargs)
         super().__init__(parent, **options)
 
+    def set_quality_cache_path(self, path):
+        self._quality_cache_path = str(path) if path else ""
+
     def request_face(self, path: str, bbox, edge: int, revision: str, *, candidates=()) -> int:
         options = [[str(face["path"]), list(face["bbox"])] for face in candidates]
-        request = json.dumps({"candidates": options} if options else [path, list(bbox)],
-                             separators=(",", ":"))
+        if self._quality_cache_path:
+            payload = {"candidates": options or [[path, list(bbox)]],
+                       "quality_cache": self._quality_cache_path}
+        elif options:
+            payload = {"candidates": options}
+        else:
+            payload = [path, list(bbox)]
+        request = json.dumps(payload, separators=(",", ":"))
         return self.request(request, edge, revision)
