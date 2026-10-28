@@ -245,27 +245,42 @@ Rectangle {
 
     Component {
         id: gridComponent
-        ColumnLayout {
-            RowLayout {
-                Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
-                Components.PillButton {
-                    objectName: "libraryExportSelected"
-                    variant: "accent"
-                    text: "Export selected"
-                    enabled: root.exportController !== null && !root.exportController.busy
-                        && !root.exportController.preparing && root.photoModel !== null
-                        && root.photoModel.selectedCount > 0
-                    onClicked: root.exportController.prepareSelected(root.photoModel)
-                    Accessible.name: "Export selected library photos"
+        Item {
+            ColumnLayout {
+                anchors.fill: parent
+                RowLayout {
+                    Layout.fillWidth: true
+                    Item { Layout.fillWidth: true }
+                    Components.PillButton {
+                        objectName: "libraryExportSelected"
+                        variant: "accent"
+                        text: "Export selected"
+                        enabled: root.exportController !== null && !root.exportController.busy
+                            && !root.exportController.preparing && root.photoModel !== null
+                            && root.photoModel.selectedCount > 0
+                        onClicked: root.exportController.prepareSelected(root.photoModel)
+                        Accessible.name: "Export selected library photos"
+                    }
+                }
+                Components.PhotoGrid {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    photoModel: root.photoModel
+                    favoritesController: root.favoritesController
+                    viewSize: root.libraryViewSize
+                    openOnClick: true
+                    onPhotoActivated: function(identity) {
+                        if (root.inspectorController && root.photoModel)
+                            root.inspectorController.openFromModel(root.photoModel, identity)
+                    }
                 }
             }
-            Components.PhotoGrid {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                photoModel: root.photoModel
+            Components.PhotoInspector {
+                anchors.fill: parent
+                controller: root.inspectorController
                 favoritesController: root.favoritesController
-                viewSize: root.libraryViewSize
+                showReviewActions: false
+                visible: controller !== null && controller.opened
             }
         }
     }

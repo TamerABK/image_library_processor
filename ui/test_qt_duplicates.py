@@ -250,7 +250,7 @@ class DuplicateFlowTests(unittest.TestCase):
         self.click("duplicateGroupOpen")
         self.assertEqual(self.duplicates.selectedGroup["groupId"], self.group_id)
         self.assertEqual(self.item("duplicateDetailGrid").property("count"), 3)
-        self.click("gridPhotoCard")
+        self.click("photoCardFooter")
         self.assertTrue(self.inspector.opened)
         self.click("inspectorBack")
         self.assertFalse(self.inspector.opened)

@@ -124,6 +124,11 @@ GridView {
                 Accessible.name: tile.photoCount + " photo duplicate group, "
                     + (tile.hasConflict ? "decision conflict" : tile.reviewed ? "reviewed" : "needs review")
             }
+            RoundedCornerMask {
+                anchors.fill: parent
+                cornerRadius: card.radius
+                maskColor: theme.libraryBackground
+            }
         }
     }
 }

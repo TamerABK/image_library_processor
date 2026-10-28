@@ -166,7 +166,7 @@ class FavoritesFlowTests(unittest.TestCase):
             self.assertTrue(self.favorites.setFavorite(str(self.folder_a / name), True))
             wait_until(lambda: not self.favorites.isPending(str(self.folder_a / name)))
         self.click("libraryNav_favorites")
-        self.click("gridPhotoCard")
+        self.click("photoCardFooter")
         self.assertTrue(self.inspector.opened)
         self.assertEqual(self.inspector.photo["filename"], "a.jpg")
         self.click("inspectorNext")
@@ -193,7 +193,7 @@ class FavoritesFlowTests(unittest.TestCase):
         filename_role = self.favorites.photoModel.ROLE["filename"]
         self.assertEqual(self.favorites.photoModel.data(self.favorites.photoModel.index(0),
                                                         filename_role), "b.jpg")
-        self.click("gridPhotoCard")
+        self.click("photoCardFooter")
         self.assertEqual(self.inspector.photo["filename"], "b.jpg")
         self.assertIn("Remove favorite", self.item("inspectorFavoriteButton").property("accessibleLabel"))
         self.click("inspectorFavoriteButton")

@@ -437,7 +437,7 @@ class PeopleFlowTests(unittest.TestCase):
         self.click("personCardOpen")
         self.assertEqual(self.people.selectedKnown["name"], "Alex")
         self.assertEqual(self.item("photoGrid").property("count"), 1)
-        self.click("gridPhotoCard")
+        self.click("photoCardFooter")
         self.assertTrue(self.inspector.opened)
         self.click("inspectorBack")
         self.assertFalse(self.inspector.opened)

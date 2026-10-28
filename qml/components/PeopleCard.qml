@@ -25,7 +25,7 @@ Item {
         anchors.margins: 7
         radius: metrics.photoCardRadius
         color: theme.panelFill
-        border.width: openButton.activeFocus || openButton.hovered ? 2 : 1
+        border.width: openButton.activeFocus || openButton.hovered ? 2 : 0
         border.color: openButton.activeFocus || openButton.hovered ? theme.focusRing : theme.separator
         clip: true
 

@@ -832,6 +832,11 @@ class TrashFlowTests(unittest.TestCase):
             activations = []
             item("trashGrid").photoActivated.connect(activations.append)
             click("photoCardImage", item("trashGrid"))
+            self.assertEqual(self.trash.photoModel.selectedCount, 1)
+            self.assertEqual(activations, [])
+            click("photoCardImage", item("trashGrid"))
+            self.assertEqual(self.trash.photoModel.selectedCount, 0)
+            click("photoCardFooter", item("trashGrid"))
             self.assertEqual(activations, [path])
             self.assertTrue(self.inspector.opened)
             click("inspectorBack")

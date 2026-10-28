@@ -89,7 +89,7 @@ class PhotoGridTests(unittest.TestCase):
         grid = self.grid()
         first = self.delegates()[0]
         identity = first.property("photoId")
-        first.findChild(QObject, "gridPhotoCard").clicked.emit()
+        first.findChild(QObject, "gridPhotoCard").imageClicked.emit()
         self.assertTrue(first.property("selected"))
         wait_until(lambda: first.property("thumbnailState") == "ready")
         self.assertEqual(self.source_for(identity), first.property("thumbnailSource"))

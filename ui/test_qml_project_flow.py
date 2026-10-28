@@ -11,6 +11,9 @@ from PySide6.QtWidgets import QApplication
 from app_paths import qml_path
 from ui.qt.app import configure_quick_controls_style
 from ui.qt.photo_model import PhotoListModel
+from ui.qt.blur_model import BlurCandidateModel
+from ui.qt.inspector_controller import PhotoInspectorController
+from ui.qt.previews import PreviewService
 from ui.qt.project_controller import ProjectController
 from ui.qt.thumbnails import ThumbnailService
 from ui.test_qt_thumbnails import capture_qt_warnings, wait_until
@@ -34,9 +37,13 @@ class ProjectFlowTests(unittest.TestCase):
         self.choice = str(self.folder)
         self.thumbnails = ThumbnailService()
         self.photos = PhotoListModel(self.thumbnails)
+        self.blur = BlurCandidateModel(self.thumbnails)
+        self.previews = PreviewService()
+        self.inspector = PhotoInspectorController(self.blur, self.previews)
         self.controller = ProjectController(self.photos, registry_path=self.root / "registry.json", chooser=lambda: self.choice)
         self.engine = QQmlApplicationEngine()
-        self.engine.setInitialProperties({"projectController": self.controller, "photoModel": self.photos})
+        self.engine.setInitialProperties({"projectController": self.controller, "photoModel": self.photos,
+                                          "inspectorController": self.inspector})
         self.engine.load(qml_path("App.qml").as_uri())
         self.assertTrue(self.engine.rootObjects())
         self.window = self.engine.rootObjects()[0]
@@ -47,7 +54,10 @@ class ProjectFlowTests(unittest.TestCase):
         self.engine.deleteLater()
         self.app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.controller.shutdown()
+        self.inspector.close()
+        self.blur.close()
         self.photos.close()
+        self.previews.shutdown()
         self.thumbnails.shutdown()
         self.temp.cleanup()
 
@@ -113,6 +123,26 @@ class ProjectFlowTests(unittest.TestCase):
         self.assertEqual("blurry", self.item("libraryRoutePlaceholder").property("routeId"))
         self.click("libraryNav_library")
         self.assertEqual(2, self.item("photoGrid").property("count"))
+
+    def test_library_photo_image_selects_and_footer_opens_details(self):
+        self.create()
+        wait_until(lambda: self.photos.data(self.photos.index(0),
+                           self.photos.ROLE["thumbnailState"]) == "ready")
+        QTest.qWait(100)
+        card = self.item("gridPhotoCard")
+        frame = self.window.grabWindow()
+        corner = card.mapToScene(QPointF(1, 1)).toPoint()
+        background = card.mapToScene(QPointF(-2, -2)).toPoint()
+        picture = card.mapToScene(QPointF(12, 12)).toPoint()
+        self.assertEqual(frame.pixelColor(corner), frame.pixelColor(background))
+        self.assertNotEqual(frame.pixelColor(picture), frame.pixelColor(background))
+        self.click("photoCardImage")
+        self.assertEqual(self.photos.selectedCount, 1)
+        self.assertFalse(self.item("photoInspector").isVisible())
+        self.click("photoCardFooter")
+        self.assertTrue(self.item("photoInspector").isVisible())
+        self.click("inspectorBack")
+        self.assertFalse(self.item("photoInspector").isVisible())
 
     def test_restart_reopens_persisted_project_from_home(self):
         self.create()

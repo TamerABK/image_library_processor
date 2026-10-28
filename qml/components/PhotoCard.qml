@@ -17,6 +17,7 @@ Item {
     property bool showFavorite: true
     property bool showMenu: true
     property string badgeText: ""
+    property color cornerMaskColor: theme.libraryBackground
     readonly property bool hasImageSource: String(source).length > 0
 
     signal clicked()
@@ -184,6 +185,11 @@ Item {
                     onClicked: root.menuRequested()
                 }
             }
+        }
+        RoundedCornerMask {
+            anchors.fill: parent
+            cornerRadius: cardSurface.radius
+            maskColor: root.cornerMaskColor
         }
     }
 }

@@ -12,7 +12,7 @@ GridView {
     property var selectionController: null
     property string viewSize: "Medium"
     property bool openOnClick: false
-    property bool selectOnImageClick: false
+    property bool selectOnImageClick: true
     property string emptyText: "No photos in this library"
     signal photoActivated(string photoId)
     readonly property int columns: Math.max(1, Math.floor(width / (preferredCardWidth + metrics.photoCardHorizontalGap)))
