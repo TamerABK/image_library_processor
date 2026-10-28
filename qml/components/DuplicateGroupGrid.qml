@@ -71,7 +71,7 @@ GridView {
             height: Math.max(1, parent.height - 12)
             radius: metrics.photoCardRadius
             color: theme.panelFill
-            border.width: cardMouse.containsMouse ? 2 : 1
+            border.width: cardMouse.containsMouse ? 2 : 0
             border.color: cardMouse.containsMouse ? theme.focusRing : theme.separator
             clip: true
             Rectangle {
@@ -128,6 +128,7 @@ GridView {
                 anchors.fill: parent
                 cornerRadius: card.radius
                 maskColor: theme.libraryBackground
+                maskBottomCorners: false
             }
         }
     }

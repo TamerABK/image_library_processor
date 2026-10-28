@@ -51,7 +51,7 @@ Item {
         anchors.fill: parent
         radius: metrics.projectCardRadius
         color: theme.panelFill
-        border.width: root.selected ? 2 : 1
+        border.width: root.selected ? 2 : 0
         border.color: root.selected ? theme.focusRing : theme.separator
         clip: true
 

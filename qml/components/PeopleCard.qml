@@ -64,7 +64,15 @@ Item {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             height: root.showIgnore ? 68 : 56
+            radius: surface.radius
             color: theme.footerFill
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: Math.max(0, parent.height - parent.radius + 1)
+                color: theme.footerFill
+            }
             Text {
                 id: titleText
                 anchors.left: parent.left
@@ -142,6 +150,7 @@ Item {
             anchors.fill: parent
             cornerRadius: surface.radius
             maskColor: theme.libraryBackground
+            maskBottomCorners: false
         }
     }
 }

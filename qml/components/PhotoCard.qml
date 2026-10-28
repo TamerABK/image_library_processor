@@ -49,7 +49,7 @@ Item {
         anchors.fill: parent
         radius: metrics.photoCardRadius
         color: theme.panelFill
-        border.width: root.selected ? 2 : 1
+        border.width: root.selected ? 2 : 0
         border.color: root.selected ? theme.focusRing : theme.separator
         clip: true
 
@@ -152,7 +152,16 @@ Item {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             height: metrics.photoCardFooterHeight
+            radius: cardSurface.radius
             color: theme.footerFill
+
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: Math.max(0, parent.height - parent.radius + 1)
+                color: theme.footerFill
+            }
 
             MouseArea {
                 objectName: "photoCardFooter"
@@ -190,6 +199,7 @@ Item {
             anchors.fill: parent
             cornerRadius: cardSurface.radius
             maskColor: root.cornerMaskColor
+            maskBottomCorners: false
         }
     }
 }
