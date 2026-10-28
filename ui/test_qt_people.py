@@ -487,6 +487,23 @@ class PeopleFlowTests(unittest.TestCase):
                              grid.width() - grid.property("scrollbarGutter") + 0.1)
         self.assertEqual(self.item("peopleGridScrollBar").width(), 8)
 
+    def test_people_preview_fills_shortened_card_frame(self):
+        self.publish()
+        for route in ("libraryNav_knownPeople", "libraryNav_unknownPeople"):
+            self.click(route)
+            wait_until(lambda: bool(self.items("peopleCardPreviewImage")))
+            grid = self.item("peopleGrid")
+            card = self.item("peopleCard")
+            frame = self.item("peopleCardPreviewFrame")
+            preview = self.item("peopleCardPreviewImage")
+            self.assertTrue(frame.property("fillsPreview"))
+            self.assertTrue(frame.property("clip"))
+            self.assertAlmostEqual(preview.width(), frame.width(), delta=0.1)
+            self.assertAlmostEqual(preview.height(), frame.height(), delta=0.1)
+            self.assertLess(frame.height(), card.height() - 68)
+            self.assertAlmostEqual(grid.property("cellHeight"),
+                                   max(180, min(270, grid.property("cellWidth") * 0.86)), delta=0.1)
+
     def test_name_new_and_existing_persist_without_pipeline_restart(self):
         self.publish()
         old_signature = self.database.cache_signature()

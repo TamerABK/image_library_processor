@@ -20,7 +20,7 @@ GridView {
         * (viewSize === "Small" ? 0.8 : viewSize === "Large" ? 1.25 : 1)
     readonly property int columns: Math.max(1, Math.floor((width - scrollbarGutter) / preferredCardWidth))
     cellWidth: Math.max(1, (width - scrollbarGutter) / columns)
-    cellHeight: Math.max(180, Math.min(270, cellWidth * 0.88))
+    cellHeight: Math.max(180, Math.min(270, cellWidth * 0.86))
     cacheBuffer: cellHeight
     reuseItems: false
     clip: true

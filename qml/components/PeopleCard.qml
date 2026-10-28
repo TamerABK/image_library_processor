@@ -5,6 +5,7 @@ import "../theme" as Room36Theme
 
 Item {
     id: root
+    clip: true
     property string title: ""
     property string subtitle: ""
     property string previewSource: ""
@@ -28,21 +29,30 @@ Item {
         border.color: openButton.activeFocus || openButton.hovered ? theme.focusRing : theme.separator
         clip: true
 
-        Rectangle { anchors.fill: avatar; color: theme.imagePlaceholder }
-        Image {
-            id: avatar
+        Item {
+            id: previewFrame
+            objectName: "peopleCardPreviewFrame"
+            readonly property bool fillsPreview: avatar.fillMode === Image.PreserveAspectCrop
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.bottom: footer.top
-            source: root.previewSource
-            cache: false
-            asynchronous: true
-            fillMode: Image.PreserveAspectFit
-            Accessible.name: (root.title.length > 0 ? root.title : "Unknown cluster") + " face preview"
+            clip: true
+            Rectangle { anchors.fill: parent; color: theme.imagePlaceholder }
+            Image {
+                id: avatar
+                objectName: "peopleCardPreviewImage"
+                anchors.fill: parent
+                source: root.previewSource
+                cache: false
+                asynchronous: true
+                fillMode: Image.PreserveAspectCrop
+                clip: true
+                Accessible.name: (root.title.length > 0 ? root.title : "Unknown cluster") + " face preview"
+            }
         }
         Text {
-            anchors.centerIn: avatar
+            anchors.centerIn: previewFrame
             visible: root.previewSource.length === 0 && !root.showIgnore
             text: "Person"
             color: theme.mutedText
@@ -127,6 +137,11 @@ Item {
             focusPolicy: Qt.StrongFocus
             onClicked: root.opened()
             Accessible.name: "Open " + (root.title.length > 0 ? root.title : "unknown cluster") + ", " + root.subtitle
+        }
+        RoundedCornerMask {
+            anchors.fill: parent
+            cornerRadius: surface.radius
+            maskColor: theme.libraryBackground
         }
     }
 }
