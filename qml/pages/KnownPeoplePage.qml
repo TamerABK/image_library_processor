@@ -112,7 +112,7 @@ Item {
             spacing: 4
             Components.IconButton {
                 objectName: "knownRenameIcon"
-                source: theme.iconUrl("pen.svg")
+                source: theme.iconUrl("known_person_pen.svg")
                 buttonSize: 32
                 iconSize: 20
                 enabled: root.people !== null && !root.people.busy
@@ -121,7 +121,7 @@ Item {
             }
             Components.IconButton {
                 objectName: "knownTrashIcon"
-                source: theme.iconUrl("trash.svg")
+                source: theme.iconUrl("known_person_trash.svg")
                 buttonSize: 32
                 iconSize: 18
                 enabled: root.people !== null && !root.people.busy

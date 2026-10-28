@@ -482,8 +482,8 @@ class PeopleFlowTests(unittest.TestCase):
         session = self.processing.sessionId
         self.click("libraryNav_knownPeople")
         self.click("personCardOpen")
-        self.assertTrue(self.item("knownRenameIcon").property("source").toString().endswith("pen.svg"))
-        self.assertTrue(self.item("knownTrashIcon").property("source").toString().endswith("trash.svg"))
+        self.assertTrue(self.item("knownRenameIcon").property("source").toString().endswith("known_person_pen.svg"))
+        self.assertTrue(self.item("knownTrashIcon").property("source").toString().endswith("known_person_trash.svg"))
         title = self.item("peopleDetailTitle")
         pen = self.item("knownRenameIcon")
         title_right = title.mapToScene(QPointF(title.width(), 0)).x()
