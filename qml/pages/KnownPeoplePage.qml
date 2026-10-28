@@ -16,10 +16,10 @@ Item {
     Room36Theme.Theme { id: theme }
     Room36Theme.Typography { id: typography }
     readonly property bool detailOpen: people !== null && Boolean(people.selectedKnown.key)
-    function openManage() {
+    function openRename() {
         if (!root.people || !root.detailOpen) return
         knownNameField.text = root.people.selectedKnown.name || ""
-        knownManageDialog.open()
+        knownRenameDialog.open()
         knownNameField.forceActiveFocus()
     }
 
@@ -108,13 +108,32 @@ Item {
         exporter: root.exporter
         allowPersonExport: true
         onBackRequested: if (root.people) root.people.back()
-        actions: Components.PillButton {
-            objectName: "knownManagePerson"
-            variant: "translucent"
-            text: "Manage"
-            enabled: root.people !== null && !root.people.busy
-            onClicked: root.openManage()
-            Accessible.name: "Manage known person"
+        nameActions: RowLayout {
+            spacing: 4
+            Components.IconButton {
+                objectName: "knownRenameIcon"
+                source: theme.iconUrl("pen.svg")
+                buttonSize: 32
+                iconSize: 20
+                enabled: root.people !== null && !root.people.busy
+                onClicked: root.openRename()
+                accessibleLabel: "Rename known person"
+            }
+            Components.IconButton {
+                objectName: "knownTrashIcon"
+                source: theme.iconUrl("trash.svg")
+                buttonSize: 32
+                iconSize: 18
+                enabled: root.people !== null && !root.people.busy
+                onClicked: knownDeleteDialog.open()
+                accessibleLabel: "Delete known person"
+                background: Rectangle {
+                    radius: width / 2
+                    color: parent.down ? theme.midBlue : theme.mainBlue
+                    border.width: parent.activeFocus ? 1 : 0
+                    border.color: theme.focusRing
+                }
+            }
         }
     }
     Text {
@@ -129,12 +148,12 @@ Item {
         Accessible.name: text
     }
     Dialog {
-        id: knownManageDialog
-        objectName: "knownManageDialog"
+        id: knownRenameDialog
+        objectName: "knownRenameDialog"
         parent: Overlay.overlay
         anchors.centerIn: parent
         modal: true
-        title: "Manage known person"
+        title: "Rename known person"
         width: Math.min(420, root.width - 40)
         standardButtons: Dialog.NoButton
         background: Rectangle {
@@ -144,7 +163,7 @@ Item {
             border.color: theme.separator
         }
         ColumnLayout {
-            width: knownManageDialog.availableWidth
+            width: knownRenameDialog.availableWidth
             spacing: 12
             TextField {
                 id: knownNameField
@@ -171,20 +190,12 @@ Item {
             }
             RowLayout {
                 Layout.fillWidth: true
-                Components.PillButton {
-                    objectName: "knownDeletePerson"
-                    variant: "translucent"
-                    text: "Delete person"
-                    enabled: root.people !== null && !root.people.busy
-                    onClicked: { knownManageDialog.close(); knownDeleteDialog.open() }
-                    Accessible.name: "Delete known person"
-                }
                 Item { Layout.fillWidth: true }
                 Components.PillButton {
-                    objectName: "knownCancelManage"
+                    objectName: "knownCancelRename"
                     variant: "translucent"
                     text: "Cancel"
-                    onClicked: knownManageDialog.close()
+                    onClicked: knownRenameDialog.close()
                 }
                 Components.PillButton {
                     id: knownSaveName
@@ -193,7 +204,7 @@ Item {
                     text: "Save name"
                     enabled: root.people !== null && !root.people.busy
                     onClicked: if (root.people && root.people.renameKnown(knownNameField.text))
-                        knownManageDialog.close()
+                        knownRenameDialog.close()
                     Accessible.name: "Save known person name"
                 }
             }

@@ -15,6 +15,7 @@ Item {
     property bool allowPersonExport: false
     property string viewSize: "Medium"
     property string title: ""
+    property Component nameActions: null
     property Component actions: null
     signal backRequested()
     Room36Theme.Theme { id: theme }
@@ -51,12 +52,27 @@ Item {
             }
             ColumnLayout {
                 Layout.fillWidth: true
-                Text {
+                Item {
                     Layout.fillWidth: true
-                    text: root.title
-                    color: theme.mainBlue
-                    font.pixelSize: 24
-                    elide: Text.ElideRight
+                    implicitHeight: Math.max(32, titleText.implicitHeight, nameActionLoader.implicitHeight)
+                    Text {
+                        id: titleText
+                        objectName: "peopleDetailTitle"
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Math.min(implicitWidth, Math.max(0, parent.width - nameActionLoader.implicitWidth - 4))
+                        text: root.title
+                        color: theme.mainBlue
+                        font.pixelSize: 24
+                        elide: Text.ElideRight
+                    }
+                    Loader {
+                        id: nameActionLoader
+                        anchors.left: titleText.right
+                        anchors.leftMargin: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        sourceComponent: root.nameActions
+                    }
                 }
                 Text {
                     text: (root.person.photoCount || 0) + " photos · " + (root.person.faceCount || 0) + " faces"
