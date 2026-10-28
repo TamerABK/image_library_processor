@@ -85,6 +85,16 @@ def _review_worker(tasks, results, stop, cache_path, database_path, state_root):
                     continue
                 AutomaticStateStore(state_root).set_cluster_ignored(folder, key, bool(value))
                 result["ignored"] = bool(value)
+            elif operation in ("rename_known", "delete_known"):
+                database = SQLiteFaceDatabase(database_path, CosineEmbeddingSimilarity())
+                try:
+                    if operation == "rename_known":
+                        person = database.rename_person(int(key), value, canceled=canceled)
+                        result["name"] = person.name
+                    else:
+                        database.delete_person(int(key), canceled=canceled)
+                except ValueError as exc:
+                    raise PeopleReviewError(str(exc)) from exc
             else:
                 selected = _cached_cluster_faces(FaceScanCache(cache_path), faces, canceled)
                 similarity = CosineEmbeddingSimilarity()
@@ -209,7 +219,8 @@ class PeopleController(QObject):
 
     @Property(str, notify=changed)
     def busyMessage(self):
-        return "Saving review…" if self._busy_operation == "ignore" else "Saving person…"
+        return {"ignore": "Saving review…", "rename_known": "Renaming person…",
+                "delete_known": "Deleting person…"}.get(self._busy_operation, "Saving person…")
 
     @Property("QVariantMap", notify=changed)
     def suggestion(self):
@@ -402,6 +413,50 @@ class PeopleController(QObject):
             self._timer.start()
         return True
 
+    def _submit_known(self, operation, value=None):
+        row = self._known.get_row(self._selected_known)
+        if self._state != "COMPLETE" or row is None or self._busy:
+            return False
+        task = (self._session, self._folder, row["key"], operation, value, [], self._canceled)
+        try:
+            self._tasks.put_nowait(task)
+        except Full:
+            self._error = "People review is busy. Try again in a moment."
+            self.changed.emit()
+            return False
+        self._pending += 1
+        self._busy = True
+        self._busy_operation = operation
+        self._error = ""
+        self._timer.start()
+        self.changed.emit()
+        return True
+
+    @Slot(str, result=bool)
+    def renameKnown(self, value):
+        self._assert_owner()
+        try:
+            name = validate_person_name(value)
+        except PeopleReviewError as exc:
+            self._error = str(exc)
+            self.changed.emit()
+            return False
+        row = self._known.get_row(self._selected_known)
+        if row is None:
+            return False
+        if any(option["personId"] != row["personId"]
+               and option["name"].casefold() == name.casefold()
+               for option in self._known_options):
+            self._error = "That person already exists."
+            self.changed.emit()
+            return False
+        return self._submit_known("rename_known", name)
+
+    @Slot(result=bool)
+    def deleteKnown(self):
+        self._assert_owner()
+        return self._submit_known("delete_known")
+
     @Slot(str, result=bool)
     def nameNew(self, value):
         self._assert_owner()
@@ -456,6 +511,8 @@ class PeopleController(QObject):
                     self._error = result["error"]
                 self.changed.emit()
                 continue
+            if operation in ("rename_known", "delete_known") and self._payload is None:
+                continue
             if operation == "suggest":
                 if key == self._selected_unknown:
                     self._suggestion = result["suggestion"]
@@ -474,6 +531,20 @@ class PeopleController(QObject):
                     self._detail_lease = self._unknown.acquirePreview(self._selected_unknown, 256)
                 self._error = ""
                 self.changed.emit()
+            elif operation == "rename_known":
+                self._database = SQLiteFaceDatabase(self._database_path, CosineEmbeddingSimilarity())
+                self._error = ""
+                self._payload = None
+                self._sync()
+            elif operation == "delete_known":
+                self._database = SQLiteFaceDatabase(self._database_path, CosineEmbeddingSimilarity())
+                payload = dict(self._payload)
+                payload["known"] = [face for face in self._payload["known"]
+                                    if int(face["person_id"]) != int(key)]
+                self._release_detail_preview()
+                self._selected_known = ""
+                self._error = ""
+                self._processing.replace_people_result(payload)
             else:
                 cluster = next((item for item in self._payload["unknown"]
                                 if stable_cluster_id(item) == key), None)

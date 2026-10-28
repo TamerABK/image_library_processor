@@ -16,6 +16,12 @@ Item {
     Room36Theme.Theme { id: theme }
     Room36Theme.Typography { id: typography }
     readonly property bool detailOpen: people !== null && Boolean(people.selectedKnown.key)
+    function openManage() {
+        if (!root.people || !root.detailOpen) return
+        knownNameField.text = root.people.selectedKnown.name || ""
+        knownManageDialog.open()
+        knownNameField.forceActiveFocus()
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -102,5 +108,138 @@ Item {
         exporter: root.exporter
         allowPersonExport: true
         onBackRequested: if (root.people) root.people.back()
+        actions: Components.PillButton {
+            objectName: "knownManagePerson"
+            variant: "translucent"
+            text: "Manage"
+            enabled: root.people !== null && !root.people.busy
+            onClicked: root.openManage()
+            Accessible.name: "Manage known person"
+        }
+    }
+    Text {
+        anchors.bottom: parent.bottom
+        anchors.horizontalCenter: parent.horizontalCenter
+        visible: root.detailOpen && root.people !== null
+            && (Boolean(root.people.busy) || (root.people.error || "").length > 0)
+        text: root.people ? (root.people.busy ? (root.people.busyMessage || "")
+            : (root.people.error || "")) : ""
+        color: theme.mainBlue
+        font.pixelSize: typography.body
+        Accessible.name: text
+    }
+    Dialog {
+        id: knownManageDialog
+        objectName: "knownManageDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        title: "Manage known person"
+        width: Math.min(420, root.width - 40)
+        standardButtons: Dialog.NoButton
+        background: Rectangle {
+            radius: 20
+            color: theme.panelFill
+            border.width: 1
+            border.color: theme.separator
+        }
+        ColumnLayout {
+            width: knownManageDialog.availableWidth
+            spacing: 12
+            TextField {
+                id: knownNameField
+                objectName: "knownPersonName"
+                Layout.fillWidth: true
+                maximumLength: 100
+                placeholderText: "Person name"
+                Accessible.name: "Known person name"
+                onAccepted: knownSaveName.clicked()
+                implicitHeight: 42
+                background: Rectangle {
+                    radius: height / 2
+                    color: theme.panelRaisedFill
+                    border.width: knownNameField.activeFocus ? 2 : 1
+                    border.color: knownNameField.activeFocus ? theme.focusRing : theme.separator
+                }
+            }
+            Text {
+                Layout.fillWidth: true
+                visible: root.people !== null && (root.people.error || "").length > 0
+                text: root.people ? (root.people.error || "") : ""
+                color: theme.mainBlue
+                wrapMode: Text.WordWrap
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Components.PillButton {
+                    objectName: "knownDeletePerson"
+                    variant: "translucent"
+                    text: "Delete person"
+                    enabled: root.people !== null && !root.people.busy
+                    onClicked: { knownManageDialog.close(); knownDeleteDialog.open() }
+                    Accessible.name: "Delete known person"
+                }
+                Item { Layout.fillWidth: true }
+                Components.PillButton {
+                    objectName: "knownCancelManage"
+                    variant: "translucent"
+                    text: "Cancel"
+                    onClicked: knownManageDialog.close()
+                }
+                Components.PillButton {
+                    id: knownSaveName
+                    objectName: "knownSaveName"
+                    variant: "accent"
+                    text: "Save name"
+                    enabled: root.people !== null && !root.people.busy
+                    onClicked: if (root.people && root.people.renameKnown(knownNameField.text))
+                        knownManageDialog.close()
+                    Accessible.name: "Save known person name"
+                }
+            }
+        }
+    }
+    Dialog {
+        id: knownDeleteDialog
+        objectName: "knownDeleteDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        title: "Delete known person?"
+        width: Math.min(420, root.width - 40)
+        standardButtons: Dialog.NoButton
+        background: Rectangle {
+            radius: 20
+            color: theme.panelFill
+            border.width: 1
+            border.color: theme.separator
+        }
+        ColumnLayout {
+            width: knownDeleteDialog.availableWidth
+            spacing: 12
+            Text {
+                Layout.fillWidth: true
+                text: "This removes the person and their face embeddings. Photographs stay in the project."
+                color: theme.mainBlue
+                wrapMode: Text.WordWrap
+            }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                Components.PillButton {
+                    objectName: "knownCancelDelete"
+                    variant: "translucent"
+                    text: "Cancel"
+                    onClicked: knownDeleteDialog.close()
+                }
+                Components.PillButton {
+                    objectName: "knownConfirmDelete"
+                    variant: "accent"
+                    text: "Delete person"
+                    enabled: root.people !== null && !root.people.busy
+                    onClicked: if (root.people && root.people.deleteKnown()) knownDeleteDialog.close()
+                    Accessible.name: "Confirm delete known person and embeddings"
+                }
+            }
+        }
     }
 }

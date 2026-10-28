@@ -10,17 +10,21 @@ from face_processing.models import Match, Person, StoredEmbedding
 
 
 class SQLiteFaceDatabase(FaceDatabase):
+    _shared_lock = threading.RLock()
+    _shared_epochs: dict[Path, int] = {}
+
     def __init__(
         self,
         db_path: str | Path,
         similarity: EmbeddingSimilarity,
     ):
-        self._db_path = Path(db_path)
+        self._db_path = Path(db_path).resolve()
         self._similarity = similarity
         self._cache_lock = threading.RLock()
         self._people_cache: dict[int, Person] | None = None
         self._people_names_cache: list[str] | None = None
         self._embedding_cache: list[tuple[int, np.ndarray]] | None = None
+        self._observed_epoch = 0
 
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
@@ -82,7 +86,7 @@ class SQLiteFaceDatabase(FaceDatabase):
             id=row["id"],
             name=row["name"],
         )
-        self._invalidate_people_cache()
+        self._invalidate_caches()
         return person
 
     def add_embedding(
@@ -113,7 +117,7 @@ class SQLiteFaceDatabase(FaceDatabase):
                 (person_id, serialized),
             )
 
-        self._invalidate_embedding_cache()
+        self._invalidate_caches()
         return StoredEmbedding(
             id=cursor.lastrowid,
             person_id=person_id,
@@ -156,9 +160,42 @@ class SQLiteFaceDatabase(FaceDatabase):
                                    (row["id"], value))
             if canceled is not None and canceled.is_set():
                 raise ValueError("People review was canceled.")
-        self._invalidate_people_cache()
-        self._invalidate_embedding_cache()
+        self._invalidate_caches()
         return Person(id=row["id"], name=row["name"])
+
+    def rename_person(self, person_id: int, name: str, *, canceled=None) -> Person:
+        normalized = name.strip()
+        if not normalized:
+            raise ValueError("Person name cannot be empty.")
+        with self._connect() as connection:
+            rows = connection.execute("SELECT id, name FROM persons").fetchall()
+            if not any(row["id"] == person_id for row in rows):
+                raise ValueError("The selected known person is no longer available.")
+            if any(row["id"] != person_id and row["name"].casefold() == normalized.casefold()
+                   for row in rows):
+                raise ValueError("That person already exists.")
+            if canceled is not None and canceled.is_set():
+                raise ValueError("People review was canceled.")
+            try:
+                connection.execute("UPDATE persons SET name=? WHERE id=?", (normalized, person_id))
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("That person already exists.") from exc
+            if canceled is not None and canceled.is_set():
+                raise ValueError("People review was canceled.")
+        self._invalidate_caches()
+        return Person(id=person_id, name=normalized)
+
+    def delete_person(self, person_id: int, *, canceled=None) -> None:
+        """Remove one identity and its embeddings; photo files are independent."""
+        with self._connect() as connection:
+            if canceled is not None and canceled.is_set():
+                raise ValueError("People review was canceled.")
+            cursor = connection.execute("DELETE FROM persons WHERE id=?", (person_id,))
+            if cursor.rowcount != 1:
+                raise ValueError("The selected known person is no longer available.")
+            if canceled is not None and canceled.is_set():
+                raise ValueError("People review was canceled.")
+        self._invalidate_caches()
 
     def find_nearest_embedding(
         self,
@@ -228,6 +265,7 @@ class SQLiteFaceDatabase(FaceDatabase):
 
     def _people_by_id(self) -> dict[int, Person]:
         with self._cache_lock:
+            self._refresh_cache_epoch()
             if self._people_cache is not None:
                 return self._people_cache
 
@@ -253,6 +291,7 @@ class SQLiteFaceDatabase(FaceDatabase):
 
     def _embeddings(self) -> list[tuple[int, np.ndarray]]:
         with self._cache_lock:
+            self._refresh_cache_epoch()
             if self._embedding_cache is not None:
                 return self._embedding_cache
 
@@ -270,13 +309,23 @@ class SQLiteFaceDatabase(FaceDatabase):
             ]
             return self._embedding_cache
 
-    def _invalidate_people_cache(self) -> None:
-        with self._cache_lock:
+    def _refresh_cache_epoch(self) -> None:
+        with self._shared_lock:
+            epoch = self._shared_epochs.get(self._db_path, 0)
+        if epoch != self._observed_epoch:
             self._people_cache = None
             self._people_names_cache = None
+            self._embedding_cache = None
+            self._observed_epoch = epoch
 
-    def _invalidate_embedding_cache(self) -> None:
+    def _invalidate_caches(self) -> None:
         with self._cache_lock:
+            with self._shared_lock:
+                epoch = self._shared_epochs.get(self._db_path, 0) + 1
+                self._shared_epochs[self._db_path] = epoch
+            self._observed_epoch = epoch
+            self._people_cache = None
+            self._people_names_cache = None
             self._embedding_cache = None
 
     @staticmethod

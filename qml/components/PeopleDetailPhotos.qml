@@ -64,6 +64,10 @@ Item {
                     font.pixelSize: typography.body
                 }
             }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
             PillButton {
                 objectName: "peopleExportSelected"
                 variant: "translucent"
@@ -82,6 +86,7 @@ Item {
                 onClicked: root.exporter.preparePerson()
                 Accessible.name: "Export all photos of this known person"
             }
+            Item { Layout.fillWidth: true }
             Loader { sourceComponent: root.actions }
         }
         PhotoGrid {

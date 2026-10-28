@@ -49,6 +49,34 @@ def vector(index):
 
 
 class PeopleDataTests(unittest.TestCase):
+    def test_rename_and_delete_person_refresh_other_database_caches_and_keep_photos(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "faces.sqlite3"
+            photo = Path(temporary) / "photo.jpg"
+            Image.new("RGB", (16, 16), "blue").save(photo)
+            writer = SQLiteFaceDatabase(path, CosineEmbeddingSimilarity())
+            alex = writer.assign_embeddings([vector(0)], name="Alex")
+            zoe = writer.assign_embeddings([vector(1)], name="Zoë")
+            reader = SQLiteFaceDatabase(path, CosineEmbeddingSimilarity())
+            self.assertEqual(reader.get_person(alex.id).name, "Alex")
+            self.assertEqual(reader.find_nearest_embedding(vector(0)).person_id, alex.id)
+            writer.rename_person(alex.id, "Alexandra")
+            self.assertEqual(reader.get_person(alex.id).name, "Alexandra")
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                writer.rename_person(alex.id, "ZOË")
+            canceled = threading.Event()
+            canceled.set()
+            with self.assertRaisesRegex(ValueError, "canceled"):
+                writer.delete_person(alex.id, canceled=canceled)
+            self.assertEqual(reader.get_person(alex.id).name, "Alexandra")
+            writer.delete_person(alex.id)
+            self.assertIsNone(reader.get_person(alex.id))
+            self.assertEqual(reader.find_nearest_embedding(vector(1)).person_id, zoe.id)
+            with closing(sqlite3.connect(path)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM embeddings WHERE person_id=?", (alex.id,)).fetchone()[0], 0)
+            self.assertTrue(photo.is_file())
+
     def test_stable_cluster_key_ignores_transient_label_and_face_order(self):
         faces = [dict(path="C:/project/a.jpg", bbox=[1, 2, 20, 30]),
                  dict(path="C:/project/b.jpg", bbox=[3, 4, 15, 25])]
@@ -448,6 +476,35 @@ class PeopleFlowTests(unittest.TestCase):
         self.click("personCardOpen")
         self.assertTrue(self.people.selectedUnknown["key"])
         self.assertEqual(self.item("photoGrid").property("count"), 1)
+
+    def test_known_person_rename_and_delete_preserve_photographs(self):
+        self.publish()
+        session = self.processing.sessionId
+        self.click("libraryNav_knownPeople")
+        self.click("personCardOpen")
+        self.click("knownManagePerson")
+        self.assertTrue(self.window.findChild(QObject, "knownManageDialog").property("visible"))
+        self.window.findChild(QObject, "knownPersonName").setProperty("text", "")
+        self.click("knownSaveName")
+        self.assertEqual(self.people.selectedKnown["name"], "Alex")
+        self.assertTrue(self.window.findChild(QObject, "knownManageDialog").property("visible"))
+        self.window.findChild(QObject, "knownPersonName").setProperty("text", "Alexandra")
+        self.click("knownSaveName")
+        wait_until(lambda: self.people.selectedKnown.get("name") == "Alexandra")
+        self.assertEqual(self.database.get_person(self.alex.id).name, "Alexandra")
+        self.assertEqual(self.processing.sessionId, session)
+        self.assertTrue(self.known_photo.is_file())
+        self.click("knownManagePerson")
+        self.click("knownDeletePerson")
+        self.assertTrue(self.window.findChild(QObject, "knownDeleteDialog").property("visible"))
+        self.click("knownConfirmDelete")
+        wait_until(lambda: self.people.knownCount == 0)
+        self.assertIsNone(self.database.get_person(self.alex.id))
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM embeddings WHERE person_id=?", (self.alex.id,)).fetchone()[0], 0)
+        self.assertTrue(self.known_photo.is_file())
+        self.assertEqual(self.processing.sessionId, session)
 
     def test_topbar_controls_and_unknown_card_spacing(self):
         self.publish()
