@@ -24,7 +24,7 @@ from face_detector.face_database_sqlite import SQLiteFaceDatabase
 from face_processing.cache import FaceScanCache
 from face_processing.models import EmbeddedFace
 from ui.qt.app import configure_quick_controls_style
-from ui.qt.face_previews import FacePreviewService, decode_face_preview, face_crop_bounds
+from ui.qt.face_previews import FacePreviewService, decode_face_preview, face_crop_bounds, compose_face_preview
 from image_loader import ImageLoader
 from ui.qt.people_model import PeopleListModel
 from ui.qt.inspector_controller import PhotoInspectorController
@@ -71,13 +71,14 @@ class PeopleDataTests(unittest.TestCase):
     def test_unknown_counts_representative_and_ignored_flag(self):
         faces = [dict(path="a.jpg", bbox=[1, 2, 20, 30]),
                  dict(path="a.jpg", bbox=[35, 2, 20, 30]),
-                 dict(path="b.jpg", bbox=[1, 2, 20, 30])]
-        cluster = dict(id=88, faces=faces, representative="b.jpg",
+                 dict(path="b.jpg", bbox=[1, 2, 35, 40])]
+        cluster = dict(id=88, faces=faces, representative="a.jpg",
                        representative_bbox=[1, 2, 20, 30])
         key = stable_cluster_id(cluster)
         _, unknown = project_people_rows({"known": [], "unknown": [cluster]}, {}, {key})
         self.assertEqual((unknown[0]["faceCount"], unknown[0]["photoCount"]), (3, 2))
         self.assertEqual(unknown[0]["representativePhotoId"], "b.jpg")
+        self.assertEqual(unknown[0]["representativeBBox"], [1, 2, 35, 40])
         self.assertTrue(unknown[0]["ignored"])
 
     def test_name_validation_accepts_unicode_and_rejects_invalid(self):
@@ -119,7 +120,7 @@ class FacePreviewTests(unittest.TestCase):
             crop = Image.open(BytesIO(base64.b64decode(source.split(",", 1)[1])))
             self.assertLessEqual(max(crop.size), 64)
             self.assertGreater(min(crop.size), 0)
-            self.assertLess(crop.width / crop.height, 0.9)  # Oriented source limits the crop.
+            self.assertAlmostEqual(crop.width / crop.height, 1.55, delta=0.05)
             self.assertEqual(decode_face_preview(json.dumps([str(path) + "-missing", [1, 1, 2, 2]]), 64), "")
             corrupt = Path(temporary) / "bad.jpg"
             corrupt.write_bytes(b"invalid")
@@ -142,14 +143,29 @@ class FacePreviewTests(unittest.TestCase):
                 for bbox in faces:
                     source = decode_face_preview(json.dumps([str(path), bbox]), 192)
                     crop = Image.open(BytesIO(base64.b64decode(source.split(",", 1)[1])))
-                    if name != "narrow":
-                        self.assertAlmostEqual(crop.width / crop.height, 1.55, delta=0.05)
+                    self.assertAlmostEqual(crop.width / crop.height, 1.55, delta=0.05)
                     self.assertGreater(np.asarray(crop)[:, :, 0].max(), 100)
                     bounds = face_crop_bounds(size, bbox)
                     self.assertLessEqual(bounds[0], bbox[0])
                     self.assertGreaterEqual(bounds[2], bbox[0] + bbox[2])
                     self.assertLessEqual(bounds[1], bbox[1])
                     self.assertGreaterEqual(bounds[3], bbox[1] + bbox[3])
+
+    def test_edge_face_is_centered_with_dark_blurred_surroundings(self):
+        image = Image.new("RGB", (240, 160), "white")
+        draw = ImageDraw.Draw(image)
+        for x in range(0, 240, 8):
+            draw.rectangle((x, 0, x + 3, 159), fill="gray")
+        draw.rectangle((2, 45, 53, 104), fill="red")
+        preview = compose_face_preview(image, (2, 45, 52, 60), 192)
+        self.assertIsNotNone(preview)
+        pixels = np.asarray(preview)
+        center = pixels[preview.height // 2, preview.width // 2]
+        corner = pixels[5, preview.width - 6]
+        self.assertGreater(int(center[0]), 160)
+        self.assertLess(int(center[1]), 100)
+        self.assertLess(int(corner.mean()), 90)
+        self.assertAlmostEqual(preview.width / preview.height, 1.55, delta=0.05)
 
     def test_reduced_jpeg_and_rotated_exif_use_detector_coordinates(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -162,6 +178,8 @@ class FacePreviewTests(unittest.TestCase):
                     exif[274] = 6
                 image.save(path, exif=exif, quality=95)
                 detection = ImageLoader().load_for_detection(path)
+                reduced = ImageLoader().load_pil_for_hashing(path, max_dimension=2048)
+                self.assertLess(max(reduced.size), max(detection.shape[:2]))
                 # Find the colored region in the actual oriented detector image.
                 red = (detection[:, :, 2] > 130) & (detection[:, :, 1] < 60)
                 ys, xs = np.where(red)
@@ -169,7 +187,22 @@ class FacePreviewTests(unittest.TestCase):
                         int(ys.max() - ys.min() + 1)]
                 source = decode_face_preview(json.dumps([str(path), bbox]), 192)
                 crop = Image.open(BytesIO(base64.b64decode(source.split(",", 1)[1])))
-                self.assertGreater(np.asarray(crop)[:, :, 0].max(), 100)
+                self.assertGreater(int(np.asarray(crop)[crop.height // 2, crop.width // 2, 0]), 100)
+
+    def test_preview_uses_visible_alternate_from_cluster(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            edge = Path(temporary) / "edge.png"
+            center = Path(temporary) / "center.png"
+            Image.new("RGB", (200, 150), "red").save(edge)
+            Image.new("RGB", (200, 150), "green").save(center)
+            request = json.dumps({"candidates": [
+                [str(edge), [2, 25, 90, 100]],
+                [str(center), [60, 40, 70, 70]],
+            ]})
+            source = decode_face_preview(request, 128)
+            preview = Image.open(BytesIO(base64.b64decode(source.split(",", 1)[1])))
+            red, green, _ = preview.getpixel((preview.width // 2, preview.height // 2))
+            self.assertGreater(green, red)
 
     def test_bounded_cache_queue_and_cancellation(self):
         QApplication.instance() or QApplication([])

@@ -1,6 +1,8 @@
 """Virtualized summaries of known people or unknown face clusters."""
 from __future__ import annotations
 
+from heapq import nsmallest
+
 from PySide6.QtCore import QAbstractListModel, QModelIndex, Property, QThread, Qt, Signal, Slot
 
 
@@ -147,8 +149,11 @@ class PeopleListModel(QAbstractListModel):
         if row["edge"] < edge or row["previewState"] == "idle":
             self._cancel_row(row)
             row["edge"] = edge
+            candidates = nsmallest(8, row.get("faces", ()), key=lambda face: (
+                -max(0, int(face["bbox"][2])) * max(0, int(face["bbox"][3])),
+                str(face["path"]).casefold(), tuple(face["bbox"])))
             ticket = self._previews.request_face(row["representativePhotoId"],
-                row["representativeBBox"], edge, self._revision)
+                row["representativeBBox"], edge, self._revision, candidates=candidates)
             row["ticket"] = ticket
             row["previewState"] = "loading" if ticket else "error"
             row["previewSource"] = ""
