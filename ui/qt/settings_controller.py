@@ -6,7 +6,7 @@ from PySide6.QtCore import QObject, Property, Signal, Slot
 from app_state_database import AppStateDatabase
 from automatic_scan.config import (AutomaticScanConfig, BlurPolicy,
     DuplicateSelectionConfig, FaceQualityPreset, PerformanceConfig)
-from automatic_scan.decode_pool import available_cpu_cores, automatic_decode_workers
+from automatic_scan.decode_pool import available_cpu_cores, automatic_decode_workers, max_manual_decode_workers
 
 
 DEFAULTS = {
@@ -73,7 +73,7 @@ class SettingsController(QObject):
                 keepers_per_group=values["keepers_per_group"],
                 prefer_open_eyes=values["prefer_open_eyes"],
                 prioritize_primary_face_quality=values["prioritize_primary_face_quality"]),
-            performance=PerformanceConfig(worker_count=(automatic_decode_workers() if workers == "automatic" else workers),
+            performance=PerformanceConfig(worker_count=(automatic_decode_workers() if workers == "automatic" else min(workers, max_manual_decode_workers())),
                 memory_conservative=values["memory_usage"] == "conservative", batch_size=32))
 
     @Slot(int, result=bool)
@@ -84,13 +84,20 @@ class SettingsController(QObject):
     def pageData(self, project_id):
         global_values = {**DEFAULTS, **self._read("global_preferences")}
         overrides = self._read("project_preference_overrides", project_id) if project_id else {}
-        return {"values": {**global_values, **overrides}, "overrides": overrides,
+        limit = max_manual_decode_workers()
+        for source in (global_values, overrides):
+            if type(source.get("worker_count")) is int:
+                source["worker_count"] = min(source["worker_count"], limit)
+        values = {**global_values, **overrides}
+        return {"values": values, "overrides": overrides,
                 "globalValues": global_values, "defaults": DEFAULTS,
-                "cpuCores": available_cpu_cores()[0], "cpuSource": available_cpu_cores()[1]}
+                "cpuCores": available_cpu_cores()[0], "cpuSource": available_cpu_cores()[1],
+                "maxWorkers": limit}
 
     @Slot(str, "QVariantMap", result=bool)
     def save(self, project_id, values):
-        if any(not valid(key, value) for key, value in values.items()):
+        if any(not valid(key, value) or key == "worker_count" and type(value) is int
+               and value > max_manual_decode_workers() for key, value in values.items()):
             return False
         with self.database.connect() as db:
             if project_id:

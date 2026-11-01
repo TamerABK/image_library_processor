@@ -87,7 +87,13 @@ def decode_workers_from_environment() -> int:
 
 def automatic_decode_workers() -> int:
     """Leave headroom on small systems; always use at least one worker."""
-    return max(1, min(MAX_DECODE_WORKERS, _available_logical_processors() - 2))
+    return min(max_manual_decode_workers(),
+               max(1, min(MAX_DECODE_WORKERS, _available_logical_processors() - 2)))
+
+
+def max_manual_decode_workers() -> int:
+    """At most 90% of available cores, with one worker needed to make progress."""
+    return max(1, min(MAX_DECODE_WORKERS, int(available_cpu_cores()[0] * 0.9)))
 
 
 def available_cpu_cores() -> tuple[int, str]:

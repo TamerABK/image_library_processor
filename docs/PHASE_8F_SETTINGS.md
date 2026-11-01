@@ -16,7 +16,9 @@ open-eye preference on, primary-face-quality priority on. Automatic decoding
 leaves two logical processors available where possible and is capped at four.
 The warning uses physical core count from `psutil` capped by process affinity's
 logical processor count. If unavailable, it explicitly falls back to available
-logical processors. A worker count limits concurrent JPEG decode tasks; it is
+logical processors. Manual choices run from one through 90% of available cores,
+rounded down and capped at four. One worker remains available on a one-core
+machine so scans can make progress. A worker count limits concurrent JPEG decode tasks; it is
 not a CPU utilization target.
 
 The decoding pool uses 512 MiB in automatic memory mode and 128 MiB in

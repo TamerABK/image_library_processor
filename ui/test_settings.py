@@ -60,6 +60,14 @@ class SettingsTests(unittest.TestCase):
             self.assertTrue(self.settings.requiresCpuConfirmation(3))
             self.assertTrue(self.settings.requiresCpuConfirmation(4))
 
+    def test_worker_options_follow_ninety_percent_with_four_worker_ceiling(self):
+        from unittest.mock import patch
+        for cores, expected in ((1, 1), (2, 1), (4, 3), (8, 4)):
+            with self.subTest(cores=cores), patch("automatic_scan.decode_pool.available_cpu_cores",
+                                                  return_value=(cores, "physical")):
+                self.assertEqual(expected, self.settings.pageData("")["maxWorkers"])
+                self.assertFalse(self.settings.save("", {"worker_count": expected + 1}))
+
 
 if __name__ == "__main__":
     unittest.main()

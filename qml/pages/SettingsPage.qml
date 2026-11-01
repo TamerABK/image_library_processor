@@ -1,6 +1,8 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "../theme" as Room36Theme
+import "../components" as Components
 
 Item {
     id: root
@@ -15,9 +17,18 @@ Item {
     property bool dirty: false
     property string message: ""
     signal leaveRequested()
+    Room36Theme.Theme { id: theme }
+    Room36Theme.Metrics { id: metrics }
+    Room36Theme.Typography { id: typography }
+    readonly property var workerValues: {
+        let values = ["automatic"]
+        for (let n = 1; n <= (pageState.maxWorkers || 4); n++) values.push(n)
+        return values
+    }
+    readonly property var workerLabels: workerValues.map(v => v === "automatic" ? "Automatic (recommended)" : v + (v === 1 ? " worker" : " workers"))
 
     readonly property var fields: [
-        {key:"worker_count", title:"Processing workers", options:["Automatic (recommended)","1 worker","2 workers","3 workers","4 workers"], values:["automatic",1,2,3,4]},
+        {key:"worker_count", title:"Processing workers", options:workerLabels, values:workerValues},
         {key:"memory_usage", title:"Memory usage", options:["Automatic (recommended)","Conservative"], values:["automatic","conservative"]},
         {key:"blur_policy", title:"Blur handling", options:["Automatic","Review Borderline","Keep All"], values:["automatic","review_borderline","keep_all"]},
         {key:"face_quality_preset", title:"Face-quality sensitivity", options:["Relaxed","Balanced","Strict"], values:["relaxed","balanced","strict"]},
@@ -27,7 +38,7 @@ Item {
     ]
 
     function reload() {
-        pageState = controller ? controller.pageData(projectId) : {values:{}, overrides:{}, globalValues:{}, defaults:{}, cpuCores:1, cpuSource:"logical processors"}
+        pageState = controller ? controller.pageData(projectId) : {values:{}, overrides:{}, globalValues:{}, defaults:{}, cpuCores:1, cpuSource:"logical processors", maxWorkers:1}
         draft = Object.assign({}, pageState.values)
         projectOverrides = Object.assign({}, pageState.overrides)
         dirty = false
@@ -65,7 +76,7 @@ Item {
     Component.onCompleted: reload()
     onProjectIdChanged: reload()
 
-    Rectangle { anchors.fill: parent; color: "#F7F8FA" }
+    Rectangle { anchors.fill: parent; color: theme.appBackground }
     ScrollView {
         anchors.fill: parent
         contentWidth: availableWidth
@@ -74,13 +85,13 @@ Item {
             x: Math.max(0, (parent.width-width)/2)
             spacing: 18
             Item { Layout.preferredHeight: 20 }
-            Button { text: "← Back"; onClicked: root.requestLeave(); activeFocusOnTab: true }
-            Label { text: root.projectId ? "Project Settings" : "Global Settings"; font.pixelSize: 30; font.bold: true; color: "#17233B" }
-            Label { visible: root.projectId !== ""; text: root.projectName; font.pixelSize: 18; color: "#17233B" }
+            Components.PillButton { text: "Back"; variant: "translucent"; onClicked: root.requestLeave() }
+            Label { text: root.projectId ? "Project Settings" : "Global Settings"; font.family: typography.pageTitleFamily; font.pixelSize: 30; font.bold: true; color: theme.mainBlue }
+            Label { visible: root.projectId !== ""; text: root.projectName; font.family: typography.buttonFamily; font.pixelSize: 18; color: theme.mainBlue }
             Label {
                 text: root.projectId ? "Customize how Room36 processes this project. Changes here won't affect your global preferences."
                                      : "Default preferences used across all your projects."
-                wrapMode: Text.WordWrap; Layout.fillWidth: true; color: "#566278"
+                wrapMode: Text.WordWrap; Layout.fillWidth: true; color: theme.mutedText
             }
             Repeater {
                 model: root.fields
@@ -88,13 +99,13 @@ Item {
                     required property var modelData
                     Layout.fillWidth: true
                     implicitHeight: content.implicitHeight + 28
-                    radius: 10; color: "white"; border.color: "#DCE2EB"
+                    radius: metrics.radiusLarge; color: theme.panelFill; border.color: theme.separator
                     ColumnLayout {
                         id: content
                         anchors.left: parent.left; anchors.right: parent.right
                         anchors.top: parent.top; anchors.margins: 14
                         spacing: 8
-                        Label { text: modelData.title; font.bold: true; color: "#17233B" }
+                        Label { text: modelData.title; font.family: typography.buttonFamily; font.bold: true; color: theme.mainBlue }
                         RowLayout {
                             Layout.fillWidth: true
                             ComboBox {
@@ -104,39 +115,87 @@ Item {
                                 model: modelData.options
                                 currentIndex: Math.max(0, modelData.values.indexOf(root.draft[modelData.key]))
                                 onActivated: root.choose(modelData.key, modelData.values[index])
+                                implicitHeight: metrics.toolbarButtonHeight
+                                leftPadding: metrics.spacingMedium
+                                rightPadding: metrics.spacingLarge
+                                font.family: typography.buttonFamily
+                                font.pixelSize: typography.button
+                                background: Rectangle {
+                                    radius: metrics.toolbarButtonRadius
+                                    color: theme.panelRaisedFill
+                                    border.width: selection.activeFocus || selection.popup.visible ? 2 : 1
+                                    border.color: selection.activeFocus || selection.popup.visible ? theme.focusRing : theme.separator
+                                }
+                                contentItem: Text {
+                                    text: selection.displayText
+                                    color: theme.black
+                                    font: selection.font
+                                    verticalAlignment: Text.AlignVCenter
+                                    elide: Text.ElideRight
+                                }
+                                indicator: Components.FluentIcon {
+                                    x: selection.width - width - metrics.spacingSmall
+                                    y: (selection.height - height) / 2
+                                    name: "chevron_down"; size: 16; color: theme.mainBlue
+                                }
+                                popup: Popup {
+                                    y: selection.height + 4
+                                    width: selection.width
+                                    implicitHeight: Math.min(contentItem.implicitHeight + 8, 280)
+                                    padding: 4
+                                    background: Rectangle { radius: metrics.radiusLarge; color: theme.white; border.color: theme.separator }
+                                    contentItem: ListView {
+                                        clip: true
+                                        implicitHeight: contentHeight
+                                        model: selection.popup.visible ? selection.delegateModel : null
+                                        currentIndex: selection.highlightedIndex
+                                        ScrollIndicator.vertical: ScrollIndicator {}
+                                    }
+                                }
+                                delegate: ItemDelegate {
+                                    width: selection.width - 8
+                                    text: modelData
+                                    font.family: typography.buttonFamily
+                                    highlighted: selection.highlightedIndex === index
+                                    background: Rectangle {
+                                        radius: metrics.toolbarButtonRadius
+                                        color: parent.highlighted ? theme.selectedFill : parent.hovered ? theme.hoverFill : theme.white
+                                    }
+                                }
                             }
                             Label {
                                 visible: root.projectId !== ""
                                 text: Object.prototype.hasOwnProperty.call(root.projectOverrides, modelData.key) ? "Overridden for this project" : "Inherited from Global Settings"
-                                color: "#566278"
+                                color: theme.mutedText
                             }
                             Item { Layout.fillWidth: true }
-                            Button {
+                            Components.PillButton {
                                 visible: root.projectId !== ""
                                 text: "Use global default"
+                                variant: "translucent"
                                 enabled: Object.prototype.hasOwnProperty.call(root.projectOverrides, modelData.key)
                                 onClicked: root.inherit(modelData.key)
                             }
                         }
                         Label {
                             visible: modelData.key === "worker_count"
-                            text: "Available " + root.pageState.cpuCores + " " + root.pageState.cpuSource + ". Selected: " + (root.draft.worker_count === "automatic" ? "Automatic" : root.draft.worker_count + " workers") + ". This is a concurrency limit, not a CPU usage percentage."
-                            wrapMode: Text.WordWrap; Layout.fillWidth: true; color: "#566278"
+                            text: "Available " + root.pageState.cpuCores + " " + root.pageState.cpuSource + ". Manual choices: 1–" + root.pageState.maxWorkers + " workers (up to 90% of cores, capped at four). Selected: " + (root.draft.worker_count === "automatic" ? "Automatic" : root.draft.worker_count + " workers") + ". This is a concurrency limit, not a CPU usage percentage."
+                            wrapMode: Text.WordWrap; Layout.fillWidth: true; color: theme.mutedText
                         }
                     }
                 }
             }
-            Label { text: root.message; visible: text.length > 0; wrapMode: Text.WordWrap; Layout.fillWidth: true; color: "#334E77" }
-            Button {
+            Label { text: root.message; visible: text.length > 0; wrapMode: Text.WordWrap; Layout.fillWidth: true; color: theme.mainBlue }
+            Components.PillButton {
                 text: "Refresh analysis"
                 visible: root.projectId !== "" && root.message.length > 0 && root.processingController !== null
                 onClicked: root.processingController.retry()
             }
             RowLayout {
-                Button { text: "Save"; enabled: root.dirty; onClicked: root.save() }
-                Button { text: "Cancel"; onClicked: root.requestLeave() }
+                Components.PillButton { text: "Save"; variant: "accent"; enabled: root.dirty; onClicked: root.save() }
+                Components.PillButton { text: "Cancel"; variant: "translucent"; onClicked: root.requestLeave() }
                 Item { Layout.fillWidth: true }
-                Button { text: "Reset to Defaults"; onClicked: resetDialog.open() }
+                Components.PillButton { text: "Reset to Defaults"; variant: "translucent"; onClicked: resetDialog.open() }
             }
             Item { Layout.preferredHeight: 24 }
         }
@@ -145,9 +204,10 @@ Item {
         id: cpuWarning
         title: "High CPU usage"
         modal: true; anchors.centerIn: parent; width: 460
+        background: Rectangle { radius: metrics.radiusLarge; color: theme.white; border.color: theme.separator }
         footer: DialogButtonBox {
-            Button { text: "Cancel"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
-            Button { text: "Continue Anyway"; DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole }
+            Components.PillButton { text: "Cancel"; variant: "translucent"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
+            Components.PillButton { text: "Continue Anyway"; variant: "accent"; DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole }
         }
         onAccepted: root.saveNow()
         contentItem: Label { text: "You're assigning a large portion of your CPU cores to image processing. This may make your computer less responsive during scans, especially when using other applications."; wrapMode: Text.WordWrap; width: 420 }
@@ -156,7 +216,11 @@ Item {
         id: resetDialog
         title: "Reset settings?"
         modal: true; anchors.centerIn: parent; width: 460
-        standardButtons: Dialog.Cancel | Dialog.Ok
+        background: Rectangle { radius: metrics.radiusLarge; color: theme.white; border.color: theme.separator }
+        footer: DialogButtonBox {
+            Components.PillButton { text: "Cancel"; variant: "translucent"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
+            Components.PillButton { text: "Reset"; variant: "accent"; DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole }
+        }
         onAccepted: { if (root.controller) root.controller.reset(root.projectId); root.reload() }
         contentItem: Label { text: root.projectId ? "Remove all overrides for this project?" : "Restore global application defaults?" }
     }
@@ -164,11 +228,12 @@ Item {
         id: unsavedDialog
         title: "Unsaved changes"
         modal: true; anchors.centerIn: parent; width: 460
+        background: Rectangle { radius: metrics.radiusLarge; color: theme.white; border.color: theme.separator }
         contentItem: Label { text: "Save changes before leaving?" }
         footer: DialogButtonBox {
-            Button { text: "Save"; DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole; onClicked: { root.save(); if (!root.dirty) root.leaveRequested() } }
-            Button { text: "Discard"; DialogButtonBox.buttonRole: DialogButtonBox.DestructiveRole; onClicked: root.leaveRequested() }
-            Button { text: "Cancel"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
+            Components.PillButton { text: "Save"; variant: "accent"; DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole; onClicked: { root.save(); if (!root.dirty) root.leaveRequested() } }
+            Components.PillButton { text: "Discard"; variant: "translucent"; DialogButtonBox.buttonRole: DialogButtonBox.DestructiveRole; onClicked: root.leaveRequested() }
+            Components.PillButton { text: "Cancel"; variant: "translucent"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
         }
     }
 }
