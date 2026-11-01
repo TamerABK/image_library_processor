@@ -218,9 +218,10 @@ class ProjectFlowTests(unittest.TestCase):
         # Disabled controls cannot be clicked by the user, but their contracts
         # are forwarded correctly for future implementations.
         self.item("homeSubscriptionButton").clicked.emit()
-        self.item("homeSettingsButton").clicked.emit()
         self.item("homeProfileButton").clicked.emit()
-        self.assertEqual(["subscription", "settings", "profile"], signals)
+        self.item("homeSettingsButton").clicked.emit()
+        self.assertEqual(["subscription", "profile", "settings"], signals)
+        self.assertEqual("settings", self.window.property("currentPage"))
 
     def test_home_view_dropdown_resizes_cards_and_persists(self):
         self.create()

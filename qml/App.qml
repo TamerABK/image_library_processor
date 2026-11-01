@@ -16,6 +16,9 @@ ApplicationWindow {
     property var projectModel: projectController ? projectController.projects : null
     property var photoModel: null
     property var processingController: null
+    property var settingsController: null
+    property string settingsReturnPage: "home"
+    property string settingsProjectId: ""
     property var peopleController: null
     property var duplicateController: null
     property var favoritesController: null
@@ -25,7 +28,7 @@ ApplicationWindow {
     property var activeProjectId: null
     property string activeProjectName: ""
     property string homeViewSize: "Medium"
-    // Unavailable account/settings/menu actions remain explicit contracts.
+    // Account and menu actions remain explicit contracts.
     signal newProjectRequested()
     signal projectMenuRequested(var projectId)
     signal librarySortRequested(var projectId, string routeId, string option)
@@ -48,7 +51,7 @@ ApplicationWindow {
     Room36Theme.Metrics { id: metrics }
 
     function normalizePage(pageId) {
-        if (pageId === "loading" || pageId === "auth" || pageId === "home" || pageId === "library" || pageId === "gallery") {
+        if (pageId === "loading" || pageId === "auth" || pageId === "home" || pageId === "library" || pageId === "gallery" || pageId === "settings") {
             return pageId
         }
         return "home"
@@ -73,6 +76,12 @@ ApplicationWindow {
     function showPage(pageId) {
         if (inspectorController) inspectorController.close()
         startPage = normalizePage(pageId)
+    }
+
+    function openSettings(projectScoped) {
+        settingsReturnPage = currentPage
+        settingsProjectId = projectScoped ? String(activeProjectId || "") : ""
+        showPage("settings")
     }
 
     function openProject(projectId, projectName) {
@@ -113,6 +122,7 @@ ApplicationWindow {
             if (window.currentPage === "library") {
                 return libraryComponent
             }
+            if (window.currentPage === "settings") return settingsComponent
             if (window.useHomePreviewData) {
                 return homePreviewComponent
             }
@@ -152,7 +162,7 @@ ApplicationWindow {
             onSortChanged: function(order) { if (window.projectController) window.projectController.projects.setSort(order) }
             onViewSizeSelected: function(size) { window.homeViewSize = size }
             onSubscriptionRequested: window.subscriptionRequested()
-            onSettingsRequested: window.settingsRequested()
+            onSettingsRequested: { window.settingsRequested(); window.openSettings(false) }
             onProfileRequested: window.profileRequested()
         }
     }
@@ -185,7 +195,7 @@ ApplicationWindow {
             projectId: window.activeProjectId
             projectName: window.activeProjectName
             onHomeRequested: window.showPage("home")
-            onSettingsRequested: window.settingsRequested()
+            onSettingsRequested: { window.settingsRequested(); window.openSettings(true) }
             onSortRequested: function(routeId, option) { window.librarySortRequested(projectId, routeId, option) }
             onViewSizeRequested: function(routeId, option) { window.libraryViewSizeRequested(projectId, routeId, option) }
         }
@@ -197,6 +207,17 @@ ApplicationWindow {
         Dev.ComponentGallery {
             objectName: "componentGallery"
             bridge: window.appBridge
+        }
+    }
+
+    Component {
+        id: settingsComponent
+        Pages.SettingsPage {
+            controller: window.settingsController
+            processingController: window.processingController
+            projectId: window.settingsProjectId
+            projectName: window.activeProjectName
+            onLeaveRequested: window.showPage(window.settingsReturnPage)
         }
     }
 
