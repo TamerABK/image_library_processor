@@ -173,6 +173,7 @@ ApplicationWindow {
 
         Pages.LibraryShell {
             objectName: "libraryShell"
+            projectController: window.projectController
             photoModel: window.photoModel
             processingController: window.processingController
             peopleController: window.peopleController

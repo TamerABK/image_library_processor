@@ -80,6 +80,7 @@ class BlurFlowTests(unittest.TestCase):
         self.click("libraryNav_blurry")
         wait_until(lambda: self.processing.stage("blur")["state"] == "COMPLETE", timeout=6)
         wait_until(lambda: bool(self.items("gridPhotoCard")))
+        self.assertTrue(self.item("photoWarningIcon").isVisible())
 
     def test_pointer_review_full_flow_and_keyboard(self):
         self.create()
@@ -93,6 +94,8 @@ class BlurFlowTests(unittest.TestCase):
         self.click("photoCardFooter")
         self.assertTrue(self.inspector.opened)
         wait_until(lambda: self.inspector.previewState == "ready")
+        wait_until(lambda: self.item("photoInspector").property("previewImageReady"))
+        self.assertTrue(self.inspector.previewSource.startswith("data:image/jpeg;base64,"))
         identity = self.inspector.photo["photoId"]
         for control, state in (("inspectorKeep", "KEEP"), ("inspectorReview", "REVIEW"), ("inspectorRemove", "REMOVE")):
             self.click(control)
@@ -157,6 +160,7 @@ class BlurFlowTests(unittest.TestCase):
         self.blur()
         self.click("photoCardFooter")
         wait_until(lambda: self.inspector.previewState == "ready")
+        wait_until(lambda: self.item("photoInspector").property("previewImageReady"))
         for width, height in ((1280, 720), (1440, 900), (1920, 1080)):
             self.window.setWidth(width)
             self.window.setHeight(height)
@@ -170,6 +174,8 @@ class BlurFlowTests(unittest.TestCase):
                 self.assertLessEqual(end.x(), width, (width, height, name))
                 self.assertLessEqual(end.y(), height, (width, height, name))
             image = self.item("inspectorImage")
+            self.assertGreater(image.width(), 0)
+            self.assertGreater(image.height(), 0)
             self.assertAlmostEqual(2, image.property("paintedWidth") / image.property("paintedHeight"), places=2)
 
     def test_processing_and_no_candidates_empty_states(self):

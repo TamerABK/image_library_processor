@@ -45,6 +45,9 @@ class PhotoListModel(QAbstractListModel):
         super().__init__(parent)
         self._service = thumbnails
         self._rows = []
+        self._all_rows = []
+        self._all_positions = {}
+        self._hidden = set()
         self._positions = {}
         self._leases = {}  # opaque lease -> (photo identity, requested edge)
         self._next_lease = 0
@@ -87,14 +90,19 @@ class PhotoListModel(QAbstractListModel):
 
     def _reindex(self):
         self._positions = {row.identity: i for i, row in enumerate(self._rows)}
+        self._all_positions = {row.identity: i for i, row in enumerate(self._all_rows)}
 
     def _row(self, identity):
         index = self._positions.get(identity)
         return self._rows[index] if index is not None else None
 
+    def _row_any(self, identity):
+        index = self._all_positions.get(identity)
+        return self._all_rows[index] if index is not None else None
+
     @Slot(str, result="QVariantMap")
     def photo(self, identity):
-        row = self._row(identity)
+        row = self._row_any(identity)
         if row is None:
             return {}
         return {"photoId": row.identity, "filename": Path(row.identity).name,
@@ -102,6 +110,27 @@ class PhotoListModel(QAbstractListModel):
 
     def identities(self):
         return [row.identity for row in self._rows]
+
+    def allIdentities(self):
+        """Full discovered inventory, including rows reserved for Trash."""
+        return [row.identity for row in self._all_rows]
+
+    def setHiddenIdentities(self, identities):
+        self._assert_owner()
+        hidden = set(identities)
+        if hidden == self._hidden:
+            return
+        self.beginResetModel()
+        self._cancel_all()
+        self._hidden = hidden
+        for row in self._all_rows:
+            row.ticket, row.edge, row.source, row.state = 0, 0, "", "idle"
+            if row.identity in hidden:
+                row.selected = False
+        self._rows = [row for row in self._all_rows if row.identity not in hidden]
+        self._reindex()
+        self.endResetModel()
+        self.selectionChanged.emit()
 
     @Property(int, notify=selectionChanged)
     def selectedCount(self):
@@ -149,7 +178,8 @@ class PhotoListModel(QAbstractListModel):
             row.selected = row.identity in selected
         self.beginResetModel()
         self._cancel_all()
-        self._rows = rows
+        self._all_rows = rows
+        self._rows = [row for row in rows if row.identity not in self._hidden]
         self._reindex()
         self.endResetModel()
         self.selectionChanged.emit()
@@ -157,8 +187,13 @@ class PhotoListModel(QAbstractListModel):
     def append_items(self, items):
         self._assert_owner()
         self._generation += 1  # Reinserting a removed path must not reuse old pixels.
-        rows = [row for row in self._adapt(items) if row.identity not in self._positions]
+        all_new = [row for row in self._adapt(items) if row.identity not in self._all_positions]
+        if not all_new:
+            return
+        self._all_rows.extend(all_new)
+        rows = [row for row in all_new if row.identity not in self._hidden]
         if not rows:
+            self._reindex()
             return
         first = len(self._rows)
         self.beginInsertRows(QModelIndex(), first, first + len(rows) - 1)
@@ -170,13 +205,18 @@ class PhotoListModel(QAbstractListModel):
     def removePhoto(self, identity):
         self._assert_owner()
         row = self._row(identity)
-        if row is None:
+        if self._row_any(identity) is None:
             return False
+        if row is None:
+            self._all_rows = [item for item in self._all_rows if item.identity != identity]
+            self._reindex()
+            return True
         index = self._positions[identity]
         self.beginRemoveRows(QModelIndex(), index, index)
         self._cancel_row(row)
         self._leases = {lease: value for lease, value in self._leases.items() if value[0] != identity}
         del self._rows[index]
+        self._all_rows = [item for item in self._all_rows if item.identity != identity]
         self._reindex()
         self.endRemoveRows()
         self.selectionChanged.emit()
@@ -185,13 +225,14 @@ class PhotoListModel(QAbstractListModel):
     def removePhotos(self, identities):
         """Drop a completed Trash batch in one model reset before rediscovery."""
         self._assert_owner()
-        removed = set(identities).intersection(self._positions)
+        removed = set(identities).intersection(self._all_positions)
         if not removed:
             return 0
         self.beginResetModel()
         self._cancel_all()
         self._generation += 1
         self._rows = [row for row in self._rows if row.identity not in removed]
+        self._all_rows = [row for row in self._all_rows if row.identity not in removed]
         self._reindex()
         self.endResetModel()
         self.selectionChanged.emit()
@@ -216,6 +257,7 @@ class PhotoListModel(QAbstractListModel):
         old = self.persistentIndexList()
         identities = [self._rows[index.row()].identity for index in old]
         self._rows.sort(key=lambda row: (Path(row.identity).name.casefold(), row.identity), reverse=descending)
+        self._all_rows.sort(key=lambda row: (Path(row.identity).name.casefold(), row.identity), reverse=descending)
         self._reindex()
         self.changePersistentIndexList(old, [self.index(self._positions[key]) for key in identities])
         self.layoutChanged.emit()

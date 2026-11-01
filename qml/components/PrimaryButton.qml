@@ -7,6 +7,7 @@ Button {
     id: root
 
     property url iconSource: ""
+    property string iconName: ""
     property bool busy: false
     property real radius: height / 2
 
@@ -40,9 +41,20 @@ Button {
             Layout.preferredWidth: metrics.iconSizeMedium
             Layout.preferredHeight: metrics.iconSizeMedium
             source: root.iconSource
-            visible: !root.busy && String(root.iconSource).length > 0
+            visible: !root.busy && root.iconName.length === 0 && String(root.iconSource).length > 0
             fillMode: Image.PreserveAspectFit
             opacity: root.enabled ? 1 : 0.38
+        }
+
+        FluentIcon {
+            Layout.preferredWidth: metrics.iconSizeMedium
+            Layout.preferredHeight: metrics.iconSizeMedium
+            name: root.iconName
+            size: 20
+            color: theme.white
+            hovered: root.hovered
+            enabled: root.enabled
+            visible: !root.busy && root.iconName.length > 0
         }
 
         Text {

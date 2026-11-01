@@ -58,14 +58,6 @@ Item {
         height: metrics.toolbarButtonHeight
         spacing: metrics.spacingSmall
 
-        Image {
-            Layout.preferredWidth: metrics.iconSizeLarge
-            Layout.preferredHeight: metrics.iconSizeLarge
-            source: theme.iconUrl("home.svg")
-            cache: true
-            fillMode: Image.PreserveAspectFit
-        }
-
         Text {
             text: "Home"
             color: theme.mainBlue
@@ -86,7 +78,7 @@ Item {
         Components.ToolbarDropdownButton {
             objectName: "homeSortButton"
             label: "Sort by"
-            iconSource: theme.iconUrl("sort.svg")
+            iconName: "arrow_sort"
             options: ["Newest", "Oldest", "Name"]
             onOptionSelected: function(option) { root.sortChanged(option) }
         }
@@ -94,7 +86,7 @@ Item {
         Components.ToolbarDropdownButton {
             objectName: "homeViewButton"
             label: "View"
-            iconSource: theme.iconUrl("view.svg")
+            iconName: "grid"
             options: ["Small", "Medium", "Large"]
             onOptionSelected: function(option) { root.viewSizeSelected(option) }
         }

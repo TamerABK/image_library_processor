@@ -35,6 +35,10 @@ class AppStateDatabase:
                     mtime_ns INTEGER NOT NULL,
                     cache_path TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS project_scan_stats (
+                    project_id TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,
+                    first_scan_seconds REAL NOT NULL CHECK (first_scan_seconds >= 0)
+                );
                 CREATE TABLE IF NOT EXISTS folder_state (
                     folder TEXT PRIMARY KEY,
                     current_tab TEXT NOT NULL DEFAULT 'Scenes'

@@ -132,6 +132,11 @@ class ProjectController(QObject):
     def activeProjectFolder(self):
         return self._active_folder
 
+    @Property(int, notify=activeProjectChanged)
+    def activePhotoCount(self):
+        project = self._projects.get(self._active_id) if self._active_id else None
+        return project.photo_count if project is not None else -1
+
     def _set_message(self, text):
         if text != self._message:
             self._message = text

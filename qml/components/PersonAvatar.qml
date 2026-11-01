@@ -56,12 +56,13 @@ Item {
             }
         }
 
-        Image {
+        FluentIcon {
             anchors.centerIn: parent
             width: metrics.iconSizeLarge
             height: metrics.iconSizeLarge
-            source: theme.iconUrl("profile.svg")
-            fillMode: Image.PreserveAspectFit
+            name: "person"
+            size: 24
+            color: theme.midBlue
             visible: !root.hasImageSource
             opacity: 0.62
         }

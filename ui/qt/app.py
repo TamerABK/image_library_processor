@@ -81,7 +81,9 @@ def run_app() -> int:
     projects = ProjectController(photo_model, parent=application, processing=processing)
     favorites = FavoritesController(projects, photo_model, thumbnails, parent=application)
     trash = TrashController(projects, photo_model, processing, duplicates, favorites,
-                            inspector, thumbnails, parent=application)
+                            inspector, thumbnails, parent=application,
+                            visibility_models=(duplicates.detailPhotoModel,
+                                               favorites.photoModel, people.detailPhotoModel))
     exports = ExportController(projects, photo_model, people, processing, parent=application)
     from .project_watcher import ProjectFilesystemWatcher
     watcher = ProjectFilesystemWatcher(projects, parent=application)

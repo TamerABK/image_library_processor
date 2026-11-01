@@ -26,13 +26,6 @@ Item {
         anchors.margins: metrics.spacingLarge
         spacing: metrics.spacingMedium
 
-        Components.IconButton {
-            objectName: "libraryHomeButton"
-            source: theme.iconUrl("home_blue.svg")
-            accessibleLabel: "Back to Home"
-            onClicked: root.homeRequested()
-        }
-
         ColumnLayout {
             Layout.fillWidth: true
             Layout.minimumWidth: 0
@@ -63,7 +56,7 @@ Item {
             objectName: "librarySortButton"
             enabled: root.libraryControlsEnabled
             label: "Sort by"
-            iconSource: theme.iconUrl("sort.svg")
+            iconName: "arrow_sort"
             normalFill: theme.neonGreen
             options: root.sortOptions
             onOptionSelected: function(option) { root.sortRequested(option) }
@@ -73,7 +66,7 @@ Item {
             objectName: "libraryViewButton"
             enabled: root.libraryControlsEnabled
             label: "View"
-            iconSource: theme.iconUrl("view.svg")
+            iconName: "grid"
             normalFill: theme.neonGreen
             options: ["Large", "Medium", "Small"]
             onOptionSelected: function(option) { root.viewSizeRequested(option) }

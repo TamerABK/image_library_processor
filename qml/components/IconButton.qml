@@ -6,6 +6,9 @@ Button {
     id: root
 
     property url source: ""
+    property string iconName: ""
+    property string iconVariant: "regular"
+    property color iconColor: theme.black
     property string accessibleLabel: text
     property real buttonSize: metrics.iconButtonSize
     property real iconSize: metrics.iconSizeMedium
@@ -24,11 +27,24 @@ Button {
     focusPolicy: Qt.StrongFocus
 
     contentItem: Item {
+        FluentIcon {
+            anchors.centerIn: parent
+            width: root.iconSize
+            height: root.iconSize
+            name: root.iconName
+            size: root.iconSize <= 17 ? 16 : root.iconSize <= 22 ? 20 : 24
+            variant: root.iconVariant
+            color: root.iconColor
+            hovered: root.hovered
+            enabled: root.enabled
+            visible: root.iconName.length > 0
+        }
         Image {
             anchors.centerIn: parent
             width: root.iconSize
             height: root.iconSize
             source: root.source
+            visible: root.iconName.length === 0
             fillMode: Image.PreserveAspectFit
             opacity: root.enabled ? 1 : 0.36
         }

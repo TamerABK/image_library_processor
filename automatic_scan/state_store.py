@@ -54,6 +54,17 @@ class AutomaticStateStore:
         self._database = AppStateDatabase(path)
         self._migrate_legacy_states()
 
+    def first_scan_seconds(self, project_id: str) -> float | None:
+        with self._database.connect() as db:
+            row = db.execute("SELECT first_scan_seconds FROM project_scan_stats WHERE project_id=?",
+                             (project_id,)).fetchone()
+            return float(row[0]) if row is not None else None
+
+    def record_first_scan(self, project_id: str, seconds: float) -> None:
+        with self._database.connect() as db:
+            db.execute("INSERT OR IGNORE INTO project_scan_stats(project_id, first_scan_seconds) "
+                       "VALUES (?, ?)", (project_id, max(0.0, float(seconds))))
+
     def load(self, folder: str | Path) -> FolderAutomaticState:
         key = str(Path(folder).resolve())
         with self._database.connect() as db:

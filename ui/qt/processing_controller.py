@@ -117,6 +117,8 @@ class ProjectProcessingController(QObject):
         self._token = CancellationToken()
         self._stages = {}
         self._overall = "NOT_STARTED"
+        self._first_scan_seconds = -1.0
+        self._scan_started_at = 0.0
         self._message = ""
         self.results = {}
         self.diagnostics = {}
@@ -153,6 +155,10 @@ class ProjectProcessingController(QObject):
     def projectFolder(self):
         return self._folder
 
+    @Property(float, notify=changed)
+    def firstScanSeconds(self):
+        return self._first_scan_seconds
+
     @Property(int, notify=sessionChanged)
     def sessionId(self):
         return self._session
@@ -183,6 +189,8 @@ class ProjectProcessingController(QObject):
         self.results, self.diagnostics = {}, {}
         self._stages = {k: dict(state="NOT_STARTED", done=0, total=0, error="") for k in STAGES}
         self._overall, self._message = "NOT_STARTED", ""
+        self._first_scan_seconds = -1.0
+        self._scan_started_at = 0.0
         self._timer.stop()
         self.sessionChanged.emit()
         self.changed.emit()
@@ -193,6 +201,11 @@ class ProjectProcessingController(QObject):
             return
         self.invalidate()
         self._project_id, self._folder = project.project_id, project.folder
+        try:
+            previous = self._store.first_scan_seconds(self._project_id)
+            self._first_scan_seconds = previous if previous is not None else -1.0
+        except (OSError, sqlite3.Error, ValueError):
+            self._first_scan_seconds = -1.0
         self._paths = [photo_identity(item.path) for item in items]
         self._schedule()
 
@@ -200,6 +213,7 @@ class ProjectProcessingController(QObject):
         for value in self._stages.values():
             value.update(state="QUEUED", done=0, total=0, error="")
         self._overall = "QUEUED"
+        self._scan_started_at = time.monotonic()
         try:
             self._tasks.get_nowait()
         except Empty:
@@ -235,6 +249,12 @@ class ProjectProcessingController(QObject):
             if state == "FINISHED":
                 values = [v["state"] for v in self._stages.values()]
                 self._overall = "FAILED" if "FAILED" in values else "CANCELLED" if "CANCELLED" in values else "COMPLETE"
+                if self._overall == "COMPLETE" and self._first_scan_seconds < 0 and self._scan_started_at:
+                    self._first_scan_seconds = max(0.0, time.monotonic() - self._scan_started_at)
+                    try:
+                        self._store.record_first_scan(self._project_id, self._first_scan_seconds)
+                    except (OSError, sqlite3.Error, ValueError):
+                        pass
                 self._timer.stop()
             else:
                 self._stages[stage] = dict(state=state, done=done, total=total, error=error)

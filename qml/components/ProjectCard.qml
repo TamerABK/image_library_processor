@@ -76,12 +76,13 @@ Item {
                 }
             }
 
-            Image {
+            FluentIcon {
                 anchors.centerIn: parent
                 width: metrics.iconSizeLarge
                 height: metrics.iconSizeLarge
-                source: theme.iconUrl("project_open.svg")
-                fillMode: Image.PreserveAspectFit
+                name: "folder_open"
+                size: 24
+                color: theme.midBlue
                 visible: !root.hasImageSource
                 opacity: 0.62
             }
@@ -94,7 +95,7 @@ Item {
                 anchors.top: parent.top
                 anchors.rightMargin: metrics.spacingTiny
                 anchors.topMargin: metrics.spacingTiny
-                source: theme.iconUrl("menu_more.svg")
+                iconName: "more_horizontal"
                 accessibleLabel: "Project menu"
                 buttonSize: 32
                 iconSize: metrics.iconSizeMedium

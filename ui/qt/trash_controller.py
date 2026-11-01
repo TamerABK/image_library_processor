@@ -108,10 +108,12 @@ class TrashController(QObject):
     changed = Signal()
 
     def __init__(self, projects, master_photos, processing, duplicates, favorites, inspector,
-                 thumbnails, parent=None, *, state_root=None):
+                 thumbnails, parent=None, *, state_root=None, visibility_models=()):
         super().__init__(parent)
         self._projects, self._master, self._processing = projects, master_photos, processing
         self._duplicates, self._favorites, self._inspector = duplicates, favorites, inspector
+        self._visibility_models = [master_photos, processing.blurModel, *visibility_models]
+        self._applying_visibility = False
         self._model = TrashPhotoModel(thumbnails, self)
         self._folder = ""
         self._generation = 0
@@ -213,6 +215,7 @@ class TrashController(QObject):
         self._pending_refresh = False
         self._refresh_dirty = False
         self._model.set_rows([])
+        self._set_hidden_photos(set())
         self.changed.emit()
 
     @Slot(str, str)
@@ -227,6 +230,8 @@ class TrashController(QObject):
     @Slot()
     def _schedule_refresh(self, *_):
         self._assert_owner()
+        if self._applying_visibility:
+            return
         self._projection_generation += 1
         self._projection_ready = False
         self._plan = None
@@ -242,7 +247,7 @@ class TrashController(QObject):
         active = self._projects.activeProjectFolder
         if not active:
             return
-        overlapping = self._pending_overlap_paths.intersection(self._master.identities())
+        overlapping = self._pending_overlap_paths.intersection(self._master.allIdentities())
         self._pending_overlap_paths.clear()
         if overlapping:
             self._projects.openFolder(active)
@@ -283,7 +288,7 @@ class TrashController(QObject):
         self._timer.start()
 
     def _project(self, decisions):
-        available = self._master.identities()
+        available = self._master.allIdentities()
         revisions = {path: (row["file_size"], row["mtime_ns"])
                      for path, row in self._processing.blurModel.results.items()}
         favorites = {path for path in available if self._favorites.isFavorite(path)}
@@ -297,9 +302,18 @@ class TrashController(QObject):
                 row["executable"] = False
                 row["badgeText"] = "Needs attention"
         self._model.set_rows(rows)
+        self._set_hidden_photos({row["photoId"] for row in rows})
         self._loaded = True
         self._projection_ready = ready
         self.changed.emit()
+
+    def _set_hidden_photos(self, paths):
+        self._applying_visibility = True
+        try:
+            for model in self._visibility_models:
+                model.setHiddenIdentities(paths)
+        finally:
+            self._applying_visibility = False
 
     def _destructive_ready(self):
         return bool(self._projection_ready and self._loaded and not self._busy

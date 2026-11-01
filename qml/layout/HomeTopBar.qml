@@ -58,7 +58,7 @@ Item {
             Layout.preferredHeight: metrics.homeTopBarHeight
             text: "Subscription"
             variant: "filled"
-            iconSource: theme.iconUrl("subscription.svg")
+            iconName: "premium"
             onClicked: root.subscriptionRequested()
         }
 
@@ -70,7 +70,7 @@ Item {
             buttonSize: 62.18
             iconSize: 25
             radius: metrics.toolbarButtonRadius
-            source: theme.iconUrl("settings_home.svg")
+            iconName: "settings"
             accessibleLabel: "Settings"
             onClicked: root.settingsRequested()
         }
@@ -83,7 +83,7 @@ Item {
             buttonSize: 62.18
             iconSize: 25
             radius: metrics.toolbarButtonRadius
-            source: theme.iconUrl("profile.svg")
+            iconName: "person"
             accessibleLabel: "Profile"
             onClicked: root.profileRequested()
         }

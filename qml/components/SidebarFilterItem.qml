@@ -8,6 +8,7 @@ Button {
     id: root
 
     property url iconSource: ""
+    property string iconName: ""
     property string label: text
     property int count: -1
     property bool selected: false
@@ -39,7 +40,7 @@ Button {
             Layout.preferredWidth: metrics.iconSizeMedium
             Layout.preferredHeight: metrics.iconSizeMedium
             source: root.iconSource
-            visible: String(root.iconSource).length > 0
+            visible: root.iconName.length === 0 && String(root.iconSource).length > 0
             fillMode: Image.PreserveAspectFit
             opacity: root.enabled ? 1 : 0.36
             layer.enabled: root.darkSurface
@@ -47,6 +48,18 @@ Button {
                 colorization: 1
                 colorizationColor: theme.white
             }
+        }
+
+        FluentIcon {
+            Layout.preferredWidth: metrics.iconSizeMedium
+            Layout.preferredHeight: metrics.iconSizeMedium
+            name: root.iconName
+            size: 20
+            selected: root.selected
+            hovered: root.hovered
+            color: root.darkSurface ? theme.white : theme.black
+            enabled: root.enabled
+            visible: root.iconName.length > 0
         }
 
         Text {
@@ -68,18 +81,14 @@ Button {
             verticalAlignment: Text.AlignVCenter
         }
 
-        Image {
+        FluentIcon {
             Layout.preferredWidth: metrics.iconSizeSmall
             Layout.preferredHeight: metrics.iconSizeSmall
-            source: theme.iconUrl(root.expanded ? "chevron_down.svg" : "chevron_right.svg")
+            name: root.expanded ? "chevron_down" : "chevron_right"
+            size: 16
+            color: root.darkSurface ? theme.white : theme.black
             visible: root.showChevron
-            fillMode: Image.PreserveAspectFit
             opacity: root.enabled ? 1 : 0.36
-            layer.enabled: root.darkSurface
-            layer.effect: MultiEffect {
-                colorization: 1
-                colorizationColor: theme.white
-            }
         }
     }
 

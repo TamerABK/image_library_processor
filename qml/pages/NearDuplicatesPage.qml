@@ -99,7 +99,8 @@ Item {
             Components.PillButton {
                 objectName: "duplicateBack"
                 variant: "translucent"
-                text: "← Back"
+                text: "Back"
+                iconName: "arrow_left"
                 onClicked: if (root.duplicates) root.duplicates.back()
                 Accessible.name: "Back to duplicate groups"
             }

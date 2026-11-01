@@ -108,7 +108,7 @@ class FavoritesController(QObject):
                           badge_text=photo.get("badgeText", ""))
 
     def _refresh_model(self):
-        self._available = set(self._master.identities())
+        self._available = set(self._master.allIdentities())
         paths = sorted(self._favorites & self._available,
                        key=lambda value: (Path(value).name.casefold(), value))
         self._model.replace_items([self._item(path) for path in paths], preserve_selection=False)
@@ -142,7 +142,7 @@ class FavoritesController(QObject):
         if not folder or self._closed:
             return
         self._folder = photo_identity(folder)
-        self._available = set(self._master.identities())
+        self._available = set(self._master.allIdentities())
         try:
             self._tasks.put_nowait((self._generation, self._folder, "load", "", False))
         except Full:

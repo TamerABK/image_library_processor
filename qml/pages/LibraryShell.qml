@@ -13,6 +13,7 @@ Rectangle {
     objectName: "libraryShell"
 
     property var projectId: null
+    property var projectController: null
     property var photoModel: null
     property var processingController: null
     property var peopleController: null
@@ -78,6 +79,9 @@ Rectangle {
             ? metrics.sidebarPreferredWidth : metrics.sidebarCompactWidth
         currentRoute: root.currentRoute
         routeCounts: root.routeCounts
+        projectName: root.projectName
+        photoCount: root.projectController ? root.projectController.activePhotoCount : -1
+        firstScanSeconds: root.processingController ? root.processingController.firstScanSeconds : -1
         onRouteRequested: function(routeId) { root.showRoute(routeId) }
         onHomeRequested: root.homeRequested()
         onSettingsRequested: root.settingsRequested()

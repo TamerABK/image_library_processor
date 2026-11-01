@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import sqlite3
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
 from image_loader import ImageLoader
 from .thumbnails import ThumbnailService
@@ -122,8 +122,7 @@ def compose_face_preview(image: Image.Image, bbox, edge: int) -> Image.Image | N
     sharp = image.transform((output_width, output_height), Image.Transform.AFFINE,
         (scale_x, 0, left, 0, scale_y, top), resample=Image.Resampling.BICUBIC,
         fillcolor=(12, 15, 20)).convert("RGB")
-    background = ImageEnhance.Brightness(sharp.filter(ImageFilter.GaussianBlur(
-        max(3, output_height * 0.045)))).enhance(0.28)
+    background = sharp.filter(ImageFilter.GaussianBlur(max(2, output_height * 0.025)))
     x, y, width, height = bbox
     center_x = (x + width / 2 - left) / scale_x
     center_y = (y + height / 2 - top) / scale_y

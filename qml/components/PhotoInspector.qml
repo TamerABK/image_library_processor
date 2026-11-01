@@ -12,6 +12,7 @@ FocusScope {
     property Component detailsComponent: null
     property bool showReviewActions: true
     readonly property var photo: controller ? controller.photo : ({})
+    readonly property bool previewImageReady: previewImage.status === Image.Ready
     property bool currentFavorite: false
     property bool favoritePending: false
     function refreshFavorite() {
@@ -51,7 +52,8 @@ FocusScope {
             Layout.fillWidth: true
             PrimaryButton {
                 objectName: "inspectorBack"
-                text: "← Back"
+                text: "Back"
+                iconName: "arrow_left"
                 onClicked: if (root.controller) root.controller.close()
                 Accessible.name: "Close photo inspector"
             }
@@ -64,7 +66,9 @@ FocusScope {
             }
             IconButton {
                 objectName: "inspectorFavoriteButton"
-                source: theme.iconUrl(root.currentFavorite ? "star_shape_filled.svg" : "star_shape.svg")
+                iconName: "star"
+                iconVariant: root.currentFavorite ? "filled" : "regular"
+                iconColor: theme.white
                 accessibleLabel: root.currentFavorite ? "Remove favorite" : "Add favorite"
                 visible: root.favoritesController !== null && root.favoritesController.loaded
                     && Boolean(root.photo.photoId)
@@ -87,6 +91,7 @@ FocusScope {
                 Layout.fillHeight: true
                 Rectangle { anchors.fill: parent; color: theme.imagePlaceholder }
                 Image {
+                    id: previewImage
                     objectName: "inspectorImage"
                     anchors.fill: parent
                     source: root.controller ? root.controller.previewSource : ""

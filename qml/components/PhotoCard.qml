@@ -17,6 +17,7 @@ Item {
     property bool showFavorite: true
     property bool showMenu: true
     property string badgeText: ""
+    property string warningLevel: ""
     property color cornerMaskColor: theme.libraryBackground
     readonly property bool hasImageSource: String(source).length > 0
 
@@ -81,17 +82,19 @@ Item {
                 }
             }
 
-            Image {
+            FluentIcon {
                 anchors.centerIn: parent
                 width: metrics.iconSizeLarge
                 height: metrics.iconSizeLarge
-                source: theme.iconUrl("landscape.svg")
-                fillMode: Image.PreserveAspectFit
+                name: "image"
+                size: 24
+                color: theme.midBlue
                 visible: !root.hasImageSource
                 opacity: 0.62
             }
 
             Rectangle {
+                objectName: "photoCardBadge"
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.leftMargin: metrics.spacingSmall
@@ -100,7 +103,7 @@ Item {
                 width: Math.max(48, badgeLabel.implicitWidth + metrics.spacingSmall)
                 radius: height / 2
                 color: theme.mainBlue
-                visible: root.badgeText.length > 0
+                visible: root.badgeText.length > 0 && root.warningLevel.length === 0
 
                 Text {
                     id: badgeLabel
@@ -113,37 +116,30 @@ Item {
                 }
             }
 
+            FluentIcon {
+                objectName: "photoWarningIcon"
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.leftMargin: metrics.spacingSmall
+                anchors.topMargin: metrics.spacingSmall
+                name: "warning"
+                size: 20
+                color: root.warningLevel === "red" ? theme.warningRed : theme.warningYellow
+                visible: root.warningLevel.length > 0
+                Accessible.name: root.warningLevel === "red" ? "Blurry" : "Needs review"
+            }
+
             SelectionCheckbox {
                 objectName: "photoSelectionCheckbox"
-                anchors.left: parent.left
-                anchors.bottom: parent.bottom
-                anchors.leftMargin: metrics.spacingSmall
-                anchors.bottomMargin: metrics.spacingSmall
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.rightMargin: metrics.spacingSmall
+                anchors.topMargin: metrics.spacingSmall
                 checked: root.selected
                 visible: root.showCheckbox
                 onToggled: root.selectionToggled(checked)
             }
 
-            IconButton {
-                objectName: "photoFavoriteButton"
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.rightMargin: metrics.spacingTiny
-                anchors.topMargin: metrics.spacingTiny
-                source: theme.iconUrl(root.favorite ? "star_shape_filled.svg" : "star_shape.svg")
-                accessibleLabel: root.favorite ? "Remove favorite" : "Add favorite"
-                buttonSize: 32
-                iconSize: metrics.iconSizeMedium
-                visible: root.showFavorite
-                enabled: !root.favoriteBusy
-                onClicked: root.favoriteToggled(!root.favorite)
-                background: Rectangle {
-                    radius: width / 2
-                    color: Qt.rgba(0, 0, 142 / 255, 0.72)
-                    border.width: parent.activeFocus ? 1 : 0
-                    border.color: theme.focusRing
-                }
-            }
         }
 
         Rectangle {
@@ -186,12 +182,25 @@ Item {
                 }
 
                 IconButton {
-                    source: theme.iconUrl("menu_more.svg")
+                    iconName: "more_horizontal"
+                    iconColor: theme.white
                     accessibleLabel: "Photo menu"
                     buttonSize: 30
                     iconSize: metrics.iconSizeMedium
                     visible: root.showMenu
                     onClicked: root.menuRequested()
+                }
+                IconButton {
+                    objectName: "photoFavoriteButton"
+                    iconName: "star"
+                    iconVariant: root.favorite ? "filled" : "regular"
+                    iconColor: theme.white
+                    accessibleLabel: root.favorite ? "Remove favorite" : "Add favorite"
+                    buttonSize: 30
+                    iconSize: metrics.iconSizeMedium
+                    visible: root.showFavorite
+                    enabled: !root.favoriteBusy
+                    onClicked: root.favoriteToggled(!root.favorite)
                 }
             }
         }

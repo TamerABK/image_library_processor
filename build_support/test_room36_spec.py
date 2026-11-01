@@ -113,10 +113,15 @@ class SpecContractTests(unittest.TestCase):
                 (root / "onnx_models" / name).touch()
             (root / "qml").mkdir()
             (root / "assets").mkdir()
+            (root / "third_party_licenses").mkdir()
+            (root / "third_party_licenses" / "fluent.txt").write_text("MIT")
+            (root / "licenses.md").write_text("Inventory")
             native = root / "onnxruntime_pybind11_state.pyd"
             native.touch()
+            captured = {}
             class Analysis:
                 def __init__(self, *_args, **kwargs):
+                    captured["datas"] = kwargs["datas"]
                     self.binaries = [(str(native), "onnxruntime/capi", "BINARY")]
                     self.datas = kwargs["datas"]
                     self.pure = []
@@ -131,6 +136,9 @@ class SpecContractTests(unittest.TestCase):
                            return_value=[(str(native), "onnxruntime/capi")]):
                     result = build_room36_spec("cpu", namespace)
             self.assertEqual(result, "Room36-CPU")
+            packaged = {(Path(source).name, destination) for source, destination in captured["datas"]}
+            self.assertIn(("licenses.md", "."), packaged)
+            self.assertIn(("third_party_licenses", "third_party_licenses"), packaged)
             manifest = json.loads((root / "build" / "onnx-profile-cpu" /
                                    "onnx_build_profile.json").read_text())
             self.assertEqual(manifest["profile"], "cpu")

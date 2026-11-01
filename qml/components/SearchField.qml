@@ -9,6 +9,7 @@ Control {
     property alias text: input.text
     property alias placeholderText: input.placeholderText
     property url iconSource: theme.iconUrl("search.svg")
+    property string iconName: "search"
 
     signal accepted(string text)
     signal searchAccepted(string text)
@@ -33,10 +34,22 @@ Control {
     contentItem: RowLayout {
         spacing: metrics.spacingSmall
 
+        FluentIcon {
+            Layout.preferredWidth: metrics.iconSizeMedium
+            Layout.preferredHeight: metrics.iconSizeMedium
+            name: root.iconName
+            size: 20
+            color: theme.black
+            enabled: root.enabled
+            opacity: root.enabled ? 1 : 0.36
+            visible: root.iconName.length > 0
+        }
+
         Image {
             Layout.preferredWidth: metrics.iconSizeMedium
             Layout.preferredHeight: metrics.iconSizeMedium
             source: root.iconSource
+            visible: root.iconName.length === 0
             fillMode: Image.PreserveAspectFit
             opacity: root.enabled ? 1 : 0.36
         }

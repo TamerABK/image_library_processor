@@ -14,6 +14,17 @@ from automatic_scan.state_store import (AutomaticStateStore, FolderAutomaticStat
 
 
 class AutomaticStateStoreTests(unittest.TestCase):
+    def test_first_completed_scan_duration_is_kept_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = AutomaticStateStore(temp_dir)
+            with store._database.connect() as db:
+                db.execute("INSERT INTO projects(project_id, folder, name, created_at) "
+                           "VALUES (?, ?, ?, ?)", ("project-1", str(Path(temp_dir) / "photos"), "Photos", 0))
+            self.assertIsNone(store.first_scan_seconds("project-1"))
+            store.record_first_scan("project-1", 12.4)
+            store.record_first_scan("project-1", 99.0)
+            self.assertAlmostEqual(12.4, AutomaticStateStore(temp_dir).first_scan_seconds("project-1"))
+
     def test_sqlite_restart_preserves_all_folder_details_without_writing_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             folder = str((Path(temp_dir) / "photos").resolve())

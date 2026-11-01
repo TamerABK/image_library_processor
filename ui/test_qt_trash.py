@@ -285,6 +285,15 @@ class TrashFlowTests(unittest.TestCase):
         if state == "REMOVE":
             wait_until(lambda: self.trash.count >= 1)
 
+    def test_remove_decision_hides_library_card_until_restored(self):
+        path = photo_identity(self.a / "a.jpg")
+        self.mark_blur(path)
+        self.assertNotIn(path, self.master.identities())
+        self.assertIn(path, self.master.allIdentities())
+        self.assertEqual(path, self.trash.photoModel.row(path)["photoId"])
+        self.assertTrue(self.trash.restorePhoto(path))
+        wait_until(lambda: self.trash.count == 0 and path in self.master.identities())
+
     def mark_duplicate(self, path, intent="REMOVE"):
         path = photo_identity(path)
         stat = Path(path).stat()
@@ -561,7 +570,7 @@ class TrashFlowTests(unittest.TestCase):
         self.assertEqual(self.trash.count, -1)
         self.assertEqual(self.trash.photoModel.rowCount(), 0)
         self.assertFalse(self.trash.isExecutable(path))
-        self.assertEqual(self.master.rowCount(), 3)
+        self.assertEqual(self.master.rowCount(), 2)
 
     def test_restore_write_failure_keeps_candidate_and_file(self):
         path = photo_identity(self.a / "a.jpg")
@@ -596,7 +605,7 @@ class TrashFlowTests(unittest.TestCase):
         self.assertEqual(transaction.paths, [a])
         self.assertEqual(transaction.failed_paths, [b])
         wait_until(lambda: self.projects.activeProjectFolder == photo_identity(self.a)
-                   and a not in self.master.identities())
+                   and a not in self.master.allIdentities())
         self.assertTrue(Path(b).exists())
 
     def test_changed_file_is_not_moved(self):
@@ -631,11 +640,11 @@ class TrashFlowTests(unittest.TestCase):
 
             with patch("ui.qt.trash_controller.send2trash", side_effect=move_to_trash) as move:
                 self.assertTrue(self.trash.executeSelection())
-                wait_until(lambda: not self.trash.busy and path not in self.master.identities(), timeout=8)
+                wait_until(lambda: not self.trash.busy and path not in self.master.allIdentities(), timeout=8)
                 self.assertEqual(move.call_count, 1)
                 relocated.rename(path)
                 watcher.notifyDirectoryChanged(str(self.a))
-                wait_until(lambda: path in self.master.identities() and self.trash.count == 1, timeout=8)
+                wait_until(lambda: path in self.master.allIdentities() and self.trash.count == 1, timeout=8)
                 self.assertEqual(self.trash.photoModel.selectedCount, 0)
                 self.assertEqual(move.call_count, 1)
             self.assertEqual(self.store.load(self.a).image_decisions[path].review_state, "REMOVE")
@@ -671,7 +680,7 @@ class TrashFlowTests(unittest.TestCase):
                 AutomaticStateStore, "save_deletion_transaction",
                 side_effect=sqlite3.OperationalError("read only")):
             self.assertTrue(self.trash.executeSelection())
-            wait_until(lambda: path not in self.master.identities() and self.trash.loaded)
+            wait_until(lambda: path not in self.master.allIdentities() and self.trash.loaded)
         self.assertEqual(moved, [path])
         self.assertIn("could not save the deletion history", self.trash.error)
         self.assertIn("1 photo moved", self.trash.summary)
@@ -748,7 +757,7 @@ class TrashFlowTests(unittest.TestCase):
                            and not self.projects.busy and path in self.master.identities())
                 before_refresh = self.projects._generation
                 release.set()
-                wait_until(lambda: not self.projects.busy and path not in self.master.identities())
+                wait_until(lambda: not self.projects.busy and path not in self.master.allIdentities())
             self.assertEqual(self.projects._generation, before_refresh + 1)
             self.assertEqual(self.projects.activeProjectFolder, photo_identity(nested))
             self.assertEqual(self.trash.summary, "")

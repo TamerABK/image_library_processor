@@ -98,6 +98,7 @@ Item {
             viewSize: root.viewSize
             openOnClick: true
             selectOnImageClick: true
+            showSeverityIcons: true
             emptyText: root.blurStage.state === "FAILED" ? "Image quality analysis could not finish."
                 : root.blurStage.state === "COMPLETE" ? "No blurry photos need review."
                 : "Analyzing image quality…"

@@ -45,13 +45,13 @@ Item {
             width: parent.width * 0.70
             spacing: metrics.spacingSmall
 
-            Image {
+            FluentIcon {
                 Layout.alignment: Qt.AlignHCenter
                 Layout.preferredWidth: root.viewSize === "Small" ? 46 : root.viewSize === "Large" ? 70 : 58
                 Layout.preferredHeight: Layout.preferredWidth
-                source: theme.iconUrl("import_home.svg")
-                cache: true
-                fillMode: Image.PreserveAspectFit
+                name: "arrow_download"
+                size: 48
+                color: theme.white
             }
 
             Text {

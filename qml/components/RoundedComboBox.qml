@@ -26,14 +26,15 @@ ComboBox {
         elide: Text.ElideRight
     }
 
-    indicator: Image {
+    indicator: FluentIcon {
         x: root.width - width - metrics.spacingSmall
         y: (root.height - height) / 2
         width: metrics.iconSizeSmall
         height: metrics.iconSizeSmall
-        source: theme.iconUrl("chevron_down.svg")
+        name: "chevron_down"
+        size: 16
+        color: theme.black
         rotation: root.popup.visible ? 180 : 0
-        fillMode: Image.PreserveAspectFit
     }
 
     background: Rectangle {

@@ -11,7 +11,7 @@ from app_paths import asset_path, qml_path, qml_root
 PYSIDE6_AVAILABLE = importlib.util.find_spec("PySide6") is not None
 
 if PYSIDE6_AVAILABLE:
-    from PySide6.QtCore import QUrl
+    from PySide6.QtCore import QObject, QPointF, QUrl
     from PySide6.QtGui import QFontDatabase
     from PySide6.QtQml import QQmlApplicationEngine, QQmlComponent
     from PySide6.QtWidgets import QApplication
@@ -150,3 +150,19 @@ Item {
         root = component.create()
         self.assertIsNotNone(root)
         self.assertEqual([], [warning.toString() for warning in warnings])
+        checkbox = root.findChild(QObject, "photoSelectionCheckbox")
+        favorite = root.findChild(QObject, "photoFavoriteButton")
+        badge = root.findChild(QObject, "photoCardBadge")
+        self.assertIsNotNone(checkbox)
+        self.assertIsNotNone(favorite)
+        self.assertIsNotNone(badge)
+        card = checkbox.parentItem().parentItem()
+        checkbox_pos = checkbox.mapToItem(card, QPointF(0, 0))
+        favorite_pos = favorite.mapToItem(card, QPointF(0, 0))
+        badge_pos = badge.mapToItem(card, QPointF(0, 0))
+        self.assertGreater(checkbox_pos.x(), card.width() / 2)
+        self.assertLess(checkbox_pos.y(), card.height() / 3)
+        self.assertLess(badge_pos.x(), card.width() / 3)
+        self.assertLess(badge_pos.y(), card.height() / 3)
+        self.assertGreater(favorite_pos.x(), card.width() / 2)
+        self.assertGreater(favorite_pos.y(), card.height() / 2)

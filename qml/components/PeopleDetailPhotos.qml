@@ -31,7 +31,8 @@ Item {
             PillButton {
                 objectName: "peopleDetailBack"
                 variant: "translucent"
-                text: "← Back"
+                text: "Back"
+                iconName: "arrow_left"
                 onClicked: root.backRequested()
                 Accessible.name: "Back to people"
             }
@@ -75,7 +76,7 @@ Item {
                     }
                 }
                 Text {
-                    text: (root.person.photoCount || 0) + " photos · " + (root.person.faceCount || 0) + " faces"
+                    text: (root.person.photoCount || 0) + " photos"
                     color: theme.mutedText
                     font.pixelSize: typography.body
                 }

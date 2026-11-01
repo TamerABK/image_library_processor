@@ -10,6 +10,7 @@ Button {
 
     property string label: text
     property url iconSource: ""
+    property string iconName: ""
     property bool open: popup.opened
     property var options: ["Newest", "Oldest", "Largest"]
     property color normalFill: theme.panelRaisedFill
@@ -39,8 +40,19 @@ Button {
             Layout.preferredWidth: metrics.iconSizeMedium
             Layout.preferredHeight: metrics.iconSizeMedium
             source: root.iconSource
-            visible: String(root.iconSource).length > 0
+            visible: root.iconName.length === 0 && String(root.iconSource).length > 0
             fillMode: Image.PreserveAspectFit
+        }
+
+        FluentIcon {
+            Layout.preferredWidth: metrics.iconSizeMedium
+            Layout.preferredHeight: metrics.iconSizeMedium
+            name: root.iconName
+            size: 20
+            color: theme.black
+            hovered: root.hovered
+            enabled: root.enabled
+            visible: root.iconName.length > 0
         }
 
         Text {
@@ -53,12 +65,13 @@ Button {
             verticalAlignment: Text.AlignVCenter
         }
 
-        Image {
+        FluentIcon {
             objectName: "toolbarDropdownChevron"
             Layout.preferredWidth: metrics.iconSizeSmall
             Layout.preferredHeight: metrics.iconSizeSmall
-            source: theme.iconUrl("chevron_down.svg")
-            fillMode: Image.PreserveAspectFit
+            name: "chevron_down"
+            size: 16
+            color: theme.black
             rotation: popup.opened ? 180 : 0
 
             Behavior on rotation {

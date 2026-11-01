@@ -180,7 +180,7 @@ class FacePreviewTests(unittest.TestCase):
                     self.assertLessEqual(bounds[1], bbox[1])
                     self.assertGreaterEqual(bounds[3], bbox[1] + bbox[3])
 
-    def test_edge_face_is_centered_with_dark_blurred_surroundings(self):
+    def test_edge_face_is_centered_with_bright_blurred_surroundings(self):
         image = Image.new("RGB", (240, 160), "white")
         draw = ImageDraw.Draw(image)
         for x in range(0, 240, 8):
@@ -193,7 +193,7 @@ class FacePreviewTests(unittest.TestCase):
         corner = pixels[5, preview.width - 6]
         self.assertGreater(int(center[0]), 160)
         self.assertLess(int(center[1]), 100)
-        self.assertLess(int(corner.mean()), 90)
+        self.assertGreater(int(corner.mean()), 150)
         self.assertAlmostEqual(preview.width / preview.height, 1.55, delta=0.05)
 
     def test_reduced_jpeg_and_rotated_exif_use_detector_coordinates(self):
@@ -482,8 +482,8 @@ class PeopleFlowTests(unittest.TestCase):
         session = self.processing.sessionId
         self.click("libraryNav_knownPeople")
         self.click("personCardOpen")
-        self.assertTrue(self.item("knownRenameIcon").property("source").toString().endswith("known_person_pen.svg"))
-        self.assertTrue(self.item("knownTrashIcon").property("source").toString().endswith("known_person_trash.svg"))
+        self.assertEqual(self.item("knownRenameIcon").property("iconName"), "edit")
+        self.assertEqual(self.item("knownTrashIcon").property("iconName"), "delete")
         title = self.item("peopleDetailTitle")
         pen = self.item("knownRenameIcon")
         title_right = title.mapToScene(QPointF(title.width(), 0)).x()
@@ -532,20 +532,15 @@ class PeopleFlowTests(unittest.TestCase):
         grid = self.item("peopleGrid")
         self.assertEqual(grid.property("viewSize"), "Small")
         self.assertEqual(self.item("peopleCard").property("title"), "")
-        self.assertEqual(self.item("peopleCard").property("subtitle"), "1 photo · 1 face")
-        self.assertEqual(self.item("personCardName").property("normalFill").name(), "#d7f205")
-        self.assertEqual(self.item("personCardIgnore").property("normalFill").name(), "#d7f205")
+        self.assertEqual(self.item("peopleCard").property("subtitle"), "1 photo")
+        self.assertEqual(self.item("personCardName").property("iconName"), "edit")
+        self.assertEqual(self.item("personCardIgnore").property("iconName"), "dismiss")
+        self.assertAlmostEqual(self.item("personCardName").y(),
+                               self.item("personCardIgnore").y(), delta=1)
         for name in ("personCardName", "personCardIgnore"):
             button = self.item(name)
-            self.assertTrue(button.property("compact"))
-            self.assertTrue(button.property("vignette"))
-            label = button.findChild(QObject, "pillCompactLabel")
-            self.assertIsNotNone(label)
-            center = label.mapToItem(button, QPointF(label.width() / 2, label.height() / 2))
-            self.assertAlmostEqual(center.x(), button.width() / 2, delta=0.5)
-            self.assertAlmostEqual(center.y(), button.height() / 2, delta=0.5)
-            self.assertEqual(button.property("background").opacity(), 1)
-            self.assertGreaterEqual(button.parentItem().height() - button.y() - button.height(), 9)
+            self.assertTrue(button.isVisible())
+            self.assertGreaterEqual(button.parentItem().height() - button.y() - button.height(), 5)
         self.assertLessEqual(grid.property("cellWidth") * grid.property("columns"),
                              grid.width() - grid.property("scrollbarGutter") + 0.1)
         self.assertEqual(self.item("peopleGridScrollBar").width(), 8)

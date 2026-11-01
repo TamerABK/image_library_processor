@@ -58,6 +58,11 @@ def build_room36_spec(explicit_profile: str | None, namespace: dict):
     for folder in ("qml", "assets"):
         if not (project_root / folder).is_dir():
             raise RuntimeError("Required application resource directory is missing: " + folder)
+    notice_datas = []
+    if (project_root / "licenses.md").is_file():
+        notice_datas.append((str(project_root / "licenses.md"), "."))
+    if (project_root / "third_party_licenses").is_dir():
+        notice_datas.append((str(project_root / "third_party_licenses"), "third_party_licenses"))
 
     manifest_dir = project_root / "build" / ("onnx-profile-" + profile)
     manifest_dir.mkdir(parents=True, exist_ok=True)
@@ -70,7 +75,7 @@ def build_room36_spec(explicit_profile: str | None, namespace: dict):
     analysis = namespace["Analysis"](
         [str(project_root / "main.py")], pathex=[str(project_root)],
         binaries=ort_binaries + cuda_binaries,
-        datas=model_datas + [(str(project_root / "qml"), "qml"),
+        datas=model_datas + notice_datas + [(str(project_root / "qml"), "qml"),
                              (str(project_root / "assets"), "assets"),
                              (str(manifest), ".")],
         hiddenimports=list(HIDDEN_IMPORTS),

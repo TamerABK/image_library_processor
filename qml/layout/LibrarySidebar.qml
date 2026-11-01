@@ -11,11 +11,20 @@ Rectangle {
     objectName: "librarySidebar"
 
     property string currentRoute: "library"
+    property string projectName: ""
+    property int photoCount: -1
+    property real firstScanSeconds: -1
     // Replace the map when metadata changes. Missing/negative counts stay hidden.
     property var routeCounts: ({})
     signal routeRequested(string routeId)
     signal homeRequested()
     signal settingsRequested()
+
+    function durationLabel(seconds) {
+        if (seconds < 0) return "Pending"
+        const whole = Math.round(seconds)
+        return whole < 60 ? whole + "s" : Math.floor(whole / 60) + "m " + (whole % 60) + "s"
+    }
 
     Room36Theme.Theme { id: theme }
     Room36Theme.Typography { id: typography }
@@ -57,7 +66,7 @@ Rectangle {
         id: scroll
         objectName: "librarySidebarScroll"
         anchors.top: logo.bottom
-        anchors.bottom: parent.bottom
+        anchors.bottom: bottomPanel.top
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.margins: metrics.spacingLarge
@@ -69,8 +78,18 @@ Rectangle {
             x: (scroll.availableWidth - width) / 2
             spacing: metrics.spacingTiny
 
+            Components.SidebarFilterItem {
+                objectName: "libraryHomeButton"
+                width: parent.width
+                darkSurface: true
+                label: "Home"
+                iconName: "home"
+                Accessible.checkable: false
+                onClicked: root.homeRequested()
+            }
+
             Repeater {
-                model: Routes.entries
+                model: Routes.entries.filter(function(entry) { return entry.routeId !== "trash" })
 
                 delegate: Column {
                     id: entryDelegate
@@ -94,7 +113,7 @@ Rectangle {
                         width: parent.width
                         darkSurface: true
                         label: entryDelegate.modelData.label
-                        iconSource: theme.iconUrl(entryDelegate.modelData.icon)
+                        iconName: entryDelegate.modelData.iconName
                         selected: root.currentRoute === entryDelegate.modelData.routeId
                         count: {
                             const value = root.routeCounts[entryDelegate.modelData.routeId]
@@ -106,25 +125,81 @@ Rectangle {
                 }
             }
 
-            Components.SidebarFilterItem {
-                objectName: "librarySidebarHome"
-                width: parent.width
-                darkSurface: true
-                label: "Home"
-                iconSource: theme.iconUrl("home.svg")
-                Accessible.checkable: false
-                onClicked: root.homeRequested()
-            }
+        }
+    }
 
-            Components.SidebarFilterItem {
-                objectName: "libraryPreferences"
-                enabled: false
-                width: parent.width
-                darkSurface: true
-                label: "Preferences"
-                iconSource: theme.iconUrl("settings.svg")
-                Accessible.checkable: false
-                onClicked: root.settingsRequested()
+    Column {
+        id: bottomPanel
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: metrics.spacingLarge
+        spacing: metrics.spacingTiny
+
+        Components.SidebarFilterItem {
+            objectName: "libraryNav_trash"
+            width: parent.width
+            darkSurface: true
+            label: "Trash"
+            iconName: "delete"
+            selected: root.currentRoute === "trash"
+            count: typeof root.routeCounts.trash === "number" && root.routeCounts.trash >= 0
+                ? root.routeCounts.trash : -1
+            onClicked: root.routeRequested("trash")
+        }
+        Components.SidebarFilterItem {
+            objectName: "libraryPreferences"
+            enabled: false
+            width: parent.width
+            darkSurface: true
+            label: "Settings"
+            iconName: "settings"
+            Accessible.checkable: false
+            onClicked: root.settingsRequested()
+        }
+        Rectangle {
+            objectName: "projectDetailsCard"
+            width: parent.width
+            height: 118
+            radius: 14
+            color: theme.midBlue
+            border.width: 1
+            border.color: theme.lightBlue
+            Column {
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 5
+                Text {
+                    width: parent.width
+                    text: root.projectName || "Project details"
+                    color: theme.white
+                    font.family: typography.boldFamily
+                    font.weight: Font.Bold
+                    font.pixelSize: typography.button
+                    elide: Text.ElideRight
+                }
+                Text {
+                    text: "Photos  " + (root.photoCount >= 0 ? root.photoCount : "—")
+                    color: theme.white
+                    font.family: typography.boldFamily
+                    font.weight: Font.Bold
+                    font.pixelSize: typography.caption
+                }
+                Text {
+                    text: "First scan  " + root.durationLabel(root.firstScanSeconds)
+                    color: theme.white
+                    font.family: typography.boldFamily
+                    font.weight: Font.Bold
+                    font.pixelSize: typography.caption
+                }
+                Text {
+                    text: "Blurry  " + (typeof root.routeCounts.blurry === "number" && root.routeCounts.blurry >= 0
+                        ? root.routeCounts.blurry : "—")
+                    color: theme.white
+                    font.family: typography.boldFamily
+                    font.weight: Font.Bold
+                    font.pixelSize: typography.caption
+                }
             }
         }
     }

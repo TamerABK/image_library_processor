@@ -13,6 +13,7 @@ GridView {
     property string viewSize: "Medium"
     property bool openOnClick: false
     property bool selectOnImageClick: true
+    property bool showSeverityIcons: false
     property string emptyText: "No photos in this library"
     signal photoActivated(string photoId)
     readonly property int columns: Math.max(1, Math.floor(width / (preferredCardWidth + metrics.photoCardHorizontalGap)))
@@ -112,6 +113,8 @@ GridView {
             source: delegateRoot.thumbnailSource
             selected: delegateRoot.selected
             badgeText: delegateRoot.badgeText
+            warningLevel: root.showSeverityIcons
+                ? (delegateRoot.badgeText.indexOf("Blurry") === 0 ? "red" : "yellow") : ""
             favorite: delegateRoot.favoriteValue
             favoriteBusy: delegateRoot.favoritePending
             showFavorite: root.favoritesController !== null && root.favoritesController.loaded

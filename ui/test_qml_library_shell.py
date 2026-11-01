@@ -126,7 +126,7 @@ class LibraryShellTests(unittest.TestCase):
         home.projectActivated.emit("real-adapter-id", "Adapter project")
         self.assertEqual("library", self.window.property("currentPage"))
         self.assertEqual("real-adapter-id", self.page().property("projectId"))
-        self.item("librarySidebarHome").clicked.emit()
+        self.item("libraryHomeButton").clicked.emit()
         self.assertEqual("home", self.window.property("currentPage"))
 
     def test_counts_are_optional_metadata(self):
@@ -229,6 +229,15 @@ class LibraryShellTests(unittest.TestCase):
                     self.assertLessEqual(point.x() + item.width(), width + 0.01, name)
                     self.assertLessEqual(point.y() + item.height(), height + 0.01, name)
                 scroll = self.item("librarySidebarScroll")
+                home = self.item("libraryHomeButton")
+                trash = self.item("libraryNav_trash")
+                details = self.item("projectDetailsCard")
+                self.assertLess(home.mapToItem(shell, QPointF(0, 0)).y(),
+                                self.item("libraryNav_library").mapToItem(shell, QPointF(0, 0)).y())
+                self.assertLessEqual(scroll.mapToItem(shell, QPointF(0, 0)).y() + scroll.height(),
+                                     trash.mapToItem(shell, QPointF(0, 0)).y())
+                self.assertGreater(details.mapToItem(shell, QPointF(0, 0)).y(),
+                                   self.item("libraryPreferences").mapToItem(shell, QPointF(0, 0)).y())
                 flickable = scroll.property("contentItem")
                 flickable.setProperty("contentY", max(0, flickable.property("contentHeight") - flickable.height()))
                 self.app.processEvents()

@@ -51,8 +51,19 @@ class BlurCandidateModel(PhotoListModel):
             self._selection.clear()
             self._filter, self._sort = "All candidates", "Most problematic first"
         self.results = {r["photoId"]: dict(r) for r in results}
-        self._candidate_count = sum(r["status"] in ("Blurry", "Review") for r in self.results.values())
+        self._candidate_count = sum(r["status"] in ("Blurry", "Review") and
+                                    r["photoId"] not in self._hidden for r in self.results.values())
         self._rebuild()
+
+    def setHiddenIdentities(self, identities):
+        hidden = set(identities)
+        if hidden == self._hidden:
+            return
+        self._selection.difference_update(hidden)
+        super().setHiddenIdentities(hidden)
+        self._candidate_count = sum(r.get("status") in ("Blurry", "Review") and
+                                    r["photoId"] not in hidden for r in self.results.values())
+        self.changed.emit()
 
     def _rebuild(self):
         candidates = [r for r in self.results.values() if r["status"] in ("Blurry", "Review")

@@ -63,7 +63,7 @@ Item {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
-            height: root.showIgnore ? 68 : 56
+            height: 56
             radius: surface.radius
             color: theme.footerFill
             Rectangle {
@@ -90,47 +90,45 @@ Item {
             }
             Text {
                 anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: titleText.visible ? titleText.bottom : parent.top
-                anchors.topMargin: titleText.visible ? 0 : 7
+                anchors.right: root.showIgnore ? nameButton.left : parent.right
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 9
                 anchors.leftMargin: 12
-                anchors.rightMargin: 12
+                anchors.rightMargin: 4
                 text: root.subtitle
                 color: theme.white
                 font.pixelSize: typography.detail
                 elide: Text.ElideRight
             }
-            PillButton {
+            IconButton {
                 id: nameButton
                 objectName: "personCardName"
-                variant: "filled"
-                compact: true
-                vignette: true
+                iconName: "edit"
+                iconColor: theme.white
                 visible: root.showIgnore && !root.ignored
-                anchors.left: parent.left
+                anchors.right: ignoreButton.left
                 anchors.bottom: parent.bottom
-                anchors.leftMargin: 8
-                anchors.bottomMargin: 10
-                height: 26
-                text: "Name"
+                anchors.rightMargin: 3
+                anchors.bottomMargin: 6
+                buttonSize: 28
+                iconSize: 20
                 onClicked: root.nameRequested()
-                Accessible.name: "Name " + (root.title.length > 0 ? root.title : "unknown cluster")
+                accessibleLabel: "Name " + (root.title.length > 0 ? root.title : "unknown cluster")
             }
-            PillButton {
+            IconButton {
                 id: ignoreButton
                 objectName: "personCardIgnore"
-                variant: "filled"
-                compact: true
-                vignette: true
+                iconName: root.ignored ? "arrow_undo" : "dismiss"
+                iconColor: theme.white
                 visible: root.showIgnore
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 anchors.rightMargin: 8
-                anchors.bottomMargin: 10
-                height: 26
-                text: root.ignored ? "Restore" : "Ignore"
+                anchors.bottomMargin: 6
+                buttonSize: 28
+                iconSize: 20
                 onClicked: root.ignoreRequested()
-                Accessible.name: (root.ignored ? "Restore " : "Ignore ")
+                accessibleLabel: (root.ignored ? "Restore " : "Ignore ")
                     + (root.title.length > 0 ? root.title : "unknown cluster")
             }
         }
