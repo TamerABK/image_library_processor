@@ -2,14 +2,19 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app_state_database import AppStateDatabase
-from automatic_scan.decode_pool import automatic_decode_workers
+from automatic_scan.decode_pool import automatic_decode_workers, max_manual_decode_workers
 from ui.qt.settings_controller import SettingsController, valid
 
 
 class SettingsTests(unittest.TestCase):
     def setUp(self):
+        self.cpu_patch = patch("automatic_scan.decode_pool.available_cpu_cores",
+                               return_value=(8, "physical"))
+        self.cpu_patch.start()
+        self.addCleanup(self.cpu_patch.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.db = AppStateDatabase(Path(self.temp.name) / "state.sqlite3")
         with self.db.connect() as db:
@@ -36,12 +41,13 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(self.settings.resolve("B")["worker_count"], "automatic")
 
     def test_invalid_values_and_snapshot(self):
-        self.assertFalse(valid("worker_count", 5))
-        self.assertFalse(self.settings.save("", {"worker_count": 5}))
+        self.assertFalse(valid("worker_count", 0))
+        self.assertFalse(self.settings.save("", {"worker_count": 0}))
         with self.db.connect() as db:
             db.execute("INSERT INTO global_preferences VALUES(?,?)", ("worker_count", json.dumps(12)))
             db.execute("INSERT INTO global_preferences VALUES(?,?)", ("obsolete", json.dumps("legacy")))
-        self.assertEqual(self.settings.resolve("B")["worker_count"], "automatic")
+        self.assertEqual(self.settings.scan_config("B").performance.worker_count,
+                         min(12, max_manual_decode_workers()))
         before = self.settings.scan_config("A")
         self.settings.save("", {"worker_count": 2})
         self.assertEqual(before.performance.worker_count, automatic_decode_workers())
@@ -60,9 +66,9 @@ class SettingsTests(unittest.TestCase):
             self.assertTrue(self.settings.requiresCpuConfirmation(3))
             self.assertTrue(self.settings.requiresCpuConfirmation(4))
 
-    def test_worker_options_follow_ninety_percent_with_four_worker_ceiling(self):
+    def test_worker_options_follow_ninety_percent_without_four_worker_ceiling(self):
         from unittest.mock import patch
-        for cores, expected in ((1, 1), (2, 1), (4, 3), (8, 4)):
+        for cores, expected in ((1, 1), (2, 1), (4, 3), (8, 7), (16, 14)):
             with self.subTest(cores=cores), patch("automatic_scan.decode_pool.available_cpu_cores",
                                                   return_value=(cores, "physical")):
                 self.assertEqual(expected, self.settings.pageData("")["maxWorkers"])

@@ -26,6 +26,12 @@ from scan_controls import CancellationToken, ScanCancelledError
 
 
 class DecodePoolTests(unittest.TestCase):
+    def setUp(self):
+        cpu_patch = patch("automatic_scan.decode_pool.available_cpu_cores",
+                          return_value=(8, "physical"))
+        cpu_patch.start()
+        self.addCleanup(cpu_patch.stop)
+
     def _records(self, folder: Path, count=8):
         records = []
         for index in range(count):
@@ -39,28 +45,33 @@ class DecodePoolTests(unittest.TestCase):
                 ".jpg", "landscape", stat.st_mtime, 128, 96))
         return records
 
-    def test_adaptive_worker_count_and_hard_maximum(self):
+    def test_adaptive_worker_count_and_cpu_limit(self):
         self.assertGreaterEqual(_available_logical_processors(), 1)
         with (patch("automatic_scan.decode_pool._available_logical_processors", return_value=4),
+              patch("automatic_scan.decode_pool.available_cpu_cores", return_value=(4, "physical")),
               patch.dict(os.environ, {}, clear=False)):
             os.environ.pop("ROOM36_DECODE_WORKERS", None)
             self.assertEqual(decode_workers_from_environment(), 2)
-        with patch.dict(os.environ, {"ROOM36_DECODE_WORKERS": "4"}):
-            self.assertEqual(decode_workers_from_environment(), 4)
-        with patch("automatic_scan.decode_pool._available_logical_processors", return_value=1):
+        with (patch("automatic_scan.decode_pool.available_cpu_cores", return_value=(8, "physical")),
+              patch.dict(os.environ, {"ROOM36_DECODE_WORKERS": "6"})):
+            self.assertEqual(decode_workers_from_environment(), 6)
+        with (patch("automatic_scan.decode_pool._available_logical_processors", return_value=1),
+              patch("automatic_scan.decode_pool.available_cpu_cores", return_value=(1, "physical"))):
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("ROOM36_DECODE_WORKERS", None)
-                self.assertEqual(decode_workers_from_environment(), 0)
-        with patch("automatic_scan.decode_pool._available_logical_processors", return_value=2):
+                self.assertEqual(decode_workers_from_environment(), 1)
+        with (patch("automatic_scan.decode_pool._available_logical_processors", return_value=2),
+              patch("automatic_scan.decode_pool.available_cpu_cores", return_value=(2, "physical"))):
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("ROOM36_DECODE_WORKERS", None)
-                self.assertEqual(decode_workers_from_environment(), 0)
-        with patch("automatic_scan.decode_pool._available_logical_processors", return_value=12):
+                self.assertEqual(decode_workers_from_environment(), 1)
+        with (patch("automatic_scan.decode_pool._available_logical_processors", return_value=12),
+              patch("automatic_scan.decode_pool.available_cpu_cores", return_value=(12, "physical"))):
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("ROOM36_DECODE_WORKERS", None)
-                self.assertEqual(decode_workers_from_environment(), 4)
-        with self.assertRaises(ValueError):
-            BoundedDecodePool(workers=5, memory_budget_bytes=1024)
+                self.assertEqual(decode_workers_from_environment(), 10)
+            with self.assertRaises(ValueError):
+                BoundedDecodePool(workers=11, memory_budget_bytes=1024)
 
     def test_ordered_decodes_match_loader_and_close_threads(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -85,6 +96,19 @@ class DecodePoolTests(unittest.TestCase):
             finally:
                 pool.close()
             self.assertFalse(any(t.name.startswith("room36-decode") for t in threading.enumerate()))
+
+    def test_pool_accepts_more_than_four_when_cpu_allows(self):
+        with patch("automatic_scan.decode_pool.available_cpu_cores", return_value=(12, "physical")):
+            pool = BoundedDecodePool(workers=6, memory_budget_bytes=2_000_000)
+        try:
+            self.assertEqual(pool.workers, 6)
+            with tempfile.TemporaryDirectory() as folder:
+                records = self._records(Path(folder), 12)
+                list(pool.ordered(records, ImageLoader(), max_dimension=64,
+                                  grayscale=False, token=CancellationToken()))
+                self.assertLessEqual(pool.maximum_pending, 6)
+        finally:
+            pool.close()
 
     def test_cancel_stops_submission_and_releases_workers(self):
         with tempfile.TemporaryDirectory() as folder:

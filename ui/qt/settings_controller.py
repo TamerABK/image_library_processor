@@ -19,7 +19,7 @@ DEFAULTS = {
 
 def valid(key, value):
     if key == "worker_count":
-        return value == "automatic" or type(value) is int and 1 <= value <= 4
+        return value == "automatic" or type(value) is int and value >= 1
     if key == "memory_usage":
         return value in ("automatic", "conservative")
     if key == "blur_policy":
@@ -78,7 +78,7 @@ class SettingsController(QObject):
 
     @Slot(int, result=bool)
     def requiresCpuConfirmation(self, selected_workers):
-        return type(selected_workers) is int and 1 <= selected_workers <= 4 and selected_workers / available_cpu_cores()[0] >= 0.75
+        return type(selected_workers) is int and selected_workers >= 1 and selected_workers / available_cpu_cores()[0] >= 0.75
 
     @Slot(str, result="QVariantMap")
     def pageData(self, project_id):

@@ -22,7 +22,7 @@ Item {
     Room36Theme.Typography { id: typography }
     readonly property var workerValues: {
         let values = ["automatic"]
-        for (let n = 1; n <= (pageState.maxWorkers || 4); n++) values.push(n)
+        for (let n = 1; n <= (pageState.maxWorkers || 1); n++) values.push(n)
         return values
     }
     readonly property var workerLabels: workerValues.map(v => v === "automatic" ? "Automatic (recommended)" : v + (v === 1 ? " worker" : " workers"))
@@ -179,7 +179,7 @@ Item {
                         }
                         Label {
                             visible: modelData.key === "worker_count"
-                            text: "Available " + root.pageState.cpuCores + " " + root.pageState.cpuSource + ". Manual choices: 1–" + root.pageState.maxWorkers + " workers (up to 90% of cores, capped at four). Selected: " + (root.draft.worker_count === "automatic" ? "Automatic" : root.draft.worker_count + " workers") + ". This is a concurrency limit, not a CPU usage percentage."
+                            text: "Available " + root.pageState.cpuCores + " " + root.pageState.cpuSource + ". Manual choices: 1–" + root.pageState.maxWorkers + " workers (up to 90% of cores). Selected: " + (root.draft.worker_count === "automatic" ? "Automatic" : root.draft.worker_count + " workers") + ". This is a concurrency limit, not a CPU usage percentage."
                             wrapMode: Text.WordWrap; Layout.fillWidth: true; color: theme.mutedText
                         }
                     }

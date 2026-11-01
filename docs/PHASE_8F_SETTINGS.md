@@ -13,11 +13,11 @@ is queued. Changes saved during processing take effect on the next scan.
 Defaults: automatic decoding workers, automatic memory usage, Keep All blur
 handling (the former Qt default), balanced face quality, one duplicate keeper,
 open-eye preference on, primary-face-quality priority on. Automatic decoding
-leaves two logical processors available where possible and is capped at four.
+leaves two logical processors available where possible and respects the 90% core limit.
 The warning uses physical core count from `psutil` capped by process affinity's
 logical processor count. If unavailable, it explicitly falls back to available
 logical processors. Manual choices run from one through 90% of available cores,
-rounded down and capped at four. One worker remains available on a one-core
+rounded down. One worker remains available on a one-core
 machine so scans can make progress. A worker count limits concurrent JPEG decode tasks; it is
 not a CPU utilization target.
 

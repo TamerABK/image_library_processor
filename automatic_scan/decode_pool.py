@@ -23,7 +23,6 @@ from .perf import active_profiler, get_active_profiler
 from .profiling import profile_count, profile_scope
 
 
-MAX_DECODE_WORKERS = 4
 DEFAULT_MEMORY_MIB = 512
 
 
@@ -75,25 +74,23 @@ def _available_memory_bytes() -> int | None:
 
 
 def decode_workers_from_environment() -> int:
-    logical = _available_logical_processors()
-    default = (0 if logical <= 2 else
-               min(MAX_DECODE_WORKERS, max(1, logical - 2)))
+    default = automatic_decode_workers()
     try:
         configured = int(os.environ.get("ROOM36_DECODE_WORKERS", str(default)))
     except ValueError:
         return default
-    return configured if 0 <= configured <= MAX_DECODE_WORKERS else default
+    return configured if 0 <= configured <= max_manual_decode_workers() else default
 
 
 def automatic_decode_workers() -> int:
     """Leave headroom on small systems; always use at least one worker."""
     return min(max_manual_decode_workers(),
-               max(1, min(MAX_DECODE_WORKERS, _available_logical_processors() - 2)))
+               max(1, _available_logical_processors() - 2))
 
 
 def max_manual_decode_workers() -> int:
     """At most 90% of available cores, with one worker needed to make progress."""
-    return max(1, min(MAX_DECODE_WORKERS, int(available_cpu_cores()[0] * 0.9)))
+    return max(1, int(available_cpu_cores()[0] * 0.9))
 
 
 def available_cpu_cores() -> tuple[int, str]:
@@ -125,8 +122,8 @@ class Decoded:
 
 class BoundedDecodePool:
     def __init__(self, *, workers: int, memory_budget_bytes: int):
-        if not 1 <= workers <= MAX_DECODE_WORKERS:
-            raise ValueError("decode worker count must be 1 through 4")
+        if not 1 <= workers <= max_manual_decode_workers():
+            raise ValueError("decode worker count exceeds available CPU limit")
         self.workers = workers
         self.memory_budget_bytes = max(1, memory_budget_bytes)
         self._executor = ThreadPoolExecutor(max_workers=workers,
