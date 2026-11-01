@@ -85,6 +85,24 @@ def decode_workers_from_environment() -> int:
     return configured if 0 <= configured <= MAX_DECODE_WORKERS else default
 
 
+def automatic_decode_workers() -> int:
+    """Leave headroom on small systems; always use at least one worker."""
+    return max(1, min(MAX_DECODE_WORKERS, _available_logical_processors() - 2))
+
+
+def available_cpu_cores() -> tuple[int, str]:
+    """Physical cores where known, capped by process affinity; logical fallback."""
+    logical = _available_logical_processors()
+    try:
+        import psutil
+        physical = psutil.cpu_count(logical=False)
+        if physical and physical > 0:
+            return max(1, min(physical, logical)), "physical cores (affinity capped)"
+    except (ImportError, OSError, ValueError):
+        pass
+    return logical, "available logical processors (fallback)"
+
+
 def decode_memory_budget_from_environment() -> int:
     try:
         mib = int(os.environ.get("ROOM36_DECODE_MEMORY_MIB", str(DEFAULT_MEMORY_MIB)))

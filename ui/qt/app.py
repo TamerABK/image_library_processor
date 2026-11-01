@@ -71,7 +71,9 @@ def run_app() -> int:
     bridge = QtPhotoCleanerBridge(parent=application)
     thumbnails = ThumbnailService(parent=application)
     photo_model = PhotoListModel(thumbnails, parent=application)
-    processing = ProjectProcessingController(thumbnails, parent=application)
+    from .settings_controller import SettingsController
+    settings = SettingsController(parent=application)
+    processing = ProjectProcessingController(thumbnails, parent=application, settings=settings)
     face_previews = FacePreviewService(parent=application)
     people = PeopleController(processing, face_previews, thumbnails, parent=application)
     duplicates = DuplicateReviewController(processing, thumbnails, parent=application)
@@ -108,6 +110,7 @@ def run_app() -> int:
             "photoModel": photo_model,
             "projectController": projects,
             "processingController": processing,
+            "settingsController": settings,
             "peopleController": people,
             "duplicateController": duplicates,
             "favoritesController": favorites,

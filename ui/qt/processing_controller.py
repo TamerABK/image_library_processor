@@ -18,6 +18,7 @@ from automatic_scan.profiling_resources import ResourceSampler
 from scan_controls import CancellationToken
 from .blur_model import BlurCandidateModel
 from .photo_model import photo_identity
+from .settings_controller import SettingsController
 
 
 PROCESSING_SHUTDOWN_TIMEOUT_SECONDS = 10.0
@@ -26,7 +27,7 @@ PROCESSING_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 def _processing_worker(tasks, results, stop, runner, store, cache_path):
     while not stop.is_set():
         try:
-            session, folder, paths, token, queued_ns = tasks.get(timeout=0.05)
+            session, folder, paths, token, queued_ns, config = tasks.get(timeout=0.05)
         except Empty:
             continue
         profile_dir = os.environ.get("ROOM36_PROFILE_DIR")
@@ -71,7 +72,7 @@ def _processing_worker(tasks, results, stop, runner, store, cache_path):
                                                session, folder, len(paths))
                         orchestrator = runner or AutomaticScanOrchestrator(state_store=store)
                         orchestrator.process_project(folder, paths, emit=emit,
-                            cancellation_token=token, cache_path=cache_path)
+                            cancellation_token=token, cache_path=cache_path, config=config)
                         get_scan_logger().info("processing_session_finished session=%s folder=%s", session, folder)
                     except Exception:
                         get_scan_logger().exception("processing_worker_failed session=%s folder=%s photo_count=%d",
@@ -103,11 +104,12 @@ class ProjectProcessingController(QObject):
     LABELS = dict(blur="Image quality", duplicates="Near duplicates", faces="Face detection",
         face_quality="Face quality", embeddings="Face embeddings", people="People matching", ranking="Representatives")
 
-    def __init__(self, thumbnails, parent=None, *, cache_path=None, state_root=None, runner=None):
+    def __init__(self, thumbnails, parent=None, *, cache_path=None, state_root=None, runner=None, settings=None):
         super().__init__(parent)
         self._blur = BlurCandidateModel(thumbnails, self)
         self._blur.changed.connect(self.changed)
         self._store = AutomaticStateStore(state_root)
+        self._settings = settings or SettingsController(parent=self)
         self._cache_path = cache_path
         self._session = 0
         self._project_id = ""
@@ -219,7 +221,7 @@ class ProjectProcessingController(QObject):
         except Empty:
             pass
         self._tasks.put_nowait((self._session, self._folder, list(self._paths), self._token,
-                               time.perf_counter_ns()))
+                               time.perf_counter_ns(), self._settings.scan_config(self._project_id)))
         self._timer.start()
         self.changed.emit()
 

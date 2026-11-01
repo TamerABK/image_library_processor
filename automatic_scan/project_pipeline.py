@@ -126,7 +126,7 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
             models.append((name, stat.st_size, stat.st_mtime_ns))
         except OSError:
             models.append((name, "missing"))
-    face_key = signature(["faces-v1", models, config.cache_signature()])
+    face_key = signature(["faces-v1", models, config.faces, config.people_picture])
     diagnostics = {}
     completed = set()
     try:
@@ -141,12 +141,15 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
         if cache_batch_size is not None else None)
     if cache_session is not None:
         cache_session.__enter__()
-    decode_workers = decode_workers_from_environment()
+    # A deliberate benchmark override takes precedence only when explicitly set.
+    decode_workers = (decode_workers_from_environment() if "ROOM36_DECODE_WORKERS" in os.environ
+                      else config.performance.worker_count or decode_workers_from_environment())
     decode_pool = None
     if decode_workers and type(services) is AutomaticScanServices:
         try:
             decode_pool = BoundedDecodePool(workers=decode_workers,
-                memory_budget_bytes=decode_memory_budget_from_environment())
+                memory_budget_bytes=min(decode_memory_budget_from_environment(),
+                    128 * 1024 * 1024 if config.performance.memory_conservative else 512 * 1024 * 1024))
         except (OSError, RuntimeError):
             logger.exception("decode_pool_unavailable folder=%s; using sequential decoding", folder)
 
@@ -356,6 +359,11 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
             if decision and (decision.file_size, decision.mtime_ns) == (row["file_size"], row["mtime_ns"]):
                 intent = decision.review_state or ("KEEP" if decision.manually_kept else
                          "REMOVE" if decision.selected_for_deletion else "UNDECIDED")
+            if intent == "UNDECIDED":
+                if row["status"] == "Blurry" and config.blur_policy is not BlurPolicy.KEEP_ALL:
+                    intent = "REMOVE"
+                elif row["status"] == "Review" and config.blur_policy is BlurPolicy.REVIEW_BORDERLINE:
+                    intent = "REVIEW"
             row["reviewState"] = intent if intent in {"UNDECIDED", "KEEP", "REVIEW", "REMOVE"} else "UNDECIDED"
         if not rows and paths:
             raise ValueError("No readable photos")
@@ -633,7 +641,8 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
         def ranking(stats, progress):
             if groups is None:
                 raise ValueError("Duplicate groups unavailable")
-            key = signature(["ranking-v1", fingerprint, face_key, duplicate_key, config.cache_signature(),
+            key = signature(["ranking-v1", fingerprint, face_key, duplicate_key,
+                             config.face_quality_preset, config.blur_policy, config.duplicate_selection,
                              "face_quality" in completed, sorted(face_results)])
             value = cache.get(folder, "ranking", key)
             if value is None:

@@ -20,6 +20,14 @@ class AppStateDatabase:
                 CREATE TABLE IF NOT EXISTS app_migrations (
                     migration_key TEXT PRIMARY KEY
                 );
+                CREATE TABLE IF NOT EXISTS global_preferences (
+                    key TEXT PRIMARY KEY, value TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS project_preference_overrides (
+                    project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+                    key TEXT NOT NULL, value TEXT NOT NULL,
+                    PRIMARY KEY (project_id, key)
+                );
                 CREATE TABLE IF NOT EXISTS projects (
                     project_id TEXT PRIMARY KEY,
                     folder TEXT NOT NULL UNIQUE,
