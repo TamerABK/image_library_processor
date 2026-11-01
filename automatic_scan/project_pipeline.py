@@ -80,6 +80,16 @@ class _BenchmarkStop(BaseException):
     """Stop after a completed stage without changing any production stage result."""
 
 
+def configured_decode_memory_budget(config: AutomaticScanConfig) -> int:
+    """Per-scan ceiling; resource sampling can reduce the pool's active budget."""
+    budget = config.performance.decode_memory_budget_mib * 1024 * 1024
+    if config.performance.memory_conservative:
+        budget = max(64 * 1024 * 1024, budget // 4)
+    if "ROOM36_DECODE_MEMORY_MIB" in os.environ:
+        budget = min(budget, decode_memory_budget_from_environment())
+    return budget
+
+
 def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
                     cache_path=None, config=None, services=None, benchmark_stop_after=None):
     logger = get_scan_logger()
@@ -148,8 +158,7 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
     if decode_workers and type(services) is AutomaticScanServices:
         try:
             decode_pool = BoundedDecodePool(workers=decode_workers,
-                memory_budget_bytes=min(decode_memory_budget_from_environment(),
-                    128 * 1024 * 1024 if config.performance.memory_conservative else 512 * 1024 * 1024))
+                memory_budget_bytes=configured_decode_memory_budget(config))
         except (OSError, RuntimeError):
             logger.exception("decode_pool_unavailable folder=%s; using sequential decoding", folder)
 

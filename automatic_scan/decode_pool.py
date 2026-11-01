@@ -111,7 +111,7 @@ def decode_memory_budget_from_environment() -> int:
         mib = int(os.environ.get("ROOM36_DECODE_MEMORY_MIB", str(DEFAULT_MEMORY_MIB)))
     except ValueError:
         mib = DEFAULT_MEMORY_MIB
-    return max(64, min(2048, mib)) * 1024 * 1024
+    return max(64, min(4096, mib)) * 1024 * 1024
 
 
 @dataclass(frozen=True)

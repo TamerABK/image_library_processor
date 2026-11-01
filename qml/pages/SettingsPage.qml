@@ -30,6 +30,7 @@ Item {
     readonly property var fields: [
         {key:"worker_count", title:"Processing workers", options:workerLabels, values:workerValues},
         {key:"memory_usage", title:"Memory usage", options:["Automatic (recommended)","Conservative"], values:["automatic","conservative"]},
+        {key:"decode_memory_budget_mib", title:"Decoder memory budget", options:["512 MB","1 GB","1.5 GB","2 GB","2.5 GB","3 GB","3.5 GB","4 GB"], values:[512,1024,1536,2048,2560,3072,3584,4096]},
         {key:"blur_policy", title:"Blur handling", options:["Automatic","Review Borderline","Keep All"], values:["automatic","review_borderline","keep_all"]},
         {key:"face_quality_preset", title:"Face-quality sensitivity", options:["Relaxed","Balanced","Strict"], values:["relaxed","balanced","strict"]},
         {key:"keepers_per_group", title:"Preferred photographs per duplicate group", options:["1","2","3","4","5"], values:[1,2,3,4,5]},
@@ -180,6 +181,11 @@ Item {
                         Label {
                             visible: modelData.key === "worker_count"
                             text: "Available " + root.pageState.cpuCores + " " + root.pageState.cpuSource + ". Manual choices: 1–" + root.pageState.maxWorkers + " workers (up to 90% of cores). Selected: " + (root.draft.worker_count === "automatic" ? "Automatic" : root.draft.worker_count + " workers") + ". This is a concurrency limit, not a CPU usage percentage."
+                            wrapMode: Text.WordWrap; Layout.fillWidth: true; color: theme.mutedText
+                        }
+                        Label {
+                            visible: modelData.key === "decode_memory_budget_mib"
+                            text: "Maximum decoding prefetch budget. Conservative memory usage applies one quarter of this value; available memory may reduce it further."
                             wrapMode: Text.WordWrap; Layout.fillWidth: true; color: theme.mutedText
                         }
                     }

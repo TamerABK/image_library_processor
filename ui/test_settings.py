@@ -59,6 +59,18 @@ class SettingsTests(unittest.TestCase):
             db.execute("DELETE FROM projects WHERE project_id='A'")
             self.assertEqual(db.execute("SELECT count(*) FROM project_preference_overrides").fetchone()[0], 0)
 
+    def test_decoder_memory_budget_inheritance_and_validation(self):
+        for value in (0, 511, 513, 4608, True):
+            self.assertFalse(valid("decode_memory_budget_mib", value))
+        self.assertTrue(self.settings.save("", {"decode_memory_budget_mib": 2048}))
+        self.assertEqual(SettingsController(self.db).scan_config("B").performance.decode_memory_budget_mib, 2048)
+        self.assertTrue(self.settings.save("A", {"decode_memory_budget_mib": 4096}))
+        self.assertTrue(self.settings.save("", {"decode_memory_budget_mib": 1024}))
+        self.assertEqual(self.settings.scan_config("A").performance.decode_memory_budget_mib, 4096)
+        self.assertEqual(self.settings.scan_config("B").performance.decode_memory_budget_mib, 1024)
+        self.settings.reset("A")
+        self.assertEqual(self.settings.scan_config("A").performance.decode_memory_budget_mib, 1024)
+
     def test_cpu_warning_boundary(self):
         from unittest.mock import patch
         with patch("ui.qt.settings_controller.available_cpu_cores", return_value=(4, "physical")):

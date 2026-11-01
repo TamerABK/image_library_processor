@@ -21,9 +21,11 @@ rounded down. One worker remains available on a one-core
 machine so scans can make progress. A worker count limits concurrent JPEG decode tasks; it is
 not a CPU utilization target.
 
-The decoding pool uses 512 MiB in automatic memory mode and 128 MiB in
-conservative mode, still subject to its existing available-memory limit and
-bounded prefetch queue. `ROOM36_DECODE_WORKERS` remains an explicit benchmark
+The decoder memory budget defaults to 512 MiB and can be set from 512 MiB to
+4096 MiB in 512 MiB steps, globally or per project. Automatic memory mode uses
+the selected ceiling; Conservative uses one quarter of it. The pool still
+applies its available-memory limit and bounded prefetch queue.
+`ROOM36_DECODE_WORKERS` remains an explicit benchmark
 override when set and takes precedence over saved worker preferences.
 `ROOM36_DECODE_MEMORY_MIB` can lower the selected memory budget but cannot
 raise it above the mode's cap.

@@ -16,9 +16,9 @@ from automatic_scan.decode_pool import (BoundedDecodePool,
     _available_logical_processors, decode_memory_budget_from_environment,
     decode_workers_from_environment)
 from automatic_scan.models import DiscoveryRecord
-from automatic_scan.config import AutomaticScanConfig, BlurPolicy
+from automatic_scan.config import AutomaticScanConfig, BlurPolicy, PerformanceConfig
 from automatic_scan.orchestrator import AutomaticScanOrchestrator
-from automatic_scan.project_pipeline import process_project
+from automatic_scan.project_pipeline import process_project, configured_decode_memory_budget
 from automatic_scan.services import AutomaticScanServices
 from automatic_scan.state_store import AutomaticStateStore
 from image_loader import ImageLoader
@@ -144,7 +144,21 @@ class DecodePoolTests(unittest.TestCase):
 
     def test_memory_configuration_is_bounded(self):
         with patch.dict(os.environ, {"ROOM36_DECODE_MEMORY_MIB": "100000"}):
-            self.assertEqual(decode_memory_budget_from_environment(), 2048 * 1024 * 1024)
+            self.assertEqual(decode_memory_budget_from_environment(), 4096 * 1024 * 1024)
+
+    def test_selected_memory_budget_reaches_pool_ceiling(self):
+        for mib in range(512, 4097, 512):
+            for conservative in (False, True):
+                config = AutomaticScanConfig(performance=PerformanceConfig(
+                    decode_memory_budget_mib=mib, memory_conservative=conservative))
+                with patch.dict(os.environ, {}, clear=False):
+                    os.environ.pop("ROOM36_DECODE_MEMORY_MIB", None)
+                    expected = mib // 4 if conservative else mib
+                    self.assertEqual(configured_decode_memory_budget(config), expected * 1024 * 1024)
+        config = AutomaticScanConfig(performance=PerformanceConfig(
+            decode_memory_budget_mib=4096, memory_conservative=False))
+        with patch.dict(os.environ, {"ROOM36_DECODE_MEMORY_MIB": "1024"}):
+            self.assertEqual(configured_decode_memory_budget(config), 1024 * 1024 * 1024)
 
     def test_low_available_memory_reduces_prefetch_depth(self):
         with tempfile.TemporaryDirectory() as folder:

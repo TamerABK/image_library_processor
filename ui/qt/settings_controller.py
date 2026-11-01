@@ -11,6 +11,7 @@ from automatic_scan.decode_pool import available_cpu_cores, automatic_decode_wor
 
 DEFAULTS = {
     "worker_count": "automatic", "memory_usage": "automatic",
+    "decode_memory_budget_mib": 512,
     "blur_policy": "keep_all", "face_quality_preset": "balanced",
     "keepers_per_group": 1, "prefer_open_eyes": True,
     "prioritize_primary_face_quality": True,
@@ -22,6 +23,8 @@ def valid(key, value):
         return value == "automatic" or type(value) is int and value >= 1
     if key == "memory_usage":
         return value in ("automatic", "conservative")
+    if key == "decode_memory_budget_mib":
+        return type(value) is int and 512 <= value <= 4096 and value % 512 == 0
     if key == "blur_policy":
         return value in ("automatic", "review_borderline", "keep_all")
     if key == "face_quality_preset":
@@ -74,7 +77,8 @@ class SettingsController(QObject):
                 prefer_open_eyes=values["prefer_open_eyes"],
                 prioritize_primary_face_quality=values["prioritize_primary_face_quality"]),
             performance=PerformanceConfig(worker_count=(automatic_decode_workers() if workers == "automatic" else min(workers, max_manual_decode_workers())),
-                memory_conservative=values["memory_usage"] == "conservative", batch_size=32))
+                memory_conservative=values["memory_usage"] == "conservative",
+                decode_memory_budget_mib=values["decode_memory_budget_mib"], batch_size=32))
 
     @Slot(int, result=bool)
     def requiresCpuConfirmation(self, selected_workers):

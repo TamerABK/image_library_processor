@@ -100,6 +100,7 @@ class PerformanceConfig:
     batch_size: int | None = None
     worker_count: int | None = None
     memory_conservative: bool = True
+    decode_memory_budget_mib: int = 512
 
 
 @dataclass(frozen=True, slots=True)
