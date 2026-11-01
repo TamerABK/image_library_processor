@@ -147,6 +147,7 @@ class LibraryShellTests(unittest.TestCase):
         self.window.settingsRequested.connect(lambda: events.append(("settings",)))
         self.item("librarySortButton").optionSelected.emit("Date")
         self.item("libraryViewButton").optionSelected.emit("Medium")
+        self.assertTrue(self.item("libraryPreferences").property("enabled"))
         self.item("libraryPreferences").clicked.emit()
         self.assertEqual([("project-a", "duplicates", "Date"), ("project-a", "duplicates", "Medium"), ("settings",)], events)
 

@@ -64,7 +64,6 @@ Item {
 
         Components.IconButton {
             objectName: "homeSettingsButton"
-            enabled: false
             Layout.preferredWidth: 62.18
             Layout.preferredHeight: 62.18
             buttonSize: 62.18
