@@ -115,6 +115,8 @@ FocusScope {
             ColumnLayout {
                 visible: root.detailsComponent === null
                 Layout.preferredWidth: root.width < 900 ? 180 : 240
+                Layout.minimumWidth: 0
+                Layout.maximumWidth: root.width < 900 ? 180 : 240
                 Layout.alignment: Qt.AlignTop
                 Text { text: "Image quality"; color: theme.mainBlue; font.pixelSize: 22 }
                 Text { text: root.photo.classification || ""; color: theme.mainBlue; font.pixelSize: 18 }

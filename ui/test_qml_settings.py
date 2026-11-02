@@ -3,7 +3,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtCore import QObject, Property, Signal, Slot
+from PySide6.QtCore import QObject, QPointF, Property, Signal, Slot
+from PySide6.QtGui import QColor
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication
 
@@ -11,7 +12,7 @@ from app_paths import qml_path
 from app_state_database import AppStateDatabase
 from ui.qt.app import configure_quick_controls_style
 from ui.qt.settings_controller import SettingsController
-from ui.test_qt_thumbnails import capture_qt_warnings
+from ui.test_qt_thumbnails import capture_qt_warnings, wait_until
 
 
 class ProcessingStub(QObject):
@@ -134,6 +135,38 @@ class SettingsQmlTests(unittest.TestCase):
         self.assertTrue(self.window.isVisible())
         self.assertTrue(dialog.property("visible"))
         dialog.reject()
+
+    def test_confirmation_dialogs_have_rounded_surfaces_and_readable_blue_buttons(self):
+        for dialog_name, surface_name, button_name, next_button_name, last_button_name in (
+            ("performanceConfirmation", "performanceDialogSurface", "performanceCancel", "performanceEnable", "performanceEnable"),
+            ("resetDialog", "resetDialogSurface", "resetCancel", "resetConfirm", "resetConfirm"),
+            ("unsavedSettingsConfirmation", "unsavedDialogSurface", "unsavedSave", "unsavedDiscard", "unsavedCancel"),
+        ):
+            with self.subTest(dialog=surface_name):
+                dialog = self.page.findChild(QObject, dialog_name)
+                surface = self.page.findChild(QObject, surface_name)
+                button = self.page.findChild(QObject, button_name)
+                next_button = self.page.findChild(QObject, next_button_name)
+                last_button = self.page.findChild(QObject, last_button_name)
+                self.assertIsNotNone(dialog)
+                self.assertIsNotNone(surface)
+                self.assertIsNotNone(button)
+                self.assertIsNotNone(next_button)
+                self.assertIsNotNone(last_button)
+                self.assertGreater(surface.property("radius"), 20)
+                self.assertEqual("accent", button.property("variant"))
+                self.assertEqual(QColor("#00008e"), button.property("normalFill"))
+                self.assertEqual(QColor("#ffffff"), button.property("foreground"))
+                dialog.open()
+                self.app.processEvents()
+                self.assertLess(button.x(), next_button.x())
+                surface_bottom_right = surface.mapToScene(QPointF(surface.width(), surface.height()))
+                button_bottom_right = last_button.mapToScene(QPointF(last_button.width(), last_button.height()))
+                self.assertGreaterEqual(surface_bottom_right.x() - button_bottom_right.x(), 8)
+                self.assertGreaterEqual(surface_bottom_right.y() - button_bottom_right.y(), 8)
+                button.forceActiveFocus()
+                wait_until(lambda: button.property("background").property("color") == QColor("#4b44e0"))
+                dialog.reject()
 
 
 if __name__ == "__main__": unittest.main()

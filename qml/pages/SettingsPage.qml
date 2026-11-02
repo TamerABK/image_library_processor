@@ -227,10 +227,27 @@ Item {
         objectName: "performanceConfirmation"
         title: "Enable Performance Mode?"
         modal: true; anchors.centerIn: parent; width: 460
-        background: Rectangle { radius: metrics.radiusLarge; color: theme.white; border.color: theme.separator }
-        footer: DialogButtonBox {
-            Components.PillButton { text: "Cancel"; variant: "translucent"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
-            Components.PillButton { text: "Enable Performance"; variant: "accent"; DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole }
+        background: Rectangle { objectName: "performanceDialogSurface"; radius: metrics.radiusLarge; color: theme.white; border.width: 1; border.color: theme.separator }
+        header: Label {
+            text: cpuWarning.title
+            color: theme.mainBlue
+            font.family: typography.buttonFamily
+            font.pixelSize: 18
+            font.bold: true
+            padding: 20
+            bottomPadding: 0
+        }
+        footer: Item {
+            implicitHeight: performanceButtons.implicitHeight + 20
+            RowLayout {
+                id: performanceButtons
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                Components.PillButton { objectName: "performanceCancel"; text: "Cancel"; variant: "accent"; onClicked: cpuWarning.reject() }
+                Components.PillButton { objectName: "performanceEnable"; text: "Enable Performance"; variant: "filled"; onClicked: cpuWarning.accept() }
+            }
         }
         onAccepted: { root.choose("performance_mode", root.pendingMode); root.pendingMode = ""; root.pendingSelection = null }
         onRejected: {
@@ -238,16 +255,34 @@ Item {
             root.pendingMode = ""
             root.pendingSelection = null
         }
-        contentItem: Label { text: "Performance mode uses more CPU resources to process images faster. Your computer may become less responsive while scanning large projects."; wrapMode: Text.WordWrap; width: 420 }
+        contentItem: Label { text: "Performance mode uses more CPU resources to process images faster. Your computer may become less responsive while scanning large projects."; wrapMode: Text.WordWrap; width: 420; color: theme.mainBlue }
     }
     Dialog {
         id: resetDialog
+        objectName: "resetDialog"
         title: "Reset settings?"
         modal: true; anchors.centerIn: parent; width: 460
-        background: Rectangle { radius: metrics.radiusLarge; color: theme.white; border.color: theme.separator }
-        footer: DialogButtonBox {
-            Components.PillButton { text: "Cancel"; variant: "translucent"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
-            Components.PillButton { text: "Reset"; variant: "accent"; DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole }
+        background: Rectangle { objectName: "resetDialogSurface"; radius: metrics.radiusLarge; color: theme.white; border.width: 1; border.color: theme.separator }
+        header: Label {
+            text: resetDialog.title
+            color: theme.mainBlue
+            font.family: typography.buttonFamily
+            font.pixelSize: 18
+            font.bold: true
+            padding: 20
+            bottomPadding: 0
+        }
+        footer: Item {
+            implicitHeight: resetButtons.implicitHeight + 20
+            RowLayout {
+                id: resetButtons
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                Components.PillButton { objectName: "resetCancel"; text: "Cancel"; variant: "accent"; onClicked: resetDialog.reject() }
+                Components.PillButton { objectName: "resetConfirm"; text: "Reset"; variant: "filled"; onClicked: resetDialog.accept() }
+            }
         }
         onAccepted: {
             let target = root.projectId ? root.pageState.globalValues : root.pageState.defaults
@@ -261,21 +296,38 @@ Item {
             root.refreshAvailable = root.projectId !== "" && changedAnalysis
             root.message = changedAnalysis ? "Settings reset. Some analysis results may need to be refreshed." : "Settings reset."
         }
-        contentItem: Label { text: root.projectId ? "Remove all overrides for this project?" : "Restore global application defaults?" }
+        contentItem: Label { text: root.projectId ? "Remove all overrides for this project?" : "Restore global application defaults?"; color: theme.mainBlue }
     }
     Dialog {
         id: unsavedDialog
         objectName: "unsavedSettingsConfirmation"
         title: "Unsaved changes"
         modal: true; anchors.centerIn: parent; width: 460
-        background: Rectangle { radius: metrics.radiusLarge; color: theme.white; border.color: theme.separator }
-        contentItem: Label { text: "Save changes before leaving?" }
+        background: Rectangle { objectName: "unsavedDialogSurface"; radius: metrics.radiusLarge; color: theme.white; border.width: 1; border.color: theme.separator }
+        header: Label {
+            text: unsavedDialog.title
+            color: theme.mainBlue
+            font.family: typography.buttonFamily
+            font.pixelSize: 18
+            font.bold: true
+            padding: 20
+            bottomPadding: 0
+        }
+        contentItem: Label { text: "Save changes before leaving?"; color: theme.mainBlue }
         onAccepted: if (root.dirty) root.leaveCanceled()
         onRejected: root.leaveCanceled()
-        footer: DialogButtonBox {
-            Components.PillButton { text: "Save"; variant: "accent"; DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole; onClicked: { root.save(); if (!root.dirty) root.leaveRequested() } }
-            Components.PillButton { text: "Discard"; variant: "translucent"; DialogButtonBox.buttonRole: DialogButtonBox.DestructiveRole; onClicked: { root.dirty = false; root.leaveRequested() } }
-            Components.PillButton { text: "Cancel"; variant: "translucent"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
+        footer: Item {
+            implicitHeight: unsavedButtons.implicitHeight + 20
+            RowLayout {
+                id: unsavedButtons
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                Components.PillButton { objectName: "unsavedSave"; text: "Save"; variant: "accent"; onClicked: { root.save(); if (!root.dirty) { unsavedDialog.close(); root.leaveRequested() } } }
+                Components.PillButton { objectName: "unsavedDiscard"; text: "Discard"; variant: "translucent"; onClicked: { root.dirty = false; unsavedDialog.close(); root.leaveRequested() } }
+                Components.PillButton { objectName: "unsavedCancel"; text: "Cancel"; variant: "translucent"; onClicked: unsavedDialog.reject() }
+            }
         }
     }
 }

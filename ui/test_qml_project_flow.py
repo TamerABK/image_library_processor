@@ -145,6 +145,8 @@ class ProjectFlowTests(unittest.TestCase):
         self.assertFalse(self.item("photoInspector").isVisible())
         self.click("photoCardFooter")
         self.assertTrue(self.item("photoInspector").isVisible())
+        wait_until(lambda: self.item("photoInspector").property("previewImageReady"))
+        self.assertGreater(self.item("inspectorImage").width(), self.item("photoInspector").width() / 2)
         self.click("inspectorBack")
         self.assertFalse(self.item("photoInspector").isVisible())
 

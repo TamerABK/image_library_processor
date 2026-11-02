@@ -105,9 +105,10 @@ Button {
         color: !root.enabled
             ? theme.disabledFill
             : root.down
-                ? theme.pressedFill
+                ? (root.variant === "accent" ? theme.midBlue : theme.pressedFill)
                 : root.hovered || root.activeFocus
-                    ? (root.variant === "filled" ? theme.lightBlue : theme.hoverFill)
+                    ? (root.variant === "accent" ? theme.midBlue
+                        : root.variant === "filled" ? theme.lightBlue : theme.hoverFill)
                     : root.normalFill
         border.width: root.variant === "translucent" || root.activeFocus ? 1 : 0
         border.color: root.activeFocus ? theme.focusRing : theme.separator

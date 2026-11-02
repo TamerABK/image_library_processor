@@ -174,7 +174,7 @@ class BlurFlowTests(unittest.TestCase):
                 self.assertLessEqual(end.x(), width, (width, height, name))
                 self.assertLessEqual(end.y(), height, (width, height, name))
             image = self.item("inspectorImage")
-            self.assertGreater(image.width(), 0)
+            self.assertGreater(image.width(), self.item("photoInspector").width() / 2)
             self.assertGreater(image.height(), 0)
             self.assertAlmostEqual(2, image.property("paintedWidth") / image.property("paintedHeight"), places=2)
 
