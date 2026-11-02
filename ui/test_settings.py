@@ -33,7 +33,9 @@ class SettingsTests(unittest.TestCase):
                 self.assertEqual(performance_decode_workers(logical), performance)
                 self.assertEqual(performance_mode_available(logical, physical), eligible)
         self.assertEqual(normal_decode_workers(1), 2)
-        self.assertFalse(performance_mode_available(12, None))
+        self.assertTrue(performance_mode_available(12, None))
+        self.assertFalse(performance_mode_available(5, None))
+        self.assertFalse(performance_mode_available(12, 2))
 
     def test_default_and_fixed_memory(self):
         data = self.settings.pageData('A')
@@ -60,6 +62,9 @@ class SettingsTests(unittest.TestCase):
 
     def test_saved_performance_falls_back_without_deleting_preference(self):
         self.settings.save('A', {'performance_mode': 'performance'})
+        with patch('ui.qt.settings_controller.available_cpu_topology', return_value=(12, None, 'unknown')):
+            self.assertTrue(self.settings.pageData('A')['performanceAvailable'])
+            self.assertEqual(self.settings.scan_config('A').performance.worker_count, 9)
         with patch('ui.qt.settings_controller.available_cpu_topology', return_value=(4, 2, 'unknown')):
             self.assertEqual(self.settings.scan_config('A').performance.worker_count, 2)
             self.assertEqual(self.settings.pageData('A')['effectiveMode'], 'normal')

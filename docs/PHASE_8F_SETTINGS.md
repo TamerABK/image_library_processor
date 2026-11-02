@@ -14,9 +14,10 @@ Defaults: Normal processing, Keep All blur handling (the former Qt default),
 balanced face quality, one duplicate keeper, open-eye preference on and
 primary-face-quality priority on. With T available logical threads, Normal uses
 `max(2, ceil(T * 0.33))` decoding workers. Performance uses
-`max(4, ceil(T * 0.75))`. Performance is available only with at least four
-known physical cores, six available logical threads and more workers than
-Normal. Unknown physical topology or restricted affinity disables Performance.
+`max(4, ceil(T * 0.75))`. Performance requires six available logical threads
+and more workers than Normal. If physical cores are detected, at least four
+are required. If physical cores cannot be determined, sufficient logical
+threads still enable Performance.
 A saved Performance preference remains stored but temporarily runs as Normal
 when hardware eligibility is lost.
 
