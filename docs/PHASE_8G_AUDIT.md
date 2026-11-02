@@ -23,7 +23,8 @@ different dataset signature, code revision, provider request, or tool revision.
 `--checkpoint-source path\to\image_checkpoint.jsonl` imports a verified prior
 checkpoint into a new output directory, preserving its original face
 measurements while regenerating ranking and summary CSVs. The source manifest
-must match the dataset, code SHA and model fingerprints.
+must match the dataset and model fingerprints; commits between the source and
+current HEAD may change only this audit tool, its tests or this report.
 `--max-images N` selects the first N lexicographically sorted files for a smoke
 test. The source directory is read only and the output directory must be outside it.
 
@@ -148,7 +149,9 @@ the held-out set.
 - `audit_summary.csv`: counts, agreement where labels exist, missing-analysis
   and terminal-failure rates by scenario.
 - `manifest.json`: source signature, models, provider request/runtime, config,
-  tool/code versions, cache isolation, counts, CSV columns and completion state.
+  face calibration profile, ranking weights, metric priors, CPU/RAM identity,
+  dependency and tool/code versions, cache isolation, counts, CSV columns and
+  completion state.
 
 Numeric CSV cells contain no units. Missing metrics and unavailable human
 accuracy are empty, not zero. Source paths are kept so rows can be joined or
@@ -163,7 +166,7 @@ face-cache hits. The production duplicate matcher found **8 groups, 17
 candidates and 10 candidate pairs**; six groups contain group photos and two
 have no primary face. No single-person duplicate groups were found in this
 dataset. Eight blind contact sheets were exported. The fresh measurement
-checkpoint was imported into `audit_results/phase8g_nsc_verified_20261102` to
+checkpoint was imported into `audit_results/phase8g_nsc_release_20261102` to
 regenerate the final CSV schema. Fresh and final face, photo, ranking and
 pairwise CSVs are byte-identical.
 

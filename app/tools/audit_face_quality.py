@@ -11,8 +11,10 @@ import csv
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 import hashlib
+from importlib import metadata as package_metadata
 import itertools
 import json
+import os
 from pathlib import Path
 import platform
 import shutil
@@ -29,6 +31,7 @@ from automatic_scan.eligibility import assess_face_quality, assess_people_pictur
 from automatic_scan.models import DiscoveryRecord, PipelineImageState
 from automatic_scan.services import AutomaticScanServices
 from duplicate_detector.models import PhotoInfo
+from face_analyzer.config import FaceAnalyzerConfig
 from face_analyzer.ranking import describe_distribution
 from image_loader import ImageLoader
 
@@ -139,6 +142,38 @@ def _model_fingerprints() -> dict[str, dict[str, Any]]:
 def _git_sha() -> str:
     return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True,
                                    cwd=Path(__file__).resolve().parents[2]).strip()
+
+
+def _production_unchanged_since(source_commit: str) -> bool:
+    repository = Path(__file__).resolve().parents[2]
+    try:
+        changed = subprocess.check_output(
+            ["git", "diff", "--name-only", source_commit, "HEAD"], text=True,
+            cwd=repository).splitlines()
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    diagnostic_paths = {"app/tools/audit_face_quality.py", "app/tools/test_audit_face_quality.py",
+                        "docs/PHASE_8G_AUDIT.md"}
+    return set(changed).issubset(diagnostic_paths)
+
+
+def _environment() -> dict[str, Any]:
+    packages = {}
+    for name in ("numpy", "opencv-python", "Pillow", "onnxruntime", "onnxruntime-directml", "PySide6"):
+        try:
+            packages[name] = package_metadata.version(name)
+        except package_metadata.PackageNotFoundError:
+            packages[name] = None
+    physical = total_ram = None
+    try:
+        import psutil
+        physical = psutil.cpu_count(logical=False)
+        total_ram = psutil.virtual_memory().total
+    except (ImportError, OSError):
+        pass
+    return dict(operating_system=platform.platform(), processor=platform.processor() or
+                os.environ.get("PROCESSOR_IDENTIFIER", ""), logical_processors=os.cpu_count(),
+                physical_cores=physical, system_ram_bytes=total_ram, dependency_versions=packages)
 
 
 def _record(path: Path, loader: ImageLoader) -> DiscoveryRecord:
@@ -311,6 +346,7 @@ def run(args: argparse.Namespace) -> Path:
         raise ValueError("No supported photographs found")
     signature = _signature(paths)
     config = AutomaticScanConfig(performance=PerformanceConfig(execution_provider=ExecutionProvider(args.provider)))
+    analyzer_config = FaceAnalyzerConfig()
     model_fingerprints = _model_fingerprints()
     cache_path = output / "audit_cache.sqlite3"
     if args.cache_source and not cache_path.exists():
@@ -337,8 +373,9 @@ def run(args: argparse.Namespace) -> Path:
         source_checkpoint = Path(args.checkpoint_source).resolve()
         source_manifest_path = source_checkpoint.parent / "manifest.json"
         checkpoint_source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+        source_commit = checkpoint_source_manifest.get("git_commit", "")
         if (checkpoint_source_manifest.get("dataset_signature") != signature
-                or checkpoint_source_manifest.get("git_commit") != _git_sha()
+                or not (source_commit == _git_sha() or _production_unchanged_since(source_commit))
                 or checkpoint_source_manifest.get("models") != model_fingerprints):
             raise ValueError("Checkpoint source has a different dataset, code revision, or model set")
         if not checkpoint.exists():
@@ -346,8 +383,12 @@ def run(args: argparse.Namespace) -> Path:
     manifest = dict(dataset_root=str(root), dataset_signature=signature, dataset_image_count=len(paths),
         git_commit=_git_sha(), audit_tool_sha256=tool_sha,
         started_at=datetime.now(timezone.utc).isoformat(),
-        provider_requested=args.provider, mode=args.mode, python=sys.version, platform=platform.platform(),
-        config=_flatten(config), models=model_fingerprints, cache_source=str(args.cache_source or ""),
+        provider_requested=args.provider, mode=args.mode, python=sys.version,
+        environment=_environment(), config=_flatten(config),
+        face_calibration_profile=analyzer_config.calibration_profile.to_dict(),
+        face_ranking_weights=analyzer_config.ranking_weights.as_dict(),
+        face_metric_priors=asdict(analyzer_config.metric_priors),
+        models=model_fingerprints, cache_source=str(args.cache_source or ""),
         checkpoint_source=str(args.checkpoint_source or ""),
         measurement_origin=("imported fresh checkpoint" if checkpoint_source_manifest and
             checkpoint_source_manifest.get("mode") == "full" and checkpoint_source_manifest.get("cache_hits") == 0
