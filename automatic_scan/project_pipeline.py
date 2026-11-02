@@ -91,7 +91,8 @@ def configured_decode_memory_budget(config: AutomaticScanConfig) -> int:
 
 
 def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
-                    cache_path=None, config=None, services=None, benchmark_stop_after=None):
+                    cache_path=None, config=None, services=None, benchmark_stop_after=None,
+                    decode_pool_observer=None):
     logger = get_scan_logger()
     logger.info("project_started folder=%s discovered_paths=%d", folder, len(paths))
     config = config or AutomaticScanConfig(blur_policy=BlurPolicy.KEEP_ALL,
@@ -159,6 +160,8 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
         try:
             decode_pool = BoundedDecodePool(workers=decode_workers,
                 memory_budget_bytes=configured_decode_memory_budget(config))
+            if decode_pool_observer is not None:
+                decode_pool_observer(decode_pool)
         except (OSError, RuntimeError):
             logger.exception("decode_pool_unavailable folder=%s; using sequential decoding", folder)
 
@@ -299,6 +302,9 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
                 finally:
                     decoded.close()
                 stats["decode_tasks"] = decode_pool.submitted - before_submitted
+                stats["decode_effective_workers"] = decode_pool.workers
+                stats["decode_effective_memory_bytes"] = decode_pool.memory_budget_bytes
+                stats["decode_max_active"] = decode_pool.maximum_active_tasks
                 stats["decode_wait_seconds"] = (decode_pool.wait_ns - before_wait) / 1e9
                 stats["decode_task_seconds_sum"] = (decode_pool.task_ns - before_task) / 1e9
                 stats["decode_queue_wait_seconds_sum"] = (decode_pool.queue_wait_ns - before_queue) / 1e9
@@ -545,6 +551,9 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
                     batch_results = None
                 if decode_pool is not None:
                     stats["decode_tasks"] = decode_pool.submitted - before_decode_tasks
+                    stats["decode_effective_workers"] = decode_pool.workers
+                    stats["decode_effective_memory_bytes"] = decode_pool.memory_budget_bytes
+                    stats["decode_max_active"] = decode_pool.maximum_active_tasks
                     stats["decode_wait_seconds"] = (decode_pool.wait_ns - before_decode_wait) / 1e9
                     stats["decode_task_seconds_sum"] = (decode_pool.task_ns - before_decode_task) / 1e9
                     stats["decode_queue_wait_seconds_sum"] = (decode_pool.queue_wait_ns - before_decode_queue) / 1e9

@@ -161,7 +161,8 @@ def _run_pipeline(paths: list[Path], state_dir: Path, *, folder: Path | None = N
                   detail: str, batch_size: int | None, ort_profile: bool,
                   cprofile_file: Path | None = None, measured: bool = True,
                   concurrency: int = 1, python_allocations: bool = False,
-                  native_trace_dir: Path | None = None) -> dict:
+                  native_trace_dir: Path | None = None,
+                  decoder_workers: int | None = None, decoder_memory_mib: int = 512) -> dict:
     """Keep benchmark logs and native profiles out of application data."""
     state_dir.mkdir(parents=True, exist_ok=True)
     keys = ("ROOM36_SCAN_LOG_PATH", "ROOM36_ORT_PROFILE_PREFIX")
@@ -171,7 +172,8 @@ def _run_pipeline(paths: list[Path], state_dir: Path, *, folder: Path | None = N
         return _run_pipeline_inner(paths, state_dir, folder=folder, scenario=scenario,
             detail=detail, batch_size=batch_size, ort_profile=ort_profile,
             cprofile_file=cprofile_file, measured=measured, concurrency=concurrency,
-            python_allocations=python_allocations, native_trace_dir=native_trace_dir)
+            python_allocations=python_allocations, native_trace_dir=native_trace_dir,
+            decoder_workers=decoder_workers, decoder_memory_mib=decoder_memory_mib)
     finally:
         from .scan_logging import close_scan_logger_for_path
         close_scan_logger_for_path(state_dir / "scan.log")
@@ -186,15 +188,23 @@ def _run_pipeline_inner(paths: list[Path], state_dir: Path, *, folder: Path | No
                   detail: str, batch_size: int | None, ort_profile: bool,
                   cprofile_file: Path | None = None, measured: bool = True,
                   concurrency: int = 1, python_allocations: bool = False,
-                  native_trace_dir: Path | None = None) -> dict:
+                  native_trace_dir: Path | None = None,
+                  decoder_workers: int | None = None, decoder_memory_mib: int = 512) -> dict:
     try:
         event_limit = max(1000, min(500000, int(os.environ.get("ROOM36_PROFILE_MAX_EVENTS", "100000"))))
         sample_interval = max(.1, min(5.0, float(os.environ.get("ROOM36_PROFILE_SAMPLE_INTERVAL", ".25"))))
     except ValueError:
         event_limit, sample_interval = 100000, .25
     profiler = HierarchicalProfiler(detail=detail, max_events=event_limit) if measured else None
+    pool_ref = {}
+    def decode_snapshot():
+        pool = pool_ref.get("pool")
+        if pool is None: return {}
+        return {"active_decoder_tasks": pool.active_tasks,
+                "pending_decoder_tasks": pool.current_pending,
+                "reserved_decoder_bytes": pool.current_reserved_bytes}
     sampler = ResourceSampler(dataset=str(folder or paths[0].parent),
-                              interval=sample_interval) if measured else None
+                              interval=sample_interval, extra_sample=decode_snapshot) if measured else None
     emitted: dict[str, dict] = {}
     result_hashes: dict[str, str] = {}
     face_count = 0
@@ -204,7 +214,9 @@ def _run_pipeline_inner(paths: list[Path], state_dir: Path, *, folder: Path | No
     else:
         os.environ.pop("ROOM36_ORT_PROFILE_PREFIX", None)
     config = AutomaticScanConfig(blur_policy=BlurPolicy.KEEP_ALL,
-        performance=PerformanceConfig(worker_count=1, batch_size=batch_size))
+        performance=PerformanceConfig(worker_count=decoder_workers or 1,
+            decode_memory_budget_mib=decoder_memory_mib, memory_conservative=False,
+            batch_size=batch_size))
     token = CancellationToken()
     with active_profiler(profiler):
         with profile_scope("benchmark.total", detail="stages"):
@@ -272,7 +284,8 @@ def _run_pipeline_inner(paths: list[Path], state_dir: Path, *, folder: Path | No
                     process_project(orchestrator, str(folder or paths[0].parent), paths, emit=emit,
                         cancellation_token=token, cache_path=state_dir / "analysis.sqlite3",
                         config=config, services=services,
-                        benchmark_stop_after=FOCUS_STAGE[scenario])
+                        benchmark_stop_after=FOCUS_STAGE[scenario],
+                        decode_pool_observer=lambda pool: pool_ref.__setitem__("pool", pool))
             finally:
                 if py_profile:
                     py_profile.disable()
@@ -308,8 +321,15 @@ def _run_pipeline_inner(paths: list[Path], state_dir: Path, *, folder: Path | No
         trace["traceEvents"].extend(sampler.trace_events(profiler.started_ns))
     return {"profile": profiler.report(image_count=len(paths), face_count=measured_faces) if profiler else None,
             "trace": trace,
+            "stage_intervals": [{"stage": e["name"][6:], "start_seconds": e["ts"] / 1e6,
+                                 "end_seconds": (e["ts"] + e["dur"]) / 1e6}
+                                for e in trace["traceEvents"] if e.get("name", "").startswith("stage.")
+                                and e.get("ph") == "X"] if trace else [],
+            "resource_start_offset_seconds": sampler._origin - profiler.started_ns / 1e9
+                if sampler and profiler else None,
             "resources": sampler.report() if sampler else None,
             "stages": emitted, "ort": _ort_summary(native_files) if ort_profile else None,
+            "runtime_info": services.runtime_info() if hasattr(services, "_face_detector") else None,
             "result_hashes": result_hashes,
             "cache_database_bytes": cache_disk_bytes,
             "python_allocations": allocations}

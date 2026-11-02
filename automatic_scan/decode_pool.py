@@ -122,7 +122,13 @@ class Decoded:
 
 class BoundedDecodePool:
     def __init__(self, *, workers: int, memory_budget_bytes: int):
-        if not 1 <= workers <= max_manual_decode_workers():
+        # Explicit benchmark-only escape hatch; ordinary UI scans retain the CPU cap.
+        benchmark_limit = 0
+        try:
+            benchmark_limit = int(os.environ.get("ROOM36_BENCHMARK_DECODE_LIMIT", "0"))
+        except ValueError:
+            pass
+        if not 1 <= workers <= max(max_manual_decode_workers(), benchmark_limit):
             raise ValueError("decode worker count exceeds available CPU limit")
         self.workers = workers
         self.memory_budget_bytes = max(1, memory_budget_bytes)
@@ -131,6 +137,8 @@ class BoundedDecodePool:
         self._profiler = get_active_profiler()
         self.maximum_pending = 0
         self.maximum_reserved_bytes = 0
+        self.current_pending = 0
+        self.current_reserved_bytes = 0
         self.last_max_pending = 0
         self.last_max_reserved_bytes = 0
         self.wait_ns = 0
@@ -138,6 +146,8 @@ class BoundedDecodePool:
         self.task_ns = 0
         self.queue_wait_ns = 0
         self._stats_lock = threading.Lock()
+        self.active_tasks = 0
+        self.maximum_active_tasks = 0
         self._closed = False
         self._submission_unavailable = False
         self._effective_budget_bytes = self.memory_budget_bytes
@@ -184,6 +194,9 @@ class BoundedDecodePool:
             if token.is_canceled:
                 return Decoded(None)
             started = time.perf_counter_ns()
+            with self._stats_lock:
+                self.active_tasks += 1
+                self.maximum_active_tasks = max(self.maximum_active_tasks, self.active_tasks)
             try:
                 with profile_scope("decode.pool.task", detail="deep", units=1,
                                    width=record.width or 0, height=record.height or 0):
@@ -195,6 +208,7 @@ class BoundedDecodePool:
             finally:
                 with self._stats_lock:
                     self.task_ns += time.perf_counter_ns() - started
+                    self.active_tasks -= 1
 
     def ordered(self, records: list, loader: ImageLoader, *,
                 max_dimension: int | None, grayscale: bool,
@@ -239,6 +253,8 @@ class BoundedDecodePool:
                             grayscale, token, queued_ns))
                 pending.append((record, future, cost))
                 reserved += cost
+                self.current_pending = len(pending)
+                self.current_reserved_bytes = reserved
                 if future is not None:
                     self.submitted += 1
                 self.maximum_pending = max(self.maximum_pending, len(pending))
@@ -250,6 +266,7 @@ class BoundedDecodePool:
             while pending:
                 token.raise_if_canceled()
                 record, future, cost = pending.popleft()
+                self.current_pending = len(pending)
                 outcome = None
                 if future is not None:
                     started = time.perf_counter_ns()
@@ -260,10 +277,13 @@ class BoundedDecodePool:
                     yield record, outcome
                 finally:
                     reserved -= cost
+                    self.current_reserved_bytes = reserved
                 # Do not submit replacement work when close() injects
                 # GeneratorExit at the yield point.
                 fill()
         finally:
+            self.current_pending = 0
+            self.current_reserved_bytes = 0
             self.last_max_pending = local_max_pending
             self.last_max_reserved_bytes = local_max_reserved
             for _record, future, _cost in pending:

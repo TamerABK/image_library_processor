@@ -126,9 +126,10 @@ class ResourceSampler:
     """One sampling thread; optional psutil adds per-core/thread/context data."""
 
     def __init__(self, *, interval: float = 0.25, max_samples: int = 20000,
-                 dataset: str | None = None):
+                 dataset: str | None = None, extra_sample=None):
         self.interval = max(.05, interval)
         self.max_samples = max_samples
+        self.extra_sample = extra_sample
         self.samples: list[dict] = []
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -186,6 +187,9 @@ class ResourceSampler:
             sample.update(rss_bytes=memory.rss, process_threads=process.num_threads(),
                 system_cpu_percent=self._psutil.cpu_percent(interval=None),
                 per_core_cpu_percent=self._psutil.cpu_percent(interval=None, percpu=True))
+            sample["available_memory_bytes"] = self._psutil.virtual_memory().available
+            if hasattr(memory, "private"):
+                sample["private_bytes"] = memory.private
             if hasattr(memory, "num_page_faults"):
                 sample["process_total_page_faults"] = memory.num_page_faults
             elif hasattr(memory, "pfaults"):
@@ -226,6 +230,11 @@ class ResourceSampler:
                 sample.update(self._disk.sample())
             except Exception as exc:
                 self._disk.error = type(exc).__name__
+        if self.extra_sample is not None:
+            try:
+                sample.update(self.extra_sample())
+            except Exception:
+                pass
         self._sample_index += 1
         return sample
 
