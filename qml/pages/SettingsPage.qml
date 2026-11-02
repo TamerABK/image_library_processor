@@ -161,16 +161,6 @@ Item {
                                 }
                             }
                         }
-                        Label {
-                            visible: modelData.key === "performance_mode"
-                            text: "Detected physical cores: " + (root.pageState.physicalCores < 0 ? "unavailable" : root.pageState.physicalCores) + "; available logical threads: " + root.pageState.logicalThreads + ". Effective mode: " + (root.draft.performance_mode === "performance" && root.pageState.performanceAvailable ? "Performance" : "Normal") + ". Decoder reservation ceiling: 2 GiB."
-                            wrapMode: Text.WordWrap; Layout.fillWidth: true; color: theme.mutedText
-                        }
-                        Label {
-                            visible: modelData.key === "performance_mode" && !root.pageState.performanceAvailable
-                            text: "Performance mode requires at least 4 physical CPU cores and 6 available logical threads. A saved Performance preference will run as Normal until this hardware is eligible again."
-                            wrapMode: Text.WordWrap; Layout.fillWidth: true; color: theme.mutedText
-                        }
                     }
                 }
             }
