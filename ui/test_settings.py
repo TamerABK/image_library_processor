@@ -5,87 +5,77 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app_state_database import AppStateDatabase
-from automatic_scan.decode_pool import automatic_decode_workers, max_manual_decode_workers
+from automatic_scan.decode_pool import normal_decode_workers, performance_decode_workers, performance_mode_available
 from ui.qt.settings_controller import SettingsController, valid
 
 
 class SettingsTests(unittest.TestCase):
     def setUp(self):
-        self.cpu_patch = patch("automatic_scan.decode_pool.available_cpu_cores",
-                               return_value=(8, "physical"))
-        self.cpu_patch.start()
-        self.addCleanup(self.cpu_patch.stop)
         self.temp = tempfile.TemporaryDirectory()
-        self.db = AppStateDatabase(Path(self.temp.name) / "state.sqlite3")
+        self.addCleanup(self.temp.cleanup)
+        self.db = AppStateDatabase(Path(self.temp.name) / 'app.sqlite3')
         with self.db.connect() as db:
-            for project in ("A", "B"):
-                db.execute("INSERT INTO projects(project_id,folder,name,created_at) VALUES(?,?,?,0)",
+            for project in ('A', 'B'):
+                db.execute('INSERT INTO projects(project_id,folder,name,created_at) VALUES(?,?,?,0)',
                            (project, project, project))
         self.settings = SettingsController(self.db)
+        topology = patch('ui.qt.settings_controller.available_cpu_topology', return_value=(12, 6, 'physical cores'))
+        topology.start()
+        self.addCleanup(topology.stop)
 
-    def tearDown(self):
-        self.temp.cleanup()
+    def test_mode_calculation_and_eligibility(self):
+        cases = [(2, 4, 2, 4, False), (4, 4, 2, 4, False), (4, 6, 2, 5, True),
+                 (4, 8, 3, 6, True), (6, 12, 4, 9, True), (8, 16, 6, 12, True),
+                 (12, 24, 8, 18, True)]
+        for physical, logical, normal, performance, eligible in cases:
+            with self.subTest(logical=logical):
+                self.assertEqual(normal_decode_workers(logical), normal)
+                self.assertEqual(performance_decode_workers(logical), performance)
+                self.assertEqual(performance_mode_available(logical, physical), eligible)
+        self.assertEqual(normal_decode_workers(1), 2)
+        self.assertFalse(performance_mode_available(12, None))
 
-    def test_inheritance_persistence_and_reset(self):
-        self.assertTrue(self.settings.save("", {"worker_count": 3}))
-        self.assertEqual(SettingsController(self.db).resolve("A")["worker_count"], 3)
-        self.assertTrue(self.settings.save("A", {"worker_count": 2}))
-        self.assertTrue(self.settings.save("", {"worker_count": 4}))
-        self.assertEqual(self.settings.resolve("A")["worker_count"], 2)
-        self.assertEqual(self.settings.resolve("B")["worker_count"], 4)
-        self.settings.reset("A")
-        self.assertEqual(self.settings.resolve("A")["worker_count"], 4)
-        self.settings.save("A", {"worker_count": 2})
-        self.settings.reset("")
-        self.assertEqual(self.settings.resolve("A")["worker_count"], 2)
-        self.assertEqual(self.settings.resolve("B")["worker_count"], "automatic")
+    def test_default_and_fixed_memory(self):
+        data = self.settings.pageData('A')
+        self.assertEqual(data['values']['performance_mode'], 'normal')
+        self.assertEqual(data['normalWorkers'], 4)
+        self.assertEqual(data['performanceWorkers'], 9)
+        self.assertTrue(data['performanceAvailable'])
+        config = self.settings.scan_config('A')
+        self.assertEqual(config.performance.worker_count, 4)
+        self.assertEqual(config.performance.decode_memory_budget_mib, 2048)
+        self.assertFalse(config.performance.memory_conservative)
 
-    def test_invalid_values_and_snapshot(self):
-        self.assertFalse(valid("worker_count", 0))
-        self.assertFalse(self.settings.save("", {"worker_count": 0}))
+    def test_inheritance_restart_and_reset(self):
+        self.assertTrue(self.settings.save('', {'performance_mode': 'performance'}))
+        self.assertEqual(SettingsController(self.db).scan_config('B').performance.worker_count, 9)
+        self.settings.save('A', {'performance_mode': 'normal'})
+        self.assertEqual(self.settings.scan_config('A').performance.worker_count, 4)
+        self.settings.reset('')
+        self.assertEqual(self.settings.scan_config('B').performance.worker_count, 4)
+        self.settings.save('', {'performance_mode': 'performance'})
+        self.assertEqual(self.settings.scan_config('A').performance.worker_count, 4)
+        self.settings.reset('A')
+        self.assertEqual(self.settings.scan_config('A').performance.worker_count, 9)
+
+    def test_saved_performance_falls_back_without_deleting_preference(self):
+        self.settings.save('A', {'performance_mode': 'performance'})
+        with patch('ui.qt.settings_controller.available_cpu_topology', return_value=(4, 2, 'unknown')):
+            self.assertEqual(self.settings.scan_config('A').performance.worker_count, 2)
+            self.assertEqual(self.settings.pageData('A')['effectiveMode'], 'normal')
+            self.assertEqual(self.settings.pageData('A')['values']['performance_mode'], 'performance')
+            self.assertFalse(self.settings.save('B', {'performance_mode': 'performance'}))
+        self.assertEqual(self.settings.scan_config('A').performance.worker_count, 9)
+
+    def test_legacy_values_are_ignored(self):
+        self.assertFalse(valid('worker_count', 4))
+        self.assertFalse(valid('decode_memory_budget_mib', 4096))
         with self.db.connect() as db:
-            db.execute("INSERT INTO global_preferences VALUES(?,?)", ("worker_count", json.dumps(12)))
-            db.execute("INSERT INTO global_preferences VALUES(?,?)", ("obsolete", json.dumps("legacy")))
-        self.assertEqual(self.settings.scan_config("B").performance.worker_count,
-                         min(12, max_manual_decode_workers()))
-        before = self.settings.scan_config("A")
-        self.settings.save("", {"worker_count": 2})
-        self.assertEqual(before.performance.worker_count, automatic_decode_workers())
-        self.assertEqual(self.settings.scan_config("A").performance.worker_count, 2)
-
-    def test_project_deletion_cascades(self):
-        self.settings.save("A", {"keepers_per_group": 3})
-        with self.db.connect() as db:
-            db.execute("DELETE FROM projects WHERE project_id='A'")
-            self.assertEqual(db.execute("SELECT count(*) FROM project_preference_overrides").fetchone()[0], 0)
-
-    def test_decoder_memory_budget_inheritance_and_validation(self):
-        for value in (0, 511, 513, 4608, True):
-            self.assertFalse(valid("decode_memory_budget_mib", value))
-        self.assertTrue(self.settings.save("", {"decode_memory_budget_mib": 2048}))
-        self.assertEqual(SettingsController(self.db).scan_config("B").performance.decode_memory_budget_mib, 2048)
-        self.assertTrue(self.settings.save("A", {"decode_memory_budget_mib": 4096}))
-        self.assertTrue(self.settings.save("", {"decode_memory_budget_mib": 1024}))
-        self.assertEqual(self.settings.scan_config("A").performance.decode_memory_budget_mib, 4096)
-        self.assertEqual(self.settings.scan_config("B").performance.decode_memory_budget_mib, 1024)
-        self.settings.reset("A")
-        self.assertEqual(self.settings.scan_config("A").performance.decode_memory_budget_mib, 1024)
-
-    def test_cpu_warning_boundary(self):
-        from unittest.mock import patch
-        with patch("ui.qt.settings_controller.available_cpu_cores", return_value=(4, "physical")):
-            self.assertFalse(self.settings.requiresCpuConfirmation(2))
-            self.assertTrue(self.settings.requiresCpuConfirmation(3))
-            self.assertTrue(self.settings.requiresCpuConfirmation(4))
-
-    def test_worker_options_follow_ninety_percent_without_four_worker_ceiling(self):
-        from unittest.mock import patch
-        for cores, expected in ((1, 1), (2, 1), (4, 3), (8, 7), (16, 14)):
-            with self.subTest(cores=cores), patch("automatic_scan.decode_pool.available_cpu_cores",
-                                                  return_value=(cores, "physical")):
-                self.assertEqual(expected, self.settings.pageData("")["maxWorkers"])
-                self.assertFalse(self.settings.save("", {"worker_count": expected + 1}))
+            db.execute('INSERT INTO global_preferences VALUES (?,?)', ('worker_count', json.dumps(10)))
+            db.execute('INSERT INTO global_preferences VALUES (?,?)', ('memory_usage', json.dumps('conservative')))
+            db.execute('INSERT INTO global_preferences VALUES (?,?)', ('decode_memory_budget_mib', json.dumps(4096)))
+        self.assertEqual(self.settings.scan_config('B').performance.worker_count, 4)
+        self.assertEqual(self.settings.scan_config('B').performance.decode_memory_budget_mib, 2048)
 
 
-if __name__ == "__main__":
-    unittest.main()
+if __name__ == '__main__': unittest.main()

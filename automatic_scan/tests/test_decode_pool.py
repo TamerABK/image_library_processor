@@ -52,24 +52,24 @@ class DecodePoolTests(unittest.TestCase):
               patch.dict(os.environ, {}, clear=False)):
             os.environ.pop("ROOM36_DECODE_WORKERS", None)
             self.assertEqual(decode_workers_from_environment(), 2)
-        with (patch("automatic_scan.decode_pool.available_cpu_cores", return_value=(8, "physical")),
+        with (patch("automatic_scan.decode_pool._available_logical_processors", return_value=12),
               patch.dict(os.environ, {"ROOM36_DECODE_WORKERS": "6"})):
             self.assertEqual(decode_workers_from_environment(), 6)
         with (patch("automatic_scan.decode_pool._available_logical_processors", return_value=1),
               patch("automatic_scan.decode_pool.available_cpu_cores", return_value=(1, "physical"))):
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("ROOM36_DECODE_WORKERS", None)
-                self.assertEqual(decode_workers_from_environment(), 1)
+                self.assertEqual(decode_workers_from_environment(), 2)
         with (patch("automatic_scan.decode_pool._available_logical_processors", return_value=2),
               patch("automatic_scan.decode_pool.available_cpu_cores", return_value=(2, "physical"))):
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("ROOM36_DECODE_WORKERS", None)
-                self.assertEqual(decode_workers_from_environment(), 1)
+                self.assertEqual(decode_workers_from_environment(), 2)
         with (patch("automatic_scan.decode_pool._available_logical_processors", return_value=12),
               patch("automatic_scan.decode_pool.available_cpu_cores", return_value=(12, "physical"))):
             with patch.dict(os.environ, {}, clear=False):
                 os.environ.pop("ROOM36_DECODE_WORKERS", None)
-                self.assertEqual(decode_workers_from_environment(), 10)
+                self.assertEqual(decode_workers_from_environment(), 4)
             with self.assertRaises(ValueError):
                 BoundedDecodePool(workers=11, memory_budget_bytes=1024)
 
@@ -98,7 +98,7 @@ class DecodePoolTests(unittest.TestCase):
             self.assertFalse(any(t.name.startswith("room36-decode") for t in threading.enumerate()))
 
     def test_pool_accepts_more_than_four_when_cpu_allows(self):
-        with patch("automatic_scan.decode_pool.available_cpu_cores", return_value=(12, "physical")):
+        with patch("automatic_scan.decode_pool._available_logical_processors", return_value=12):
             pool = BoundedDecodePool(workers=6, memory_budget_bytes=2_000_000)
         try:
             self.assertEqual(pool.workers, 6)
@@ -109,6 +109,18 @@ class DecodePoolTests(unittest.TestCase):
                 self.assertLessEqual(pool.maximum_pending, 6)
         finally:
             pool.close()
+
+    def test_performance_mode_can_create_eighteen_workers(self):
+        from automatic_scan.decode_pool import available_cpu_topology
+        from types import SimpleNamespace
+        with patch("automatic_scan.decode_pool._available_logical_processors", return_value=24):
+            pool = BoundedDecodePool(workers=18, memory_budget_bytes=2048 * 1024 * 1024)
+            self.assertEqual(pool.workers, 18)
+            pool.close()
+        with (patch("automatic_scan.decode_pool._available_logical_processors", return_value=6),
+              patch("automatic_scan.decode_pool.os.cpu_count", return_value=12),
+              patch.dict("sys.modules", {"psutil": SimpleNamespace(cpu_count=lambda logical=False: 6)})):
+            self.assertEqual(available_cpu_topology()[1], None)
 
     def test_cancel_stops_submission_and_releases_workers(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -157,7 +169,7 @@ class DecodePoolTests(unittest.TestCase):
                     self.assertEqual(configured_decode_memory_budget(config), expected * 1024 * 1024)
         config = AutomaticScanConfig(performance=PerformanceConfig(
             decode_memory_budget_mib=4096, memory_conservative=False))
-        with patch.dict(os.environ, {"ROOM36_DECODE_MEMORY_MIB": "1024"}):
+        with patch.dict(os.environ, {"ROOM36_DECODE_MEMORY_MIB": "1024", "ROOM36_BENCHMARK_DECODE_LIMIT": "12"}):
             self.assertEqual(configured_decode_memory_budget(config), 1024 * 1024 * 1024)
 
     def test_low_available_memory_reduces_prefetch_depth(self):

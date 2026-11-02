@@ -16,21 +16,14 @@ Item {
     property var projectOverrides: ({})
     property bool dirty: false
     property string message: ""
+    property string pendingMode: ""
+    property var pendingSelection: null
     signal leaveRequested()
     Room36Theme.Theme { id: theme }
     Room36Theme.Metrics { id: metrics }
     Room36Theme.Typography { id: typography }
-    readonly property var workerValues: {
-        let values = ["automatic"]
-        for (let n = 1; n <= (pageState.maxWorkers || 1); n++) values.push(n)
-        return values
-    }
-    readonly property var workerLabels: workerValues.map(v => v === "automatic" ? "Automatic (recommended)" : v + (v === 1 ? " worker" : " workers"))
-
     readonly property var fields: [
-        {key:"worker_count", title:"Processing workers", options:workerLabels, values:workerValues},
-        {key:"memory_usage", title:"Memory usage", options:["Automatic (recommended)","Conservative"], values:["automatic","conservative"]},
-        {key:"decode_memory_budget_mib", title:"Decoder memory budget", options:["512 MB","1 GB","1.5 GB","2 GB","2.5 GB","3 GB","3.5 GB","4 GB"], values:[512,1024,1536,2048,2560,3072,3584,4096]},
+        {key:"performance_mode", title:"Processing mode", options:["Normal — " + (pageState.normalWorkers || 2) + " workers", "Performance — " + (pageState.performanceWorkers || 4) + " workers"], values:["normal","performance"]},
         {key:"blur_policy", title:"Blur handling", options:["Automatic","Review Borderline","Keep All"], values:["automatic","review_borderline","keep_all"]},
         {key:"face_quality_preset", title:"Face-quality sensitivity", options:["Relaxed","Balanced","Strict"], values:["relaxed","balanced","strict"]},
         {key:"keepers_per_group", title:"Preferred photographs per duplicate group", options:["1","2","3","4","5"], values:[1,2,3,4,5]},
@@ -39,7 +32,7 @@ Item {
     ]
 
     function reload() {
-        pageState = controller ? controller.pageData(projectId) : {values:{}, overrides:{}, globalValues:{}, defaults:{}, cpuCores:1, cpuSource:"logical processors", maxWorkers:1}
+        pageState = controller ? controller.pageData(projectId) : {values:{}, overrides:{}, globalValues:{}, defaults:{}, logicalThreads:1, physicalCores:-1, normalWorkers:2, performanceWorkers:4, performanceAvailable:false, effectiveMode:"normal"}
         draft = Object.assign({}, pageState.values)
         projectOverrides = Object.assign({}, pageState.overrides)
         dirty = false
@@ -66,13 +59,7 @@ Item {
         reload()
         message = "Saved. Some analysis results may need to be refreshed to reflect these settings."
     }
-    function save() {
-        let selected = draft.worker_count
-        let previous = pageState.values.worker_count
-        if ((selected !== previous || (projectId !== "" && Object.prototype.hasOwnProperty.call(projectOverrides, "worker_count") && !Object.prototype.hasOwnProperty.call(pageState.overrides, "worker_count")))
-                && typeof selected === "number" && controller && controller.requiresCpuConfirmation(selected)) cpuWarning.open()
-        else saveNow()
-    }
+    function save() { saveNow() }
     function requestLeave() { if (dirty) unsavedDialog.open(); else leaveRequested() }
     Component.onCompleted: reload()
     onProjectIdChanged: reload()
@@ -115,7 +102,22 @@ Item {
                                 Layout.preferredWidth: 290
                                 model: modelData.options
                                 currentIndex: Math.max(0, modelData.values.indexOf(root.draft[modelData.key]))
-                                onActivated: root.choose(modelData.key, modelData.values[index])
+                                onActivated: {
+                                    let value = modelData.values[index]
+                                    if (modelData.key === "performance_mode" && value === "performance") {
+                                        if (!root.pageState.performanceAvailable) {
+                                            selection.currentIndex = modelData.values.indexOf(root.draft.performance_mode)
+                                            return
+                                        }
+                                        if (root.draft.performance_mode !== "performance") {
+                                            root.pendingMode = "performance"
+                                            root.pendingSelection = selection
+                                            cpuWarning.open()
+                                            return
+                                        }
+                                    }
+                                    root.choose(modelData.key, value)
+                                }
                                 implicitHeight: metrics.toolbarButtonHeight
                                 leftPadding: metrics.spacingMedium
                                 rightPadding: metrics.spacingLarge
@@ -156,6 +158,7 @@ Item {
                                 delegate: ItemDelegate {
                                     width: selection.width - 8
                                     text: modelData
+                                    enabled: !(selection.objectName === "setting_performance_mode" && index === 1 && !root.pageState.performanceAvailable)
                                     font.family: typography.buttonFamily
                                     highlighted: selection.highlightedIndex === index
                                     background: Rectangle {
@@ -179,13 +182,18 @@ Item {
                             }
                         }
                         Label {
-                            visible: modelData.key === "worker_count"
-                            text: "Available " + root.pageState.cpuCores + " " + root.pageState.cpuSource + ". Manual choices: 1–" + root.pageState.maxWorkers + " workers (up to 90% of cores). Selected: " + (root.draft.worker_count === "automatic" ? "Automatic" : root.draft.worker_count + " workers") + ". This is a concurrency limit, not a CPU usage percentage."
+                            visible: modelData.key === "performance_mode"
+                            text: "Normal: Balanced processing that keeps more CPU resources available for other applications. Performance: Faster image processing using more CPU threads. May reduce system responsiveness during scans."
                             wrapMode: Text.WordWrap; Layout.fillWidth: true; color: theme.mutedText
                         }
                         Label {
-                            visible: modelData.key === "decode_memory_budget_mib"
-                            text: "Maximum decoding prefetch budget. Conservative memory usage applies one quarter of this value; available memory may reduce it further."
+                            visible: modelData.key === "performance_mode"
+                            text: "Detected physical cores: " + (root.pageState.physicalCores < 0 ? "unavailable" : root.pageState.physicalCores) + "; available logical threads: " + root.pageState.logicalThreads + ". Effective mode: " + (root.draft.performance_mode === "performance" && root.pageState.performanceAvailable ? "Performance" : "Normal") + ". Decoder reservation ceiling: 2 GiB."
+                            wrapMode: Text.WordWrap; Layout.fillWidth: true; color: theme.mutedText
+                        }
+                        Label {
+                            visible: modelData.key === "performance_mode" && !root.pageState.performanceAvailable
+                            text: "Performance mode requires at least 4 physical CPU cores and 6 available logical threads. A saved Performance preference will run as Normal until this hardware is eligible again."
                             wrapMode: Text.WordWrap; Layout.fillWidth: true; color: theme.mutedText
                         }
                     }
@@ -208,15 +216,20 @@ Item {
     }
     Dialog {
         id: cpuWarning
-        title: "High CPU usage"
+        title: "Enable Performance Mode?"
         modal: true; anchors.centerIn: parent; width: 460
         background: Rectangle { radius: metrics.radiusLarge; color: theme.white; border.color: theme.separator }
         footer: DialogButtonBox {
             Components.PillButton { text: "Cancel"; variant: "translucent"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
-            Components.PillButton { text: "Continue Anyway"; variant: "accent"; DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole }
+            Components.PillButton { text: "Enable Performance"; variant: "accent"; DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole }
         }
-        onAccepted: root.saveNow()
-        contentItem: Label { text: "You're assigning a large portion of your CPU cores to image processing. This may make your computer less responsive during scans, especially when using other applications."; wrapMode: Text.WordWrap; width: 420 }
+        onAccepted: { root.choose("performance_mode", root.pendingMode); root.pendingMode = ""; root.pendingSelection = null }
+        onRejected: {
+            if (root.pendingSelection) root.pendingSelection.currentIndex = root.draft.performance_mode === "performance" ? 1 : 0
+            root.pendingMode = ""
+            root.pendingSelection = null
+        }
+        contentItem: Label { text: "Performance mode uses more CPU resources to process images faster. Your computer may become less responsive while scanning large projects."; wrapMode: Text.WordWrap; width: 420 }
     }
     Dialog {
         id: resetDialog

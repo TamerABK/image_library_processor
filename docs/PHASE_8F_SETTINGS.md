@@ -10,25 +10,23 @@ The resolver uses built-in defaults, then saved global values, then project
 overrides. A scan receives an immutable `AutomaticScanConfig` snapshot when it
 is queued. Changes saved during processing take effect on the next scan.
 
-Defaults: automatic decoding workers, automatic memory usage, Keep All blur
-handling (the former Qt default), balanced face quality, one duplicate keeper,
-open-eye preference on, primary-face-quality priority on. Automatic decoding
-leaves two logical processors available where possible and respects the 90% core limit.
-The warning uses physical core count from `psutil` capped by process affinity's
-logical processor count. If unavailable, it explicitly falls back to available
-logical processors. Manual choices run from one through 90% of available cores,
-rounded down. One worker remains available on a one-core
-machine so scans can make progress. A worker count limits concurrent JPEG decode tasks; it is
-not a CPU utilization target.
+Defaults: Normal processing, Keep All blur handling (the former Qt default),
+balanced face quality, one duplicate keeper, open-eye preference on and
+primary-face-quality priority on. With T available logical threads, Normal uses
+`max(2, ceil(T * 0.33))` decoding workers. Performance uses
+`max(4, ceil(T * 0.75))`. Performance is available only with at least four
+known physical cores, six available logical threads and more workers than
+Normal. Unknown physical topology or restricted affinity disables Performance.
+A saved Performance preference remains stored but temporarily runs as Normal
+when hardware eligibility is lost.
 
-The decoder memory budget defaults to 512 MiB and can be set from 512 MiB to
-4096 MiB in 512 MiB steps, globally or per project. Automatic memory mode uses
-the selected ceiling; Conservative uses one quarter of it. The pool still
-applies its available-memory limit and bounded prefetch queue.
-`ROOM36_DECODE_WORKERS` remains an explicit benchmark
-override when set and takes precedence over saved worker preferences.
-`ROOM36_DECODE_MEMORY_MIB` can lower the selected memory budget but cannot
-raise it above the mode's cap.
+Both modes use a fixed 2,048 MiB decoder reservation ceiling. This is not
+preallocated memory; the bounded pool can reduce its active budget under memory
+pressure. Legacy `worker_count`, `memory_usage` and `decode_memory_budget_mib`
+preference entries are ignored by the resolver and removed on the next save.
+`ROOM36_DECODE_WORKERS` remains an explicit developer override. The memory
+environment override applies only when `ROOM36_BENCHMARK_DECODE_LIMIT` is also
+set by the isolated benchmark harness; ordinary scans use the fixed ceiling.
 
 Face detection and embedding compatibility keys exclude performance, blur,
 face-quality preset and duplicate keeper preferences. Ranking keys include
