@@ -23,7 +23,7 @@ Item {
     Room36Theme.Metrics { id: metrics }
     Room36Theme.Typography { id: typography }
     readonly property var fields: [
-        {key:"performance_mode", title:"Processing mode", options:["Normal — " + (pageState.normalWorkers || 2) + " workers", "Performance — " + (pageState.performanceWorkers || 4) + " workers"], values:["normal","performance"]},
+        {key:"performance_mode", title:"Processing mode", options:["Normal", "Performance"], values:["normal","performance"]},
         {key:"blur_policy", title:"Blur handling", options:["Automatic","Review Borderline","Keep All"], values:["automatic","review_borderline","keep_all"]},
         {key:"face_quality_preset", title:"Face-quality sensitivity", options:["Relaxed","Balanced","Strict"], values:["relaxed","balanced","strict"]},
         {key:"keepers_per_group", title:"Preferred photographs per duplicate group", options:["1","2","3","4","5"], values:[1,2,3,4,5]},
@@ -41,13 +41,6 @@ Item {
     function choose(key, value) {
         draft = Object.assign({}, draft, {[key]:value})
         if (projectId !== "") projectOverrides = Object.assign({}, projectOverrides, {[key]:value})
-        dirty = true
-    }
-    function inherit(key) {
-        let copy = Object.assign({}, projectOverrides)
-        delete copy[key]
-        projectOverrides = copy
-        draft = Object.assign({}, draft, {[key]:pageState.globalValues[key]})
         dirty = true
     }
     function saveNow() {
@@ -167,24 +160,6 @@ Item {
                                     }
                                 }
                             }
-                            Label {
-                                visible: root.projectId !== ""
-                                text: Object.prototype.hasOwnProperty.call(root.projectOverrides, modelData.key) ? "Overridden for this project" : "Inherited from Global Settings"
-                                color: theme.mutedText
-                            }
-                            Item { Layout.fillWidth: true }
-                            Components.PillButton {
-                                visible: root.projectId !== ""
-                                text: "Use global default"
-                                variant: "translucent"
-                                enabled: Object.prototype.hasOwnProperty.call(root.projectOverrides, modelData.key)
-                                onClicked: root.inherit(modelData.key)
-                            }
-                        }
-                        Label {
-                            visible: modelData.key === "performance_mode"
-                            text: "Normal: Balanced processing that keeps more CPU resources available for other applications. Performance: Faster image processing using more CPU threads. May reduce system responsiveness during scans."
-                            wrapMode: Text.WordWrap; Layout.fillWidth: true; color: theme.mutedText
                         }
                         Label {
                             visible: modelData.key === "performance_mode"
