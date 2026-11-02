@@ -112,7 +112,7 @@ def available_cpu_topology() -> tuple[int, int | None, str]:
 
 
 def performance_mode_available(logical: int, physical: int | None) -> bool:
-    return ((physical is None or physical >= 4) and logical >= 6 and
+    return (physical is not None and physical >= 4 and logical >= 6 and
             performance_decode_workers(logical) > normal_decode_workers(logical))
 
 

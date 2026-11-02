@@ -31,7 +31,7 @@ Button {
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
 
-    onClicked: popup.opened ? popup.close() : popup.open()
+    onClicked: { console.log("DROP CLICK", root.objectName, popup.opened); popup.opened ? popup.close() : popup.open() }
 
     contentItem: RowLayout {
         spacing: metrics.spacingTiny
@@ -122,6 +122,8 @@ Button {
 
     Popup {
         id: popup
+        onOpened: console.log("DROP OPENED", root.objectName)
+        onClosed: console.log("DROP CLOSED", root.objectName)
         y: root.height + metrics.spacingTiny
         width: root.width
         modal: false
