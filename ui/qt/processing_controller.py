@@ -146,6 +146,10 @@ class ProjectProcessingController(QObject):
         return self._overall
 
     @Property(str, notify=changed)
+    def activeProjectId(self):
+        return self._project_id
+
+    @Property(str, notify=changed)
     def currentStage(self):
         return next((k for k, v in self._stages.items() if v["state"] == "RUNNING"), "")
 

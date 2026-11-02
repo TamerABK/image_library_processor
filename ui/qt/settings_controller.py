@@ -109,9 +109,16 @@ class SettingsController(QObject):
             if project_id:
                 if not db.execute("SELECT 1 FROM projects WHERE project_id=?", (project_id,)).fetchone():
                     return False
-                db.execute("DELETE FROM project_preference_overrides WHERE project_id=?", (project_id,))
-                db.executemany("INSERT INTO project_preference_overrides VALUES (?, ?, ?)",
-                    [(project_id, key, json.dumps(value)) for key, value in values.items()])
+                existing = {row["key"]: row["value"] for row in db.execute(
+                    "SELECT key, value FROM project_preference_overrides WHERE project_id=?", (project_id,))}
+                for key in existing.keys() - values.keys():
+                    db.execute("DELETE FROM project_preference_overrides WHERE project_id=? AND key=?", (project_id, key))
+                for key, value in values.items():
+                    encoded = json.dumps(value)
+                    if existing.get(key) != encoded:
+                        db.execute("INSERT INTO project_preference_overrides VALUES (?, ?, ?) "
+                            "ON CONFLICT(project_id,key) DO UPDATE SET value=excluded.value",
+                            (project_id, key, encoded))
             else:
                 db.execute("DELETE FROM global_preferences")
                 db.executemany("INSERT INTO global_preferences VALUES (?, ?)",
@@ -119,6 +126,6 @@ class SettingsController(QObject):
         self.changed.emit()
         return True
 
-    @Slot(str)
+    @Slot(str, result=bool)
     def reset(self, project_id):
-        self.save(project_id, {})
+        return self.save(project_id, {})

@@ -16,14 +16,20 @@ Item {
     property var projectOverrides: ({})
     property bool dirty: false
     property string message: ""
+    property bool refreshAvailable: false
+    readonly property var analysisKeys: ["blur_policy", "face_quality_preset", "keepers_per_group", "prefer_open_eyes", "prioritize_primary_face_quality"]
+    readonly property bool canRefresh: refreshAvailable && projectId !== "" && processingController !== null
+        && processingController.activeProjectId === projectId
+        && processingController.overallState !== "RUNNING" && processingController.overallState !== "QUEUED"
     property string pendingMode: ""
     property var pendingSelection: null
     signal leaveRequested()
+    signal leaveCanceled()
     Room36Theme.Theme { id: theme }
     Room36Theme.Metrics { id: metrics }
     Room36Theme.Typography { id: typography }
     readonly property var fields: [
-        {key:"performance_mode", title:"Processing mode", options:["Normal", "Performance"], values:["normal","performance"]},
+        {key:"performance_mode", title:"Processing mode", options:["Normal — " + (pageState.normalWorkers || 2) + " workers", "Performance — " + (pageState.performanceWorkers || 4) + " workers"], values:["normal","performance"]},
         {key:"blur_policy", title:"Blur handling", options:["Automatic","Review Borderline","Keep All"], values:["automatic","review_borderline","keep_all"]},
         {key:"face_quality_preset", title:"Face-quality sensitivity", options:["Relaxed","Balanced","Strict"], values:["relaxed","balanced","strict"]},
         {key:"keepers_per_group", title:"Preferred photographs per duplicate group", options:["1","2","3","4","5"], values:[1,2,3,4,5]},
@@ -37,20 +43,34 @@ Item {
         projectOverrides = Object.assign({}, pageState.overrides)
         dirty = false
         message = ""
+        refreshAvailable = false
     }
     function choose(key, value) {
         draft = Object.assign({}, draft, {[key]:value})
         if (projectId !== "") projectOverrides = Object.assign({}, projectOverrides, {[key]:value})
         dirty = true
     }
+    function inherit(key) {
+        let copy = Object.assign({}, projectOverrides)
+        delete copy[key]
+        projectOverrides = copy
+        draft = Object.assign({}, draft, {[key]:pageState.globalValues[key]})
+        dirty = true
+    }
+    function analysisChanged(target) {
+        return analysisKeys.some(key => pageState.values[key] !== target[key])
+    }
     function saveNow() {
         let changes = projectId !== "" ? projectOverrides : draft
         if (!controller || !controller.save(projectId, changes)) {
             message = "Could not save settings. Check the selected values."
+            refreshAvailable = false
             return
         }
+        let changedAnalysis = analysisChanged(draft)
         reload()
-        message = "Saved. Some analysis results may need to be refreshed to reflect these settings."
+        refreshAvailable = projectId !== "" && changedAnalysis
+        message = changedAnalysis ? "Saved. Some analysis results may need to be refreshed to reflect these settings." : "Settings saved."
     }
     function save() { saveNow() }
     function requestLeave() { if (dirty) unsavedDialog.open(); else leaveRequested() }
@@ -95,7 +115,7 @@ Item {
                                 Layout.preferredWidth: 290
                                 model: modelData.options
                                 currentIndex: Math.max(0, modelData.values.indexOf(root.draft[modelData.key]))
-                                onActivated: {
+                                onActivated: function(index) {
                                     let value = modelData.values[index]
                                     if (modelData.key === "performance_mode" && value === "performance") {
                                         if (!root.pageState.performanceAvailable) {
@@ -160,6 +180,29 @@ Item {
                                     }
                                 }
                             }
+                            Label {
+                                visible: root.projectId !== ""
+                                text: Object.prototype.hasOwnProperty.call(root.projectOverrides, modelData.key) ? "Overridden" : "Inherited"
+                                color: theme.mutedText
+                            }
+                            Item { Layout.fillWidth: true }
+                            Components.PillButton {
+                                visible: root.projectId !== ""
+                                text: "Use global default"
+                                variant: "translucent"
+                                enabled: Object.prototype.hasOwnProperty.call(root.projectOverrides, modelData.key)
+                                onClicked: root.inherit(modelData.key)
+                            }
+                        }
+                        Label {
+                            visible: modelData.key === "performance_mode"
+                            text: "Detected: " + (root.pageState.physicalCores < 0 ? "physical cores unavailable" : root.pageState.physicalCores + " physical cores") + ", " + root.pageState.logicalThreads + " logical threads. Effective mode: " + (root.draft.performance_mode === "performance" && root.pageState.performanceAvailable ? "Performance" : "Normal") + "."
+                            wrapMode: Text.WordWrap; Layout.fillWidth: true; color: theme.mutedText
+                        }
+                        Label {
+                            visible: modelData.key === "performance_mode" && !root.pageState.performanceAvailable
+                            text: root.pageState.physicalCores < 0 ? "Performance unavailable: physical cores could not be verified." : "Performance requires at least 4 physical cores and 6 available logical threads."
+                            wrapMode: Text.WordWrap; Layout.fillWidth: true; color: theme.mutedText
                         }
                     }
                 }
@@ -167,8 +210,8 @@ Item {
             Label { text: root.message; visible: text.length > 0; wrapMode: Text.WordWrap; Layout.fillWidth: true; color: theme.mainBlue }
             Components.PillButton {
                 text: "Refresh analysis"
-                visible: root.projectId !== "" && root.message.length > 0 && root.processingController !== null
-                onClicked: root.processingController.retry()
+                visible: root.canRefresh
+                onClicked: { root.processingController.retry(); root.refreshAvailable = false }
             }
             RowLayout {
                 Components.PillButton { text: "Save"; variant: "accent"; enabled: root.dirty; onClicked: root.save() }
@@ -181,6 +224,7 @@ Item {
     }
     Dialog {
         id: cpuWarning
+        objectName: "performanceConfirmation"
         title: "Enable Performance Mode?"
         modal: true; anchors.centerIn: parent; width: 460
         background: Rectangle { radius: metrics.radiusLarge; color: theme.white; border.color: theme.separator }
@@ -205,18 +249,32 @@ Item {
             Components.PillButton { text: "Cancel"; variant: "translucent"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
             Components.PillButton { text: "Reset"; variant: "accent"; DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole }
         }
-        onAccepted: { if (root.controller) root.controller.reset(root.projectId); root.reload() }
+        onAccepted: {
+            let target = root.projectId ? root.pageState.globalValues : root.pageState.defaults
+            let changedAnalysis = root.analysisChanged(target)
+            if (!root.controller || !root.controller.reset(root.projectId)) {
+                root.message = "Could not reset settings."
+                root.refreshAvailable = false
+                return
+            }
+            root.reload()
+            root.refreshAvailable = root.projectId !== "" && changedAnalysis
+            root.message = changedAnalysis ? "Settings reset. Some analysis results may need to be refreshed." : "Settings reset."
+        }
         contentItem: Label { text: root.projectId ? "Remove all overrides for this project?" : "Restore global application defaults?" }
     }
     Dialog {
         id: unsavedDialog
+        objectName: "unsavedSettingsConfirmation"
         title: "Unsaved changes"
         modal: true; anchors.centerIn: parent; width: 460
         background: Rectangle { radius: metrics.radiusLarge; color: theme.white; border.color: theme.separator }
         contentItem: Label { text: "Save changes before leaving?" }
+        onAccepted: if (root.dirty) root.leaveCanceled()
+        onRejected: root.leaveCanceled()
         footer: DialogButtonBox {
             Components.PillButton { text: "Save"; variant: "accent"; DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole; onClicked: { root.save(); if (!root.dirty) root.leaveRequested() } }
-            Components.PillButton { text: "Discard"; variant: "translucent"; DialogButtonBox.buttonRole: DialogButtonBox.DestructiveRole; onClicked: root.leaveRequested() }
+            Components.PillButton { text: "Discard"; variant: "translucent"; DialogButtonBox.buttonRole: DialogButtonBox.DestructiveRole; onClicked: { root.dirty = false; root.leaveRequested() } }
             Components.PillButton { text: "Cancel"; variant: "translucent"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
         }
     }

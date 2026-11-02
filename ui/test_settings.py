@@ -82,5 +82,23 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(self.settings.scan_config('B').performance.worker_count, 4)
         self.assertEqual(self.settings.scan_config('B').performance.decode_memory_budget_mib, 2048)
 
+    def test_individual_override_removal_preserves_other_rows(self):
+        self.settings.save('', {'performance_mode': 'performance', 'blur_policy': 'automatic'})
+        self.settings.save('A', {'performance_mode': 'normal', 'face_quality_preset': 'strict'})
+        self.settings.save('A', {'face_quality_preset': 'strict'})
+        self.assertEqual(self.settings.resolve('A')['performance_mode'], 'performance')
+        self.assertEqual(self.settings.resolve('A')['face_quality_preset'], 'strict')
+        self.assertEqual(self.settings.resolve('B')['face_quality_preset'], 'balanced')
+        with self.db.connect() as db:
+            keys = {row[0] for row in db.execute(
+                "SELECT key FROM project_preference_overrides WHERE project_id='A'")}
+        self.assertEqual(keys, {'face_quality_preset'})
+        self.settings.save('', {'performance_mode': 'normal', 'blur_policy': 'review_borderline'})
+        self.assertEqual(self.settings.resolve('A')['blur_policy'], 'review_borderline')
+        self.assertEqual(self.settings.resolve('A')['face_quality_preset'], 'strict')
+        with self.db.connect() as db:
+            db.execute("DELETE FROM projects WHERE project_id='A'")
+            self.assertEqual(db.execute("SELECT count(*) FROM project_preference_overrides WHERE project_id='A'").fetchone()[0], 0)
+
 
 if __name__ == '__main__': unittest.main()

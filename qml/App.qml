@@ -19,6 +19,8 @@ ApplicationWindow {
     property var settingsController: null
     property string settingsReturnPage: "home"
     property string settingsProjectId: ""
+    property string pendingSettingsPage: ""
+    property bool pendingClose: false
     property var peopleController: null
     property var duplicateController: null
     property var favoritesController: null
@@ -74,8 +76,20 @@ ApplicationWindow {
     }
 
     function showPage(pageId) {
+        if (currentPage === "settings" && pageId !== "settings" && pageLoader.item && pageLoader.item.dirty) {
+            pendingSettingsPage = pageId
+            pageLoader.item.requestLeave()
+            return
+        }
         if (inspectorController) inspectorController.close()
         startPage = normalizePage(pageId)
+    }
+    onClosing: function(close) {
+        if (currentPage === "settings" && pageLoader.item && pageLoader.item.dirty) {
+            close.accepted = false
+            pendingClose = true
+            pageLoader.item.requestLeave()
+        }
     }
 
     function openSettings(projectScoped) {
@@ -217,7 +231,20 @@ ApplicationWindow {
             processingController: window.processingController
             projectId: window.settingsProjectId
             projectName: window.activeProjectName
-            onLeaveRequested: window.showPage(window.settingsReturnPage)
+            onLeaveRequested: {
+                if (window.pendingClose) {
+                    window.pendingClose = false
+                    window.close()
+                } else {
+                    let target = window.pendingSettingsPage || window.settingsReturnPage
+                    window.pendingSettingsPage = ""
+                    window.showPage(target)
+                }
+            }
+            onLeaveCanceled: {
+                window.pendingClose = false
+                window.pendingSettingsPage = ""
+            }
         }
     }
 
