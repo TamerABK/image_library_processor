@@ -202,16 +202,7 @@ class BlurFlowTests(unittest.TestCase):
             self.assertEqual(1, len(button.findChildren(QObject, "toolbarDropdownChevron")))
 
         sort_button = self.item("blurSort")
-        sort_button.clicked.connect(lambda: print("PY CLICKED"))
-        print("DEBUG", sort_button.isVisible(), sort_button.property("enabled"), sort_button.width(), sort_button.height(), sort_button.mapToScene(QPointF(sort_button.width()/2, sort_button.height()/2)))
-        node = self.window.contentItem()
-        while node:
-            pt = node.mapFromScene(QPointF(473, 317))
-            child = node.childAt(pt.x(), pt.y())
-            print("HIT", node.objectName(), child.objectName() if child else None)
-            node = child
         self.click("blurSort")
-        print("DEBUG AFTER", sort_button.property("open"), self.item("blurSort") is sort_button)
         self.assertTrue(sort_button.property("open"))
         self.click("toolbarDropdownOption_Least problematic first")
         self.assertEqual("Least problematic first", self.processing.blurModel.sortOrder)

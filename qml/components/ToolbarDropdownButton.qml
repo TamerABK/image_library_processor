@@ -11,7 +11,7 @@ Button {
     property string label: text
     property url iconSource: ""
     property string iconName: ""
-    property bool open: popup.opened
+    property bool open: false
     property var options: ["Newest", "Oldest", "Largest"]
     property color normalFill: theme.panelRaisedFill
 
@@ -31,7 +31,15 @@ Button {
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
 
-    onClicked: { console.log("DROP CLICK", root.objectName, popup.opened); popup.opened ? popup.close() : popup.open() }
+    onClicked: {
+        if (root.open) {
+            root.open = false
+            popup.close()
+        } else {
+            root.open = true
+            popup.open()
+        }
+    }
 
     contentItem: RowLayout {
         spacing: metrics.spacingTiny
@@ -122,13 +130,12 @@ Button {
 
     Popup {
         id: popup
-        onOpened: console.log("DROP OPENED", root.objectName)
-        onClosed: console.log("DROP CLOSED", root.objectName)
+        onAboutToHide: root.open = false
         y: root.height + metrics.spacingTiny
         width: root.width
         modal: false
         focus: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
         padding: metrics.spacingTiny
 
         enter: Transition {
@@ -192,6 +199,7 @@ Button {
 
                     onClicked: {
                         root.optionSelected(optionDelegate.modelData)
+                        root.open = false
                         popup.close()
                     }
                 }
