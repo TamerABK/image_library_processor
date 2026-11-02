@@ -12,6 +12,7 @@ from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 import ctypes
+import math
 import os
 import threading
 import time
@@ -74,18 +75,45 @@ def _available_memory_bytes() -> int | None:
 
 
 def decode_workers_from_environment() -> int:
-    default = automatic_decode_workers()
+    default = normal_decode_workers()
     try:
         configured = int(os.environ.get("ROOM36_DECODE_WORKERS", str(default)))
     except ValueError:
         return default
-    return configured if 0 <= configured <= max_manual_decode_workers() else default
+    return configured if 0 <= configured <= performance_decode_workers() else default
 
 
 def automatic_decode_workers() -> int:
-    """Leave headroom on small systems; always use at least one worker."""
-    return min(max_manual_decode_workers(),
-               max(1, _available_logical_processors() - 2))
+    """Compatibility alias for the default Normal mode."""
+    return normal_decode_workers()
+
+
+def normal_decode_workers(logical: int | None = None) -> int:
+    logical = logical or _available_logical_processors()
+    return max(2, math.ceil(logical * .33))
+
+
+def performance_decode_workers(logical: int | None = None) -> int:
+    logical = logical or _available_logical_processors()
+    return max(4, math.ceil(logical * .75))
+
+
+def available_cpu_topology() -> tuple[int, int | None, str]:
+    """Physical topology is unknown when affinity masks hide core membership."""
+    logical = _available_logical_processors()
+    try:
+        import psutil
+        physical = psutil.cpu_count(logical=False)
+        if physical and physical > 0 and logical == (os.cpu_count() or logical):
+            return logical, physical, "physical cores"
+    except (ImportError, OSError, ValueError):
+        pass
+    return logical, None, "physical cores unavailable or affinity restricted"
+
+
+def performance_mode_available(logical: int, physical: int | None) -> bool:
+    return (physical is not None and physical >= 4 and logical >= 6 and
+            performance_decode_workers(logical) > normal_decode_workers(logical))
 
 
 def max_manual_decode_workers() -> int:
@@ -128,7 +156,7 @@ class BoundedDecodePool:
             benchmark_limit = int(os.environ.get("ROOM36_BENCHMARK_DECODE_LIMIT", "0"))
         except ValueError:
             pass
-        if not 1 <= workers <= max(max_manual_decode_workers(), benchmark_limit):
+        if not 1 <= workers <= max(performance_decode_workers(), benchmark_limit):
             raise ValueError("decode worker count exceeds available CPU limit")
         self.workers = workers
         self.memory_budget_bytes = max(1, memory_budget_bytes)

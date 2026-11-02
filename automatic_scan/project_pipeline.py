@@ -85,7 +85,7 @@ def configured_decode_memory_budget(config: AutomaticScanConfig) -> int:
     budget = config.performance.decode_memory_budget_mib * 1024 * 1024
     if config.performance.memory_conservative:
         budget = max(64 * 1024 * 1024, budget // 4)
-    if "ROOM36_DECODE_MEMORY_MIB" in os.environ:
+    if "ROOM36_BENCHMARK_DECODE_LIMIT" in os.environ and "ROOM36_DECODE_MEMORY_MIB" in os.environ:
         budget = min(budget, decode_memory_budget_from_environment())
     return budget
 
@@ -158,8 +158,13 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
     decode_pool = None
     if decode_workers and type(services) is AutomaticScanServices:
         try:
+            requested_budget = config.performance.decode_memory_budget_mib * 1024 * 1024
             decode_pool = BoundedDecodePool(workers=decode_workers,
                 memory_budget_bytes=configured_decode_memory_budget(config))
+            profile_count("decode.pool.requested_workers", decode_workers)
+            profile_count("decode.pool.effective_workers", decode_pool.workers)
+            profile_count("decode.pool.requested_memory_bytes", requested_budget)
+            profile_count("decode.pool.effective_memory_bytes", decode_pool.memory_budget_bytes)
             if decode_pool_observer is not None:
                 decode_pool_observer(decode_pool)
         except (OSError, RuntimeError):

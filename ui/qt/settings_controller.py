@@ -6,12 +6,14 @@ from PySide6.QtCore import QObject, Property, Signal, Slot
 from app_state_database import AppStateDatabase
 from automatic_scan.config import (AutomaticScanConfig, BlurPolicy,
     DuplicateSelectionConfig, FaceQualityPreset, PerformanceConfig)
-from automatic_scan.decode_pool import available_cpu_cores, automatic_decode_workers, max_manual_decode_workers
+from automatic_scan.decode_pool import (available_cpu_topology, normal_decode_workers,
+    performance_decode_workers, performance_mode_available)
+
+MAX_DECODER_MEMORY_MIB = 2048
 
 
 DEFAULTS = {
-    "worker_count": "automatic", "memory_usage": "automatic",
-    "decode_memory_budget_mib": 512,
+    "performance_mode": "normal",
     "blur_policy": "keep_all", "face_quality_preset": "balanced",
     "keepers_per_group": 1, "prefer_open_eyes": True,
     "prioritize_primary_face_quality": True,
@@ -19,12 +21,8 @@ DEFAULTS = {
 
 
 def valid(key, value):
-    if key == "worker_count":
-        return value == "automatic" or type(value) is int and value >= 1
-    if key == "memory_usage":
-        return value in ("automatic", "conservative")
-    if key == "decode_memory_budget_mib":
-        return type(value) is int and 512 <= value <= 4096 and value % 512 == 0
+    if key == "performance_mode":
+        return value in ("normal", "performance")
     if key == "blur_policy":
         return value in ("automatic", "review_borderline", "keep_all")
     if key == "face_quality_preset":
@@ -68,7 +66,10 @@ class SettingsController(QObject):
 
     def scan_config(self, project_id):
         values = self.resolve(project_id)
-        workers = values["worker_count"]
+        logical, physical, _source = available_cpu_topology()
+        eligible = performance_mode_available(logical, physical)
+        mode = values["performance_mode"] if eligible else "normal"
+        workers = performance_decode_workers(logical) if mode == "performance" else normal_decode_workers(logical)
         return AutomaticScanConfig(
             blur_policy=BlurPolicy(values["blur_policy"]),
             face_quality_preset=FaceQualityPreset(values["face_quality_preset"]),
@@ -76,33 +77,34 @@ class SettingsController(QObject):
                 keepers_per_group=values["keepers_per_group"],
                 prefer_open_eyes=values["prefer_open_eyes"],
                 prioritize_primary_face_quality=values["prioritize_primary_face_quality"]),
-            performance=PerformanceConfig(worker_count=(automatic_decode_workers() if workers == "automatic" else min(workers, max_manual_decode_workers())),
-                memory_conservative=values["memory_usage"] == "conservative",
-                decode_memory_budget_mib=values["decode_memory_budget_mib"], batch_size=32))
-
-    @Slot(int, result=bool)
-    def requiresCpuConfirmation(self, selected_workers):
-        return type(selected_workers) is int and selected_workers >= 1 and selected_workers / available_cpu_cores()[0] >= 0.75
+            performance=PerformanceConfig(worker_count=workers, memory_conservative=False,
+                decode_memory_budget_mib=MAX_DECODER_MEMORY_MIB, batch_size=32))
 
     @Slot(str, result="QVariantMap")
     def pageData(self, project_id):
         global_values = {**DEFAULTS, **self._read("global_preferences")}
         overrides = self._read("project_preference_overrides", project_id) if project_id else {}
-        limit = max_manual_decode_workers()
-        for source in (global_values, overrides):
-            if type(source.get("worker_count")) is int:
-                source["worker_count"] = min(source["worker_count"], limit)
+        logical, physical, source = available_cpu_topology()
+        eligible = performance_mode_available(logical, physical)
         values = {**global_values, **overrides}
         return {"values": values, "overrides": overrides,
                 "globalValues": global_values, "defaults": DEFAULTS,
-                "cpuCores": available_cpu_cores()[0], "cpuSource": available_cpu_cores()[1],
-                "maxWorkers": limit}
+                "logicalThreads": logical, "physicalCores": physical if physical is not None else -1,
+                "cpuSource": source, "normalWorkers": normal_decode_workers(logical),
+                "performanceWorkers": performance_decode_workers(logical),
+                "performanceAvailable": eligible,
+                "effectiveMode": values["performance_mode"] if eligible else "normal"}
 
     @Slot(str, "QVariantMap", result=bool)
     def save(self, project_id, values):
-        if any(not valid(key, value) or key == "worker_count" and type(value) is int
-               and value > max_manual_decode_workers() for key, value in values.items()):
+        if any(not valid(key, value) for key, value in values.items()):
             return False
+        # A previously saved Performance preference remains durable on weaker hardware.
+        # New selections cannot be activated while unavailable.
+        if values.get("performance_mode") == "performance" and not performance_mode_available(*available_cpu_topology()[:2]):
+            persisted = self._read("project_preference_overrides", project_id) if project_id else self._read("global_preferences")
+            if persisted.get("performance_mode") != "performance":
+                return False
         with self.database.connect() as db:
             if project_id:
                 if not db.execute("SELECT 1 FROM projects WHERE project_id=?", (project_id,)).fetchone():
