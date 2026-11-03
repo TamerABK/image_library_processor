@@ -1,0 +1,19 @@
+{
+  "source_audit": "C:\\Users\\Tamer\\PycharmProjects\\image_library_processor\\audit_results\\phase8g2_release_20261103",
+  "dataset_signature": "e04b5134c5c657779c66feee5b13cc6d6b380e9b2ba9b61e653cda6bdd298b44",
+  "source_git_commit": "eaa75cff895ecdea682fa0feafae5b563682ba70",
+  "export_git_commit": "29cd84300763e6cb8e3ef3fab0ac7f2f9ca3f405",
+  "rows": 68,
+  "columns": 3439,
+  "max_faces_per_candidate": 28,
+  "source_sha256": {
+    "face_metrics.csv": "d69fb5dc53a5be8b27f0714004118ce7805286fc0f83e2dcc41744ee22c71a48",
+    "photo_metrics.csv": "ef30c5944c813405e59d50907925bc371674934c5ed4ff25cb4bd88aaffdbfaf",
+    "ranking_decisions.csv": "4de92238d282fd1af33114612637bc5126e766bf62a7be5e5259709b2c4bbaa5",
+    "ranking_v2_features.csv": "418f1a745a5b366b5283ba811d1255563e9d5d673e41a74044fd36e22293d362",
+    "ranking_v1_v2_comparison.csv": "44ee0ce0675dec09ddf8df74bb343743de5f0528265bef8b9af0586f37bb2547",
+    "manifest.json": "e067aacfedb706e086f7a8647dadba3513a9a222b122a46eb04fa446bc3b8ab6"
+  },
+  "blur_cache_sha256": "430d84dabe592f09fc4c0c4aa1cf4e0b9e1af45d3b2ba1560f3e11314df53288",
+  "csv_sha256": "789d88a5440ddd18530f37370987dde44c55c6297a6c5f8c71912e69889ccaad"
+}
