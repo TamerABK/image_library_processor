@@ -111,6 +111,10 @@ class _FaceAnalysisStorageMixin:
         ("eye_confidence", "REAL"),
         ("eye_status", "TEXT"),
         ("eye_ranking_score", "REAL"),
+        ("eye_metric_raw_value", "REAL"),
+        ("eye_metric_quality_score", "REAL"),
+        ("eye_metric_confidence", "REAL"),
+        ("eye_metric_present", "INTEGER NOT NULL DEFAULT 0"),
         ("eye_weight", "REAL"),
         ("measurement_reliability_score", "REAL"),
         ("global_selection_score", "REAL"),
@@ -188,7 +192,10 @@ class _FaceAnalysisStorageMixin:
         analysis: FaceAnalysisResult | None,
     ) -> tuple[object, ...]:
         if analysis is None:
-            return (0, *([None] * (len(cls._ANALYSIS_COLUMN_NAMES) - 1)))
+            values = {name: None for name in cls._ANALYSIS_COLUMN_NAMES}
+            values["analysis_present"] = 0
+            values["eye_metric_present"] = 0
+            return tuple(values[name] for name in cls._ANALYSIS_COLUMN_NAMES)
 
         return (
             1,
@@ -271,6 +278,10 @@ class _FaceAnalysisStorageMixin:
             analysis.eye_state.confidence,
             analysis.eye_state.status.value,
             analysis.eye_ranking_score,
+            analysis.eyes.raw_value,
+            analysis.eyes.quality_score,
+            analysis.eyes.confidence,
+            1,
             analysis.eye_weight,
             analysis.measurement_reliability_score,
             analysis.global_selection_score,
@@ -286,7 +297,7 @@ class _FaceAnalysisStorageMixin:
         row: sqlite3.Row,
         warnings: tuple[str, ...] = (),
     ) -> FaceAnalysisResult | None:
-        if not row["analysis_present"]:
+        if not row["analysis_present"] or not row["eye_metric_present"]:
             return None
 
         return FaceAnalysisResult(
@@ -625,26 +636,10 @@ class _FaceAnalysisStorageMixin:
                 status=AssessmentStatus(row["eye_status"]),
             ),
             eyes=MetricResult(
-                raw_value=(
-                    None
-                    if row["eye_combined_open_score"] is None
-                    else float(row["eye_combined_open_score"])
-                ),
-                quality_score=(
-                    None
-                    if row["eye_combined_open_score"] is None
-                    else float(row["eye_combined_open_score"])
-                ),
-                confidence=float(row["eye_confidence"]),
-                ranking_score=(
-                    None
-                    if row["eye_combined_open_score"] is None
-                    else cls._float_or_fallback(
-                        row,
-                        "eye_ranking_score",
-                        float(row["eye_combined_open_score"]),
-                    )
-                ),
+                raw_value=None if row["eye_metric_raw_value"] is None else float(row["eye_metric_raw_value"]),
+                quality_score=None if row["eye_metric_quality_score"] is None else float(row["eye_metric_quality_score"]),
+                confidence=float(row["eye_metric_confidence"]),
+                ranking_score=None if row["eye_ranking_score"] is None else float(row["eye_ranking_score"]),
             ),
             eye_weight=cls._float_or_fallback(
                 row,
@@ -1051,29 +1046,7 @@ class _FaceAnalysisStorageMixin:
                 confidence=float(data["eye_state"]["confidence"]),
                 status=AssessmentStatus(data["eye_state"]["status"]),
             ),
-            eyes=MetricResult(
-                raw_value=(
-                    None
-                    if data["eye_state"]["combined_open_score"] is None
-                    else float(data["eye_state"]["combined_open_score"])
-                ),
-                quality_score=(
-                    None
-                    if data["eye_state"]["combined_open_score"] is None
-                    else float(data["eye_state"]["combined_open_score"])
-                ),
-                confidence=float(data["eye_state"]["confidence"]),
-                ranking_score=(
-                    None
-                    if data["eye_state"]["combined_open_score"] is None
-                    else float(
-                        data.get(
-                            "eye_ranking_score",
-                            data["eye_state"]["combined_open_score"],
-                        )
-                    )
-                ),
-            ),
+            eyes=MetricResult(**data["eyes"]),
             eye_weight=float(data.get("eye_weight", 0.0)),
             measurement_reliability=MetricResult(
                 raw_value=float(data.get("measurement_reliability_score", 0.0)),
@@ -1192,7 +1165,14 @@ class _FaceAnalysisStorageMixin:
 
         update_sql = cls._analysis_update_sql(table)
         for row in rows:
-            analysis = cls._deserialize_analysis_json_payload(row["analysis_json"])
+            try:
+                payload = json.loads(row["analysis_json"])
+                # Old JSON did not contain an independent eye metric. Its raw
+                # value cannot be recovered from EyeState without recalibration.
+                analysis = (cls._deserialize_analysis_json_payload(row["analysis_json"])
+                            if isinstance(payload, dict) and "eyes" in payload else None)
+            except (ValueError, TypeError, KeyError, OverflowError):
+                analysis = None
             connection.execute(
                 update_sql,
                 (
@@ -1208,7 +1188,7 @@ class _FaceAnalysisStorageMixin:
                 """,
                 (str(row["entry_path"]), int(row["face_index"])),
             )
-            if analysis.warnings:
+            if analysis is not None and analysis.warnings:
                 connection.executemany(
                     f"""
                     INSERT INTO {warnings_table} (
@@ -1305,7 +1285,7 @@ class FaceScanCache(_FaceAnalysisStorageMixin):
                 str(path),
             )
 
-        if require_analysis and any(not row["analysis_present"] for row in rows):
+        if require_analysis and any(not row["analysis_present"] or not row["eye_metric_present"] for row in rows):
             return None
 
         return [
@@ -1508,7 +1488,7 @@ class FaceScanCache(_FaceAnalysisStorageMixin):
 
 
 class ImageFaceAnalysisCache(_FaceAnalysisStorageMixin):
-    CACHE_VERSION = 1
+    CACHE_VERSION = 2
 
     def __init__(self, db_path: str | Path | None = None):
         self._storage = SharedImageCacheDatabase(db_path)

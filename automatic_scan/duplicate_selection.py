@@ -36,7 +36,11 @@ def select_duplicate_keepers(
         }
         sorted_paths = sorted(
             ordered_paths,
-            key=lambda path: _ranking_sort_key(ranking[path]),
+            key=lambda path: _ranking_sort_key(
+                ranking[path],
+                prefer_open_eyes=config.duplicate_selection.prefer_open_eyes,
+                prioritize_primary_face_quality=config.duplicate_selection.prioritize_primary_face_quality,
+            ),
             reverse=True,
         )
         keeper_paths = sorted_paths[: min(keepers_per_group, len(sorted_paths))]
@@ -53,13 +57,18 @@ def select_duplicate_keepers(
     return results
 
 
-def _ranking_sort_key(breakdown: DuplicateRankingBreakdown) -> tuple[object, ...]:
+def _ranking_sort_key(
+    breakdown: DuplicateRankingBreakdown,
+    *,
+    prefer_open_eyes: bool = True,
+    prioritize_primary_face_quality: bool = True,
+) -> tuple[object, ...]:
     timestamp = float("-inf") if breakdown.capture_timestamp is None else breakdown.capture_timestamp
     return (
-        breakdown.acceptable_primary_face_count,
-        breakdown.worst_primary_score,
-        breakdown.weighted_primary_average,
-        breakdown.eye_open_score,
+        breakdown.acceptable_primary_face_count if prioritize_primary_face_quality else 0,
+        breakdown.worst_primary_score if prioritize_primary_face_quality else 0.0,
+        breakdown.weighted_primary_average if prioritize_primary_face_quality else 0.0,
+        breakdown.eye_open_score if prefer_open_eyes else 0.0,
         breakdown.pose_visibility_score,
         breakdown.image_sharpness_score,
         breakdown.exposure_contrast_score,

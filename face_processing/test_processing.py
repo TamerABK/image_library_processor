@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
@@ -402,6 +403,44 @@ class FaceProcessingTests(unittest.TestCase):
                 cached[0].analysis.embedding_utility_score,
                 analysis.embedding_utility_score,
             )
+
+    def test_eye_metric_survives_reopen_when_eye_state_is_unknown_or_partial(self) -> None:
+        for status in (AssessmentStatus.FACE_TOO_SMALL, AssessmentStatus.LOW_CONFIDENCE,
+                       AssessmentStatus.PARTIAL):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmpdir:
+                path = Path(tmpdir) / "face.jpg"
+                path.write_bytes(b"face")
+                original = _sample_analysis()
+                unknown = EyeMeasurement.unknown(status)
+                left = original.eye_state.left if status is AssessmentStatus.PARTIAL else unknown
+                eye_state = EyeState(left=left, right=unknown,
+                                     combined_open_score=0.2 if status is AssessmentStatus.PARTIAL else None,
+                                     confidence=0.0, status=status)
+                original = replace(original, eye_state=eye_state,
+                                   eyes=(MetricResult(0.7, 0.7, 0.4, 0.51)
+                                         if status is AssessmentStatus.PARTIAL else
+                                         MetricResult(None, None, 0.0, 0.51)))
+                face = DetectedFace(path=path, bbox=(1, 2, 30, 40), confidence=0.95,
+                                    landmarks=np.ones((5, 2), dtype=np.float32), analysis=original)
+                cache_path = Path(tmpdir) / "cache.sqlite3"
+                ImageFaceAnalysisCache(cache_path).put(path, 4, 11, [face])
+                restored = ImageFaceAnalysisCache(cache_path).get(path, 4, 11)[0].analysis
+                self.assertEqual(original.eyes, restored.eyes)
+                self.assertEqual(original.eye_state, restored.eye_state)
+                self.assertEqual(original.selection_score, restored.selection_score)
+
+    def test_old_eye_schema_is_scoped_cache_miss(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "face.jpg"
+            path.write_bytes(b"face")
+            db = Path(tmpdir) / "cache.sqlite3"
+            face = DetectedFace(path=path, bbox=(1, 2, 30, 40), confidence=0.95,
+                                landmarks=np.ones((5, 2), dtype=np.float32), analysis=_sample_analysis())
+            cache = ImageFaceAnalysisCache(db)
+            cache.put(path, 4, 11, [face])
+            with cache._storage.connect() as connection:
+                connection.execute("UPDATE image_face_analysis_cache SET cache_version = 1 WHERE path = ?", (str(path),))
+            self.assertIsNone(ImageFaceAnalysisCache(db).get(path, 4, 11))
 
     def test_processor_persists_face_analysis_in_image_analysis_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
