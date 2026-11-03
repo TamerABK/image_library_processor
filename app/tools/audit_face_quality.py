@@ -30,6 +30,9 @@ from automatic_scan.duplicate_selection import _ranking_sort_key, select_duplica
 from automatic_scan.eligibility import assess_face_quality, assess_people_picture
 from automatic_scan.models import DiscoveryRecord, PipelineImageState
 from automatic_scan.services import AutomaticScanServices
+from automatic_scan.keeper_ranker_v2 import (FACE_WEIGHTS, VERSION as V2_VERSION,
+    Face as V2Face, Feature as V2Feature, Photo as V2Photo,
+    Preferences as V2Preferences, rank_group as rank_v2_group)
 from duplicate_detector.models import PhotoInfo
 from face_analyzer.config import FaceAnalyzerConfig
 from face_analyzer.ranking import describe_distribution
@@ -50,6 +53,7 @@ PHOTO_FIELDS = (
     "unusable_primary_count", "worst_primary_score", "weighted_primary_average",
     "best_primary_score", "terminal_failure", "quality_warnings", "quality_reasons",
     "face_cache_hit", "duplicate_index_available", "error",
+    "technical_blur_score",
 )
 FACE_EXTRA_FIELDS = (
     "image_path", "face_index", "is_primary", "bbox_x", "bbox_y", "bbox_width",
@@ -446,6 +450,11 @@ def run(args: argparse.Namespace) -> Path:
                 face_data = _face_rows(path, found, people.primary_face_indices if people else ())
                 photo_data = _photo_row(record, found, people, quality, cache_hit=cache_hit,
                                         duplicate_available=indexed is not None, error=error)
+                blur_getter = getattr(services, "get_blur_cached", None)
+                cached_blur = blur_getter(record) if blur_getter else None
+                if cached_blur is None and getattr(args, "include_blur", False) and args.mode == "full":
+                    cached_blur = services.analyze_blur(record)
+                photo_data["technical_blur_score"] = (cached_blur.final_score if cached_blur else "")
                 item = dict(image_path=str(path), face_rows=face_data, photo_row=photo_data,
                             photo_info=({key: str(value) if key == "path" else value for key, value in asdict(indexed).items()}
                                         if indexed else None))
@@ -484,6 +493,79 @@ def run(args: argparse.Namespace) -> Path:
     else:
         groups = []
     decisions = select_duplicate_keepers(groups, image_states=states, config=config)
+    face_by_path = {}
+    for row in face_rows:
+        face_by_path.setdefault(row["image_path"], []).append(row)
+    photo_by_path = {row["image_path"]: row for row in photo_rows}
+    v2_features, v2_comparison, v2_summary = [], [], {}
+    metric_columns = {"sharpness": "image_quality_sharpness", "eyes": "eyes",
+                      "pose": "pose_metric", "exposure": "image_quality_exposure",
+                      "contrast": "image_quality_contrast", "detail": "image_quality_detail_availability",
+                      "detector": "detector_metric", "visible": "visible_face_metric",
+                      "reliability": "measurement_reliability"}
+    def number(value):
+        try:
+            return float(value) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+    for prefer_faces, prefer_eyes in itertools.product((True, False), repeat=2):
+        prefs = V2Preferences(prefer_faces, prefer_eyes)
+        preference_id = f"face_{int(prefer_faces)}_eyes_{int(prefer_eyes)}"
+        disagreements = uncertain = near_ties = 0
+        for group in decisions:
+            candidates = []
+            for path in group.image_paths:
+                rows = face_by_path.get(path, [])
+                largest = max((number(row.get("geometry_relative_area")) or 0 for row in rows), default=0)
+                important = []
+                for row in rows:
+                    area = number(row.get("geometry_relative_area")) or 0
+                    if area < max(.008, .68 * largest) or row.get("analysis_missing"):
+                        continue
+                    features = {name: V2Feature(number(row.get(prefix + "_ranking_score")),
+                                               number(row.get(prefix + "_confidence")) or 0)
+                                for name, prefix in metric_columns.items()}
+                    important.append(V2Face(features, max(.25, min(2., area / max(largest, .0001)))))
+                technical = number(photo_by_path[path].get("technical_blur_score"))
+                candidates.append(V2Photo(path, tuple(important), V2Feature(technical)))
+            ranked = rank_v2_group(tuple(candidates), prefs)
+            uncertain += int(any(score.uncertain for score in ranked))
+            disagreements += int(ranked[0].image_id != group.image_paths[0])
+            margin = (ranked[0].score - ranked[1].score
+                      if len(ranked) > 1 and ranked[0].score is not None
+                      and ranked[1].score is not None else None)
+            near_ties += int(margin is not None and margin < 1.0)
+            for position, score in enumerate(ranked, 1):
+                v2_features.append({**asdict(score), "group_id": group.group_id,
+                                    "preference_id": preference_id, "v2_position": position,
+                                    "eye_included": int("eyes" in score.used_face_features),
+                                    "moment_available": 0, "composition_available": 0,
+                                    "ranking_version": V2_VERSION})
+            v2_comparison.append(dict(group_id=group.group_id, preference_id=preference_id,
+                v1_winner=group.image_paths[0], v2_winner=ranked[0].image_id,
+                agreement=int(group.image_paths[0] == ranked[0].image_id),
+                candidate_ids="|".join(group.image_paths),
+                v1_positions="|".join(str(group.image_paths.index(path) + 1) for path in group.image_paths),
+                v2_positions="|".join(str(next(i for i, s in enumerate(ranked, 1)
+                                             if s.image_id == path)) for path in group.image_paths),
+                v2_margin=margin if margin is not None else "",
+                near_tie=int(margin is not None and margin < 1.0),
+                quality_comparison_available=int(all(s.score is not None for s in ranked)),
+                key_features="|".join(ranked[0].used_face_features) + ("|technical" if ranked[0].technical_score is not None else ""),
+                uncertain=int(any(score.uncertain for score in ranked))))
+        v2_summary[preference_id] = dict(groups=len(decisions), winner_disagreements=disagreements,
+                                         uncertain_groups=uncertain, near_ties=near_ties)
+    _csv(output / "ranking_v2_features.csv", ["group_id", "preference_id", "v2_position",
+        "eye_included", "moment_available", "composition_available", "ranking_version"]
+        + list(asdict(rank_v2_group((V2Photo("schema", (), V2Feature(None)),))[0]).keys()), v2_features)
+    _csv(output / "ranking_v1_v2_comparison.csv", ["group_id", "preference_id", "v1_winner",
+        "v2_winner", "agreement", "candidate_ids", "v1_positions", "v2_positions",
+        "v2_margin", "near_tie", "quality_comparison_available", "key_features", "uncertain"], v2_comparison)
+    (output / "ranking_v2_summary.json").write_text(json.dumps({"version": V2_VERSION,
+        "preferences": v2_summary, "technical_source": (
+            "existing blur stage in isolated full audit" if getattr(args, "include_blur", False)
+            else "compatible blur cache only"),
+        "moment_available": False, "composition_available": False}, indent=2), encoding="utf-8")
     human_labels = _labels(Path(args.labels_csv) if args.labels_csv else None, root)
     photos_by_path = {r["image_path"]: r for r in photo_rows}
     ranking_rows, pair_rows, annotation_rows = [], [], []
@@ -566,6 +648,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--groups-csv", help="Optional CSV with group_id,image_path; otherwise use production duplicate grouping")
     parser.add_argument("--labels-csv", help="Optional pairwise CSV with image_a,image_b,preferred_image")
     parser.add_argument("--provider", choices=("automatic", "cpu", "directml", "gpu"), default="automatic")
+    parser.add_argument("--include-blur", action="store_true",
+                        help="Compute the existing whole-image blur stage in full mode for V2 technical evidence")
     parser.add_argument("--max-images", type=int, help="Deterministic first N images for a smoke run")
     parser.add_argument("--contact-sheets", action="store_true")
     args = parser.parse_args(argv)

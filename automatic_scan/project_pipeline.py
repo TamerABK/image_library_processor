@@ -6,12 +6,16 @@ The caller supplies the discovered identities and one cancellation token.
 from dataclasses import asdict
 from contextlib import nullcontext
 import ctypes
+from functools import lru_cache
+import hashlib
 from enum import StrEnum
 from pathlib import Path
 import os
 import time
 
 from app_paths import model_path
+from face_analyzer.config import FaceAnalyzerConfig
+from face_processing.cache import ImageFaceAnalysisCache
 from duplicate_detector.config import DetectorConfig
 from image_loader import ImageLoader, default_image_loader
 from .decode_pool import (BoundedDecodePool, decode_workers_from_environment,
@@ -28,6 +32,12 @@ from .services import AutomaticScanServices
 from .scan_logging import get_scan_logger
 from .profiling import profile_scope, profile_count
 from face_detector.connected_face_clusterer import ClusterCapacityError
+
+
+@lru_cache(maxsize=16)
+def _model_digest(path: str, size: int, mtime_ns: int, ctime_ns: int) -> str:
+    with open(path, "rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 class StageState(StrEnum):
@@ -134,10 +144,15 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
         path = model_path(name)
         try:
             stat = path.stat()
-            models.append((name, stat.st_size, stat.st_mtime_ns))
+            models.append((name, stat.st_size, stat.st_mtime_ns,
+                           _model_digest(str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)))
         except OSError:
             models.append((name, "missing"))
     face_key = signature(["faces-v1", models, config.faces, config.people_picture])
+    analysis_models = [item for item in models if item[0] != "glintr100.onnx"]
+    analysis_key = signature(["face-analysis-v2", ImageFaceAnalysisCache.CACHE_VERSION,
+                              asdict(FaceAnalyzerConfig()), analysis_models,
+                              config.faces, config.people_picture])
     diagnostics = {}
     completed = set()
     try:
@@ -432,7 +447,7 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
                     services.initialize_faces()
                 token.raise_if_canceled()
                 return services.analyze_faces(record, cancellation_token=token)
-            face_results = per_file("faces", face_key, services.get_face_analysis_cached,
+            face_results = per_file("faces", analysis_key, services.get_face_analysis_cached,
                 compute, stats, progress, valid)
             if valid and not face_results:
                 raise StageUnavailable("People analysis is unavailable. Check that the required face models are installed.")
@@ -664,7 +679,7 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
         def ranking(stats, progress):
             if groups is None:
                 raise ValueError("Duplicate groups unavailable")
-            key = signature(["ranking-v1", fingerprint, face_key, duplicate_key,
+            key = signature(["ranking-v1-cache-v2", fingerprint, analysis_key, duplicate_key,
                              config.face_quality_preset, config.blur_policy, config.duplicate_selection,
                              "face_quality" in completed, sorted(face_results)])
             value = cache.get(folder, "ranking", key)
@@ -677,6 +692,25 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
                 stats["aggregate_reused"] = 1
             return value
         stage("ranking", ranking)
+        # Shadow evaluation is isolated from the V1 keeper result and reviews.
+        try:
+            from .keeper_ranker_v2 import Preferences, VERSION, rank_group
+            from .keeper_ranker_v2_adapter import photo_input
+            v2_key = signature([VERSION, fingerprint, analysis_key, blur_key, duplicate_key,
+                                config.duplicate_selection.prefer_open_eyes,
+                                config.duplicate_selection.prioritize_primary_face_quality])
+            if groups is not None and cache.get(folder, "ranking_v2", v2_key) is None:
+                preferences = Preferences(
+                    config.duplicate_selection.prioritize_primary_face_quality,
+                    config.duplicate_selection.prefer_open_eyes)
+                shadow = []
+                for group in groups:
+                    candidates = tuple(photo_input(path, face_results.get(path, []),
+                                                   blur_results.get(path)) for path in group)
+                    shadow.append([asdict(score) for score in rank_group(candidates, preferences)])
+                cache.put(folder, "ranking_v2", v2_key, shadow)
+        except Exception:
+            logger.exception("ranking_v2_shadow_failed folder=%s", folder)
         for name in STAGES:
             if name not in diagnostics:
                 logger.info("stage_skipped folder=%s stage=%s reason=earlier_required_stage", folder, name)
