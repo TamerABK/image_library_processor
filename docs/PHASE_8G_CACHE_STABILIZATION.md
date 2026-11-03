@@ -2,6 +2,7 @@
 
 Baseline branch: `qt-qml-export-phase8d`, starting commit
 `816cf043f02ba6c3d05381628e5ae5851e802949`.
+Corrective implementation commit: `b319d5b6aca6453b2b98ca8986c6bfbfab9e6bff`.
 
 ## Confirmed cause
 
@@ -40,6 +41,13 @@ SQLite close/reopen tests cover independently valued eye metrics, partial and
 unknown eye states, and scoped version misses. Focused keeper tests check both
 preference switches. The previous 1,732-image audit has **not** been rerun;
 its 5,091 and 3,074 mismatch counts are historical, not post-fix results.
+An isolated 12-photo fresh/cached run compared 26 faces: `face_metrics.csv`
+was byte-identical (zero field mismatches), all 12 photos hit the copied cache,
+and `photo_metrics.csv` differed only in its expected `face_cache_hit` flag.
+The subset had no duplicate comparison groups, so keeper-order parity was
+not measured in this focused run. No record required recomputation in the
+new cache; old version-1 records are deliberately recomputed when requested.
+The local full suite passed 526 tests (10 skipped).
 No human-labeled eye crops were supplied. The adapter's BGR 32×32 input,
 normalization and `[closed, open]` class assumption were inspected, but the
 class order cannot be independently validated without labeled inference.
