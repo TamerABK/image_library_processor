@@ -51,11 +51,11 @@ class StageState(StrEnum):
 
 STAGES = ("blur", "duplicates", "faces", "face_quality", "embeddings", "people", "ranking")
 MAX_CANDIDATE_PAIRS = 50000
-MAX_UNKNOWN_FACES = 2000 * 8  # Clustering allocates an N x N float32 similarity matrix.
+MAX_UNKNOWN_FACES = 64_000  # Similarity blocks are bounded; graph edges retain a separate ceiling.
 
 
 def unknown_face_limit() -> int:
-    """Configurable downward from the 16,000-face hard safety ceiling."""
+    """Configurable downward from the 64,000-face hard safety ceiling."""
     try:
         value = int(os.environ.get("ROOM36_MAX_UNKNOWN_FACES", str(MAX_UNKNOWN_FACES)))
     except ValueError:

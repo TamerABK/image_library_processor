@@ -16,12 +16,12 @@ from scan_controls import CancellationToken, ScanCancelledError
 
 
 class ClusterCapacityTests(unittest.TestCase):
-    def test_original_limit_is_raised_eightfold_but_configurable_downward(self):
-        self.assertEqual(MAX_UNKNOWN_FACES, 16_000)
+    def test_limit_is_64000_but_configurable_downward(self):
+        self.assertEqual(MAX_UNKNOWN_FACES, 64_000)
         with patch.dict(os.environ, {"ROOM36_MAX_UNKNOWN_FACES": "9000"}):
             self.assertEqual(unknown_face_limit(), 9000)
         with patch.dict(os.environ, {"ROOM36_MAX_UNKNOWN_FACES": "999999"}):
-            self.assertEqual(unknown_face_limit(), 16_000)
+            self.assertEqual(unknown_face_limit(), 64_000)
 
     def test_blockwise_graph_fails_safely_before_unbounded_edge_growth(self):
         faces = [EmbeddedFace((0, 0, 10, 10), 1.0,
