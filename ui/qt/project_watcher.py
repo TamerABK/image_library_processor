@@ -164,7 +164,9 @@ class ProjectFilesystemWatcher(QObject):
         active = self._projects.activeProjectFolder
         if active and photo_identity(active) != self._folder:
             self._project_opening(active)
-            self._request_enumeration()
+        # A photo-neutral refresh may still have created, removed, or restored
+        # a subdirectory. Keep watches current without restarting processing.
+        self._request_enumeration()
         if self._dirty:
             self._debounce.start()
 
@@ -234,7 +236,7 @@ class ProjectFilesystemWatcher(QObject):
         if self._projects.busy:
             return  # _discovery_state_changed schedules one follow-up.
         self._dirty = False
-        self._projects.refreshActiveProject()
+        self._projects.refreshActiveProjectIfChanged()
 
     @Slot()
     def _fallback_refresh(self):

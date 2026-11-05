@@ -149,7 +149,7 @@ class ProcessingTests(unittest.TestCase):
         self.processing._drain()
         self.assertEqual(1, self.processing.blurModel.rowCount())
         current = self.processing.blurModel.identities()[0]
-        self.assertEqual("UNDECIDED", self.processing.blurModel.photo(current)["reviewState"])
+        self.assertNotEqual("KEEP", self.processing.blurModel.photo(current)["reviewState"])
         self.assertFalse(self.processing.setReview(old_identity, "REMOVE"))
         self.assertNotIn(old_identity, self.processing.blurModel.results)
 

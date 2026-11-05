@@ -161,6 +161,36 @@ class WatcherTests(unittest.TestCase):
         wait_until(lambda: photo_identity(nested) in self.backend.paths, timeout=10)
         self.assertIn(photo_identity(nested / "inside.jpg"), self.photos.identities())
 
+    def test_nested_non_photo_changes_do_not_restart_processing(self):
+        nested = self.a / "nested"
+        nested.mkdir()
+        (nested / "inside.jpg").write_bytes(b"inside")
+        self.changed()
+        self.wait_refresh(2)
+        wait_until(lambda: photo_identity(nested) in self.backend.paths, timeout=10)
+
+        class ProcessingProbe:
+            starts = 0
+            invalidations = 0
+            def start(self, *_):
+                self.starts += 1
+            def invalidate(self):
+                self.invalidations += 1
+
+        probe = ProcessingProbe()
+        self.projects._processing = probe
+        for number in range(3):
+            (nested / "scan.log").write_text(str(number), encoding="utf-8")
+            self.changed(nested)
+            self.wait_refresh(number + 3)
+        self.assertEqual(0, probe.starts)
+        self.assertEqual(0, probe.invalidations)
+        (nested / "inside.jpg").write_bytes(b"changed image")
+        self.changed(nested)
+        self.wait_refresh(6)
+        self.assertEqual(1, probe.starts)
+        self.assertEqual(1, probe.invalidations)
+
     def test_missing_root_reports_error_and_parent_watch_detects_return(self):
         self.assertIn(photo_identity(self.root), self.backend.paths)
         relocated = self.root / "moved-away"

@@ -39,31 +39,44 @@ def discover_photos(folder):
     return [ResultItem(path, path.name, "") for path in sorted(paths, key=lambda path: str(path).casefold())]
 
 
+def _photo_snapshot(items):
+    """Capture photo identities and file revisions on the discovery thread."""
+    snapshot = []
+    for item in items:
+        try:
+            file_stat = Path(item.path).stat()
+            snapshot.append((str(item.path), file_stat.st_size, file_stat.st_mtime_ns))
+        except OSError:
+            snapshot.append((str(item.path), None, None))
+    return tuple(snapshot)
+
+
 def _discovery_worker(tasks, results, stop, discover):
     while not stop.is_set():
         try:
-            generation, project = tasks.get(timeout=0.05)
+            generation, project, only_if_changed = tasks.get(timeout=0.05)
         except Empty:
             continue
         try:
             items = discover(project.folder)
+            snapshot = _photo_snapshot(items)
             error = ""
         except FileNotFoundError:
-            items, error = [], "This project folder is missing or was moved. Choose its current folder with New Project."
+            items, snapshot, error = [], (), "This project folder is missing or was moved. Choose its current folder with New Project."
         except PermissionError:
-            items, error = [], "Room 36 cannot access this folder. Check its permissions and try again."
+            items, snapshot, error = [], (), "Room 36 cannot access this folder. Check its permissions and try again."
         except Exception:
-            items, error = [], "This folder could not be opened. Check that it is available and try again."
+            items, snapshot, error = [], (), "This folder could not be opened. Check that it is available and try again."
         if stop.is_set():
             return
         try:
-            results.put_nowait((generation, project, items, error))
+            results.put_nowait((generation, project, items, snapshot, error, only_if_changed))
         except Full:
             try:
                 results.get_nowait()  # Only the latest requested project can apply.
             except Empty:
                 pass
-            results.put_nowait((generation, project, items, error))
+            results.put_nowait((generation, project, items, snapshot, error, only_if_changed))
 
 
 class ProjectController(QObject):
@@ -95,6 +108,8 @@ class ProjectController(QObject):
         self._generation = 0
         self._refresh_pending = False
         self._refresh_pending_folder = ""
+        self._refresh_pending_only_if_changed = True
+        self._active_snapshot = None
         self._covers = ProjectCoverService(self._database.path, self) if self._database else None
         self._projects = ProjectListModel(self._load_projects(), self, covers=self._covers)
         self._tasks, self._results = Queue(maxsize=1), Queue(maxsize=1)
@@ -259,48 +274,62 @@ class ProjectController(QObject):
             return
         self._start(project)
 
-    def _start(self, project):
+    def _start(self, project, *, only_if_changed=False):
         if self._refresh_pending_folder and self._refresh_pending_folder != project.folder:
             self._refresh_pending = False
             self._refresh_pending_folder = ""
-        self.projectOpening.emit(project.folder)
-        if self._processing is not None:
-            self._processing.invalidate()
+            self._refresh_pending_only_if_changed = True
+        if not only_if_changed:
+            self.projectOpening.emit(project.folder)
+            if self._processing is not None:
+                self._processing.invalidate()
         self._generation += 1
-        self._set_message("Opening " + project.name + "…")
+        if not only_if_changed:
+            self._set_message("Opening " + project.name + "…")
         self._set_busy(True)
         try:
             self._tasks.get_nowait()
         except Empty:
             pass
-        self._tasks.put_nowait((self._generation, project))
+        self._tasks.put_nowait((self._generation, project, only_if_changed))
         self._timer.start()
 
     @Slot(result=bool)
     def refreshActiveProject(self):
+        return self._request_refresh(only_if_changed=False)
+
+    def refreshActiveProjectIfChanged(self):
+        """Watcher refresh: skip processing if only unrelated files changed."""
+        return self._request_refresh(only_if_changed=True)
+
+    def _request_refresh(self, *, only_if_changed):
         """Coalesce external changes into at most one follow-up discovery."""
         if self._closed or not self._active_id:
             return False
         if self._busy:
             self._refresh_pending = True
             self._refresh_pending_folder = self._active_folder
+            self._refresh_pending_only_if_changed &= only_if_changed
             return True
         project = self._projects.get(self._active_id)
         if project is None:
             return False
-        self._start(project)
+        self._start(project, only_if_changed=only_if_changed)
         return True
 
     def _finish_pending_refresh(self):
         if self._refresh_pending and self._refresh_pending_folder == self._active_folder:
+            only_if_changed = self._refresh_pending_only_if_changed
             self._refresh_pending = False
             self._refresh_pending_folder = ""
-            QTimer.singleShot(0, self.refreshActiveProject)
+            self._refresh_pending_only_if_changed = True
+            QTimer.singleShot(0, self.refreshActiveProjectIfChanged if only_if_changed
+                              else self.refreshActiveProject)
 
     @Slot()
     def _drain(self):
         try:
-            generation, project, items, error = self._results.get_nowait()
+            generation, project, items, snapshot, error, only_if_changed = self._results.get_nowait()
         except Empty:
             return
         if generation != self._generation or self._closed:
@@ -311,12 +340,21 @@ class ProjectController(QObject):
             self._set_message(error)
             self._finish_pending_refresh()
             return
+        if (only_if_changed and project.project_id == self._active_id
+                and snapshot == self._active_snapshot):
+            self._finish_pending_refresh()
+            return
+        if only_if_changed:
+            self.projectOpening.emit(project.folder)
+            if self._processing is not None:
+                self._processing.invalidate()
         project = replace(project, last_opened=time.time(), photo_count=len(items))
         save_message = self._save_projects(project)
         # Selection is session state: never carry it into a different folder.
         self._photos.replace_items(items, preserve_selection=False)
         self._projects.register(project)
         self._active_id, self._active_name, self._active_folder = project.project_id, project.name, project.folder
+        self._active_snapshot = snapshot
         self.activeProjectChanged.emit()
         self._set_message(save_message)
         if self._processing is not None:
