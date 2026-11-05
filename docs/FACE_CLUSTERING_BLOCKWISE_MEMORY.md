@@ -2,7 +2,7 @@
 
 ## Scope
 
-The source revision inspected before editing was `34267d3fe7459dd3aa5047f6c144899a04f75308`. The implementation commit is `b26ec94ff1257332cbfae8ca21ecf3df863a3043`. This changes only unknown-face clustering's temporary similarity calculation. The 16,000-face and 4,000,000-edge ceilings, thresholds, recognition, ranking, models, and stored identities are unchanged. The Windows CI run is in the delivery report.
+The source revision inspected before editing was `34267d3fe7459dd3aa5047f6c144899a04f75308`. The implementation commit is `b26ec94ff1257332cbfae8ca21ecf3df863a3043`. This changes only unknown-face clustering's temporary similarity calculation. The 16,000-face and 4,000,000-edge ceilings, thresholds, recognition, ranking, models, and stored identities are unchanged. Windows CI passed for the implementation and benchmark commits: https://github.com/TamerABK/image_library_processor/actions/runs/42027473336.
 
 ## Allocation policy
 
