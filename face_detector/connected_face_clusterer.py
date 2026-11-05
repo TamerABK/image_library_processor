@@ -1,4 +1,5 @@
 from collections import defaultdict, deque
+import time
 
 import numpy as np
 
@@ -6,6 +7,24 @@ from face_processing.interfaces import EmbeddingSimilarity, FaceClusterer
 from face_processing.models import EmbeddedFace, UnknownCluster
 
 MAX_GRAPH_EDGES = 4_000_000
+DEFAULT_BLOCK_ROWS = 256
+DEFAULT_BLOCK_BUDGET_BYTES = 16 * 1024 * 1024
+
+
+def _process_memory():
+    try:
+        import psutil
+        info = psutil.Process().memory_info()
+        return info.rss, getattr(info, "private", None)
+    except (ImportError, OSError):
+        return None, None
+
+
+def effective_block_rows(face_count: int, *, max_rows: int = DEFAULT_BLOCK_ROWS,
+                         budget_bytes: int = DEFAULT_BLOCK_BUDGET_BYTES) -> int:
+    if max_rows < 1 or budget_bytes < 4:
+        raise ValueError("Clustering block rows and budget must be positive")
+    return max(1, min(max_rows, budget_bytes // max(4, face_count * 4)))
 
 
 class ClusterCapacityError(RuntimeError):
@@ -19,6 +38,8 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
         similarity: EmbeddingSimilarity,
         strong_threshold: float = 0.85,
         weak_threshold: float = 0.75,
+        block_rows: int = DEFAULT_BLOCK_ROWS,
+        block_budget_bytes: int = DEFAULT_BLOCK_BUDGET_BYTES,
     ):
         if weak_threshold >= strong_threshold:
             raise ValueError(
@@ -28,13 +49,16 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
         self._similarity = similarity
         self._strong = strong_threshold
         self._weak = weak_threshold
+        self._block_rows = block_rows
+        self._block_budget_bytes = block_budget_bytes
+        self.last_diagnostics: dict[str, int | float] = {}
 
     def cluster(
         self,
         faces: list[EmbeddedFace],
         cancellation_token=None,
     ) -> list[UnknownCluster]:
-
+        self.last_diagnostics = {}
         if not faces:
             return []
 
@@ -50,10 +74,15 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
 
         if cancellation_token is not None:
             cancellation_token.raise_if_canceled()
-        similarity_matrix = self._build_similarity_matrix(faces)
+        rss_before, private_before = _process_memory()
+        started = time.perf_counter()
+        embeddings = np.asarray([face.embedding for face in faces], dtype=np.float32)
+        rows = effective_block_rows(len(faces), max_rows=self._block_rows,
+                                    budget_bytes=self._block_budget_bytes)
         if cancellation_token is not None:
             cancellation_token.raise_if_canceled()
-        strong_graph, weak_edges = self._build_graphs(similarity_matrix, cancellation_token)
+        strong_graph, weak_edges, graph_stats = self._build_graphs_blockwise(
+            embeddings, rows, cancellation_token)
 
         labels = self._strong_components(strong_graph, len(faces), cancellation_token)
 
@@ -70,6 +99,7 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
             grouped_indices[label].append(index)
 
         clusters = []
+        representative_started = time.perf_counter()
 
         for cluster_id, cluster_face_indices in grouped_indices.items():
             if cancellation_token is not None:
@@ -77,8 +107,10 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
             cluster_faces = [faces[index] for index in cluster_face_indices]
             representative = self._representative(
                 cluster_face_indices,
-                similarity_matrix,
+                embeddings,
                 faces,
+                rows,
+                cancellation_token,
             )
 
             clusters.append(
@@ -95,47 +127,59 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
             reverse=True,
         )
 
+        self.last_diagnostics = dict(face_count=len(faces), embedding_dimension=embeddings.shape[1],
+            embedding_bytes=embeddings.nbytes, block_rows=rows,
+            block_budget_bytes=self._block_budget_bytes,
+            max_similarity_block_bytes=min(rows, len(faces)) * len(faces) * 4,
+            block_count=(len(faces) + rows - 1) // rows,
+            largest_component=max(map(len, grouped_indices.values())),
+            representative_seconds=time.perf_counter() - representative_started,
+            total_seconds=time.perf_counter() - started, **graph_stats)
+        rss_after, private_after = _process_memory()
+        if rss_before is not None and rss_after is not None:
+            self.last_diagnostics.update(process_rss_before_bytes=rss_before,
+                                         process_rss_after_bytes=rss_after)
+        if private_before is not None and private_after is not None:
+            self.last_diagnostics.update(process_private_before_bytes=private_before,
+                                         process_private_after_bytes=private_after)
         return clusters
 
-    @staticmethod
-    def _build_similarity_matrix(
-        faces: list[EmbeddedFace],
-    ) -> np.ndarray:
-        embeddings = np.asarray(
-            [face.embedding for face in faces],
-            dtype=np.float32,
-        )
-        return embeddings @ embeddings.T
-
-    def _build_graphs(
-        self,
-        similarity_matrix: np.ndarray,
-        cancellation_token=None,
-    ) -> tuple[dict[int, list[int]], list[tuple[int, int]]]:
-
+    def _build_graphs_blockwise(self, embeddings, rows, cancellation_token=None):
         strong = defaultdict(list)
         weak = []
-        edge_count = 0
-        # At 10,000 faces, triu_indices_from alone allocates about 800 MiB.
-        # Iterate rows to preserve edge order and thresholds with bounded
-        # temporary arrays; the similarity matrix remains the main allocation.
-        for i in range(len(similarity_matrix) - 1):
-            if cancellation_token is not None and i % 32 == 0:
+        strong_count = weak_count = max_adjacency = 0
+        similarity_seconds = graph_seconds = 0.0
+        n = len(embeddings)
+        for start in range(0, n, rows):
+            if cancellation_token is not None:
                 cancellation_token.raise_if_canceled()
-            scores = similarity_matrix[i, i + 1:]
-            strong_offsets = np.flatnonzero(scores >= self._strong)
-            weak_offsets = np.flatnonzero((scores >= self._weak) & (scores < self._strong))
-            edge_count += len(strong_offsets) + len(weak_offsets)
-            if edge_count > MAX_GRAPH_EDGES:
-                raise ClusterCapacityError("Unknown-face similarity graph exceeds its memory safety limit")
-            for offset in strong_offsets:
-                j = i + 1 + int(offset)
-                strong[i].append(j)
-                strong[j].append(i)
-            for offset in weak_offsets:
-                weak.append((i, i + 1 + int(offset)))
-
-        return strong, weak
+            tick = time.perf_counter()
+            # Earlier columns cannot contain j > i for any row in this block.
+            block = embeddings[start:start + rows] @ embeddings[start:].T
+            similarity_seconds += time.perf_counter() - tick
+            tick = time.perf_counter()
+            for local, i in enumerate(range(start, min(start + rows, n))):
+                if cancellation_token is not None and i % 32 == 0:
+                    cancellation_token.raise_if_canceled()
+                scores = block[local, local + 1:]
+                strong_offsets = np.flatnonzero(scores >= self._strong)
+                weak_offsets = np.flatnonzero((scores >= self._weak) & (scores < self._strong))
+                if strong_count + weak_count + len(strong_offsets) + len(weak_offsets) > MAX_GRAPH_EDGES:
+                    raise ClusterCapacityError("Unknown-face similarity graph exceeds its memory safety limit")
+                strong_count += len(strong_offsets)
+                weak_count += len(weak_offsets)
+                for offset in strong_offsets:
+                    j = i + 1 + int(offset)
+                    strong[i].append(j)
+                    strong[j].append(i)
+                    max_adjacency = max(max_adjacency, len(strong[i]), len(strong[j]))
+                for offset in weak_offsets:
+                    weak.append((i, i + 1 + int(offset)))
+            graph_seconds += time.perf_counter() - tick
+            del block
+        return strong, weak, dict(strong_edges=strong_count, weak_edges=weak_count,
+            total_edges=strong_count + weak_count, max_adjacency_length=max_adjacency,
+            similarity_seconds=similarity_seconds, graph_seconds=graph_seconds)
 
     def _strong_components(
             self,
@@ -158,10 +202,12 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
 
             queue = deque([start])
             visited[start] = True
-
+            traversed = 0
             while queue:
-
+                if cancellation_token is not None and traversed % 1024 == 0:
+                    cancellation_token.raise_if_canceled()
                 node = queue.popleft()
+                traversed += 1
 
                 labels[node] = cluster
 
@@ -239,13 +285,22 @@ class ConnectedComponentFaceClusterer(FaceClusterer):
     @staticmethod
     def _representative(
         face_indices: list[int],
-        similarity_matrix: np.ndarray,
+        embeddings: np.ndarray,
         faces: list[EmbeddedFace],
+        rows: int = DEFAULT_BLOCK_ROWS,
+        cancellation_token=None,
     ) -> EmbeddedFace:
 
         if len(face_indices) == 1:
             return faces[face_indices[0]]
 
-        cluster_scores = similarity_matrix[np.ix_(face_indices, face_indices)]
-        best_local_index = int(np.argmax(cluster_scores.sum(axis=1)))
+        selected = embeddings[face_indices]
+        scores = np.empty(len(face_indices), dtype=np.float32)
+        for start in range(0, len(face_indices), rows):
+            if cancellation_token is not None:
+                cancellation_token.raise_if_canceled()
+            block = selected[start:start + rows] @ selected.T
+            scores[start:start + len(block)] = block.sum(axis=1)
+            del block
+        best_local_index = int(np.argmax(scores))
         return faces[face_indices[best_local_index]]

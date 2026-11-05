@@ -23,12 +23,14 @@ class ClusterCapacityTests(unittest.TestCase):
         with patch.dict(os.environ, {"ROOM36_MAX_UNKNOWN_FACES": "999999"}):
             self.assertEqual(unknown_face_limit(), 16_000)
 
-    def test_dense_graph_fails_safely_before_unbounded_edge_growth(self):
-        matrix = np.ones((12, 12), dtype=np.float32)
+    def test_blockwise_graph_fails_safely_before_unbounded_edge_growth(self):
+        faces = [EmbeddedFace((0, 0, 10, 10), 1.0,
+            np.zeros((5, 2), dtype=np.float32), np.array([1, 0], np.float32),
+            Path(f"{index}.jpg")) for index in range(12)]
         clusterer = ConnectedComponentFaceClusterer(CosineEmbeddingSimilarity())
         with patch("face_detector.connected_face_clusterer.MAX_GRAPH_EDGES", 20):
             with self.assertRaises(ClusterCapacityError):
-                clusterer._build_graphs(matrix)
+                clusterer.cluster(faces)
 
     def test_clustering_honors_cancellation(self):
         vectors = np.eye(32, dtype=np.float32)

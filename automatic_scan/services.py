@@ -36,7 +36,7 @@ from scan_controls import CancellationToken, ScanCancelledError
 from .config import AutomaticScanConfig, ExecutionProvider, VibeDetail
 from .models import DiscoveryRecord
 from .perf import get_active_profiler
-from .profiling import profile_scope
+from .profiling import profile_count, profile_scope
 
 
 def _resolve_onnx_providers(execution_provider: ExecutionProvider) -> list[str] | None:
@@ -641,7 +641,16 @@ class AutomaticScanServices:
         embedded_faces: list[EmbeddedFace],
         *, cancellation_token: CancellationToken | None = None,
     ) -> list[UnknownCluster]:
-        return self._face_clusterer.cluster(embedded_faces, cancellation_token=cancellation_token)
+        clusters = self._face_clusterer.cluster(embedded_faces, cancellation_token=cancellation_token)
+        diagnostics = getattr(self._face_clusterer, "last_diagnostics", {})
+        for name, value in diagnostics.items():
+            if isinstance(value, int):
+                profile_count("clustering." + name, value)
+        for name in ("similarity_seconds", "graph_seconds", "representative_seconds", "total_seconds"):
+            if name in diagnostics:
+                profile_count("clustering." + name.removesuffix("_seconds") + "_microseconds",
+                              int(diagnostics[name] * 1_000_000))
+        return clusters
 
     def suggest_known_names(self, embedding_match: Match | None) -> tuple[str, ...]:
         if embedding_match is None:
