@@ -7,7 +7,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-from automatic_scan.project_pipeline import MAX_UNKNOWN_FACES, unknown_face_limit
+from automatic_scan.project_pipeline import (MAX_UNKNOWN_FACES,
+    clustering_memory_estimate, unknown_face_limit)
 from face_detector.connected_face_clusterer import (
     ClusterCapacityError, ConnectedComponentFaceClusterer)
 from face_detector.cosine_similarity import CosineEmbeddingSimilarity
@@ -16,6 +17,13 @@ from scan_controls import CancellationToken, ScanCancelledError
 
 
 class ClusterCapacityTests(unittest.TestCase):
+    def test_large_project_uses_block_memory_estimate(self):
+        block, embeddings, graph = clustering_memory_estimate(46_073, 512 * 4)
+        self.assertLessEqual(block, 16 * 1024 * 1024)
+        self.assertEqual(embeddings, 46_073 * 512 * 4)
+        self.assertEqual(graph, 4_000_000 * 128)
+        self.assertLess((block + embeddings + graph) * 3, 2 * 1024 ** 3)
+
     def test_limit_is_64000_but_configurable_downward(self):
         self.assertEqual(MAX_UNKNOWN_FACES, 64_000)
         with patch.dict(os.environ, {"ROOM36_MAX_UNKNOWN_FACES": "9000"}):

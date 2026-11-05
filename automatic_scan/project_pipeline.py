@@ -31,7 +31,8 @@ from .project_cache import ProjectStageCache, signature
 from .services import AutomaticScanServices
 from .scan_logging import get_scan_logger
 from .profiling import profile_scope, profile_count
-from face_detector.connected_face_clusterer import ClusterCapacityError
+from face_detector.connected_face_clusterer import (ClusterCapacityError,
+    MAX_GRAPH_EDGES, effective_block_rows)
 
 
 @lru_cache(maxsize=16)
@@ -61,6 +62,14 @@ def unknown_face_limit() -> int:
     except ValueError:
         return MAX_UNKNOWN_FACES
     return value if 1 <= value <= MAX_UNKNOWN_FACES else MAX_UNKNOWN_FACES
+
+
+def clustering_memory_estimate(face_count: int, embedding_bytes_per_face: int) -> tuple[int, int, int]:
+    """Bounded similarity block, embedding matrix, and conservative graph allowance."""
+    block_bytes = effective_block_rows(face_count) * face_count * 4
+    embedding_bytes = face_count * embedding_bytes_per_face
+    graph_allowance = MAX_GRAPH_EDGES * 128
+    return block_bytes, embedding_bytes, graph_allowance
 
 
 def _available_memory_bytes() -> int | None:
@@ -646,9 +655,13 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
             if unknown and config.faces.cluster_unknown_people:
                 progress(0, 0)  # Clustering has no per-face progress counter.
                 available = _available_memory_bytes()
-                matrix_bytes = len(unknown) ** 2 * 4
-                stats["cluster_matrix_bytes"] = matrix_bytes
-                if available is not None and matrix_bytes * 3 > available:
+                block_bytes, embedding_bytes, graph_allowance = clustering_memory_estimate(
+                    len(unknown), unknown[0].embedding.nbytes)
+                estimated_bytes = embedding_bytes + block_bytes + graph_allowance
+                stats["cluster_similarity_block_bytes"] = block_bytes
+                stats["cluster_embedding_bytes"] = embedding_bytes
+                stats["cluster_graph_allowance_bytes"] = graph_allowance
+                if available is not None and estimated_bytes * 3 > available:
                     raise StageUnavailable(
                         "People matching needs more available memory to group these faces safely. "
                         "Other analysis remains available.")
