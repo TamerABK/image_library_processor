@@ -33,6 +33,7 @@ from automatic_scan.services import AutomaticScanServices
 from automatic_scan.keeper_ranker_v2 import (FACE_WEIGHTS, VERSION as V2_VERSION,
     Face as V2Face, Feature as V2Feature, Photo as V2Photo,
     Preferences as V2Preferences, rank_group as rank_v2_group)
+from automatic_scan.keeper_ranker_v2_adapter import photo_input as v2_photo_input, extract_faces, technical_feature, METRICS
 from duplicate_detector.models import PhotoInfo
 from face_analyzer.config import FaceAnalyzerConfig
 from face_analyzer.ranking import describe_distribution
@@ -53,7 +54,8 @@ PHOTO_FIELDS = (
     "unusable_primary_count", "worst_primary_score", "weighted_primary_average",
     "best_primary_score", "terminal_failure", "quality_warnings", "quality_reasons",
     "face_cache_hit", "duplicate_index_available", "error",
-    "technical_blur_score",
+    "technical_blur_score", "technical_raw_laplacian", "technical_raw_sobel",
+    "technical_raw_local_contrast", "technical_v2_score", "technical_v2_confidence",
 )
 FACE_EXTRA_FIELDS = (
     "image_path", "face_index", "is_primary", "bbox_x", "bbox_y", "bbox_width",
@@ -455,6 +457,8 @@ def run(args: argparse.Namespace) -> Path:
                 if cached_blur is None and getattr(args, "include_blur", False) and args.mode == "full":
                     cached_blur = services.analyze_blur(record)
                 photo_data["technical_blur_score"] = (cached_blur.final_score if cached_blur else "")
+                for key in ("laplacian", "sobel", "local_contrast"):
+                    photo_data["technical_raw_" + key] = getattr(cached_blur, key) if cached_blur else ""
                 item = dict(image_path=str(path), face_rows=face_data, photo_row=photo_data,
                             photo_info=({key: str(value) if key == "path" else value for key, value in asdict(indexed).items()}
                                         if indexed else None))
@@ -498,11 +502,7 @@ def run(args: argparse.Namespace) -> Path:
         face_by_path.setdefault(row["image_path"], []).append(row)
     photo_by_path = {row["image_path"]: row for row in photo_rows}
     v2_features, v2_comparison, v2_summary = [], [], {}
-    metric_columns = {"sharpness": "image_quality_sharpness", "eyes": "eyes",
-                      "pose": "pose_metric", "exposure": "image_quality_exposure",
-                      "contrast": "image_quality_contrast", "detail": "image_quality_detail_availability",
-                      "detector": "detector_metric", "visible": "visible_face_metric",
-                      "reliability": "measurement_reliability"}
+    metric_columns = METRICS
     def number(value):
         try:
             return float(value) if value not in (None, "") else None
@@ -516,25 +516,29 @@ def run(args: argparse.Namespace) -> Path:
             candidates = []
             for path in group.image_paths:
                 rows = face_by_path.get(path, [])
-                largest = max((number(row.get("geometry_relative_area")) or 0 for row in rows), default=0)
-                important = []
-                for row in rows:
-                    area = number(row.get("geometry_relative_area")) or 0
-                    if area < max(.008, .68 * largest) or row.get("analysis_missing"):
-                        continue
-                    features = {name: V2Feature(number(row.get(prefix + "_ranking_score")),
-                                               number(row.get(prefix + "_confidence")) or 0)
-                                for name, prefix in metric_columns.items()}
-                    important.append(V2Face(features, max(.25, min(2., area / max(largest, .0001)))))
-                technical = number(photo_by_path[path].get("technical_blur_score"))
-                candidates.append(V2Photo(path, tuple(important), V2Feature(technical)))
+                photo_row = photo_by_path[path]
+                raw = {key: number(photo_row.get("technical_raw_" + key))
+                       for key in ("laplacian", "sobel", "local_contrast")}
+                if any(value is None for value in raw.values()):
+                    record = _record(Path(path), loader)
+                    blur_getter = getattr(services, "get_blur_cached", None)
+                    cached_blur = blur_getter(record) if blur_getter else None
+                    if cached_blur is not None:
+                        raw = {key: getattr(cached_blur, key) for key in raw}
+                for key, value in raw.items():
+                    photo_row["technical_raw_" + key] = value if value is not None else ""
+                technical_v2 = technical_feature(raw)
+                photo_row["technical_v2_score"] = (technical_v2.value if technical_v2.value is not None else "")
+                photo_row["technical_v2_confidence"] = technical_v2.confidence
+                candidates.append(v2_photo_input(path, rows, raw,
+                    number(photo_row.get("width")), number(photo_row.get("height")), rows=True))
             ranked = rank_v2_group(tuple(candidates), prefs)
             uncertain += int(any(score.uncertain for score in ranked))
             disagreements += int(ranked[0].image_id != group.image_paths[0])
             margin = (ranked[0].score - ranked[1].score
                       if len(ranked) > 1 and ranked[0].score is not None
                       and ranked[1].score is not None else None)
-            near_ties += int(margin is not None and margin < 1.0)
+            near_ties += int(ranked[0].tie_class in ("exact", "below_resolution", "near"))
             for position, score in enumerate(ranked, 1):
                 v2_features.append({**asdict(score), "group_id": group.group_id,
                                     "preference_id": preference_id, "v2_position": position,
@@ -549,7 +553,11 @@ def run(args: argparse.Namespace) -> Path:
                 v2_positions="|".join(str(next(i for i, s in enumerate(ranked, 1)
                                              if s.image_id == path)) for path in group.image_paths),
                 v2_margin=margin if margin is not None else "",
-                near_tie=int(margin is not None and margin < 1.0),
+                near_tie=int(ranked[0].tie_class in ("exact", "below_resolution", "near")),
+                tie_class=ranked[0].tie_class,
+                quality_preference=int(ranked[0].quality_preference),
+                technical_discriminative=int(ranked[0].technical_discriminative),
+                face_evidence_incomplete=int(any(s.face_evidence_incomplete for s in ranked)),
                 quality_comparison_available=int(all(s.score is not None for s in ranked)),
                 key_features="|".join(ranked[0].used_face_features) + ("|technical" if ranked[0].technical_score is not None else ""),
                 uncertain=int(any(score.uncertain for score in ranked))))
@@ -560,7 +568,8 @@ def run(args: argparse.Namespace) -> Path:
         + list(asdict(rank_v2_group((V2Photo("schema", (), V2Feature(None)),))[0]).keys()), v2_features)
     _csv(output / "ranking_v1_v2_comparison.csv", ["group_id", "preference_id", "v1_winner",
         "v2_winner", "agreement", "candidate_ids", "v1_positions", "v2_positions",
-        "v2_margin", "near_tie", "quality_comparison_available", "key_features", "uncertain"], v2_comparison)
+        "v2_margin", "near_tie", "tie_class", "quality_preference", "technical_discriminative",
+        "face_evidence_incomplete", "quality_comparison_available", "key_features", "uncertain"], v2_comparison)
     (output / "ranking_v2_summary.json").write_text(json.dumps({"version": V2_VERSION,
         "preferences": v2_summary, "technical_source": (
             "existing blur stage in isolated full audit" if getattr(args, "include_blur", False)
@@ -613,6 +622,15 @@ def run(args: argparse.Namespace) -> Path:
     face_keys = sorted({key for row in face_rows for key in row if key not in FACE_EXTRA_FIELDS})
     _csv(output / "face_metrics.csv", list(FACE_EXTRA_FIELDS) + face_keys, face_rows)
     _csv(output / "photo_metrics.csv", PHOTO_FIELDS, photo_rows)
+    v2_face_diagnostics = []
+    for path, rows in face_by_path.items():
+        photo = photo_by_path[path]
+        _, diagnostics = extract_faces(rows, number(photo.get("width")),
+                                       number(photo.get("height")), rows=True)
+        v2_face_diagnostics.extend(dict(image_path=path, **item) for item in diagnostics)
+    _csv(output / "ranking_v2_face_diagnostics.csv",
+         ["image_path", "face_index", "relative_area", "detector_confidence",
+          "eligible", "primary", "prominence", "reason"], v2_face_diagnostics)
     _csv(output / "ranking_decisions.csv", list(RANK_EXTRA_FIELDS) + list(RANK_FIELDS) + ["explanation"], ranking_rows)
     _csv(output / "pairwise_comparisons.csv", PAIR_FIELDS, pair_rows)
     _csv(output / "audit_summary.csv", SUMMARY_FIELDS, _summaries(photo_rows, ranking_rows, pair_rows, face_rows))

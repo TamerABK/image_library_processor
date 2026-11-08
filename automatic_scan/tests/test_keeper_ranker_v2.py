@@ -2,6 +2,9 @@ from dataclasses import replace
 import unittest
 
 from automatic_scan.keeper_ranker_v2 import FACE_WEIGHTS, Face, Feature, Penalty, Photo, Preferences, rank_group
+from automatic_scan.keeper_ranker_v2_adapter import extract_faces, photo_input, technical_feature, TECHNICAL_VERSION
+from automatic_scan.keeper_ranker_v2 import VERSION
+from types import SimpleNamespace
 
 
 def face(eye=.8, sharp=.7, pose=.8):
@@ -11,6 +14,72 @@ def face(eye=.8, sharp=.7, pose=.8):
 
 
 class KeeperRankerV2Tests(unittest.TestCase):
+    def test_small_group_faces_and_background(self):
+        def row(i, area, x):
+            values = {"bbox_x": x, "bbox_y": 50, "bbox_width": 30,
+                      "bbox_height": 30, "geometry_relative_area": area,
+                      "detector_confidence_observed": .9, "analysis_missing": 0}
+            for key in FACE_WEIGHTS:
+                prefix = {"sharpness": "image_quality_sharpness", "eyes": "eyes",
+                          "pose": "pose_metric", "exposure": "image_quality_exposure",
+                          "contrast": "image_quality_contrast", "detail": "image_quality_detail_availability",
+                          "detector": "detector_metric", "visible": "visible_face_metric",
+                          "reliability": "measurement_reliability"}[key]
+                values[prefix + "_ranking_score"] = .7
+                values[prefix + "_confidence"] = 1
+            return values
+        rows = [row(i, .001, i * 50) for i in range(8)]
+        faces, diag = extract_faces(rows, 3000, 2000, rows=True)
+        self.assertEqual(sum(f.primary for f in faces), 8)
+        self.assertTrue(all(d["eligible"] for d in diag))
+        rows += [row(8, .00001, 1000)]
+        faces, diag = extract_faces(rows, 3000, 2000, rows=True)
+        self.assertFalse(faces[-1].primary)
+        self.assertEqual(diag[-1]["reason"], "background_scale")
+        # Live and flattened cache paths use the same feature extraction.
+        live = []
+        for row_data in rows:
+            quality = SimpleNamespace(**{name: SimpleNamespace(ranking_score=.7, confidence=1)
+                for name in ("sharpness", "exposure", "contrast", "detail_availability")})
+            metric = SimpleNamespace(ranking_score=.7, confidence=1)
+            analysis = SimpleNamespace(geometry=SimpleNamespace(relative_area=row_data["geometry_relative_area"]),
+                image_quality=quality, eyes=metric, pose=SimpleNamespace(metric=metric),
+                detector_metric=metric, visible_face_metric=metric, measurement_reliability=metric)
+            live.append(SimpleNamespace(bbox=(row_data["bbox_x"], row_data["bbox_y"],30,30),
+                                        confidence=.9, analysis=analysis))
+        self.assertEqual(photo_input("x", rows, None, 3000, 2000, rows=True).faces,
+                         photo_input("x", live, None, 3000, 2000).faces)
+
+    def test_raw_technical_keeps_saturated_differences(self):
+        low = technical_feature(dict(laplacian=500, sobel=70, local_contrast=55))
+        high = technical_feature(dict(laplacian=800, sobel=90, local_contrast=55))
+        noisy = technical_feature(dict(laplacian=5000, sobel=500, local_contrast=5))
+        self.assertNotEqual(low.value, high.value)
+        self.assertLess(noisy.value, high.value)
+        self.assertIsNone(technical_feature({}).value)
+        self.assertIn(TECHNICAL_VERSION, VERSION)
+
+    def test_ties_are_not_quality_preferences(self):
+        equal = rank_group((Photo("a", (), Feature(.7)), Photo("b", (), Feature(.7))),
+                           Preferences(False, False))
+        self.assertEqual(equal[0].image_id, "b")
+        self.assertEqual(equal[0].tie_class, "exact")
+        self.assertFalse(equal[0].quality_preference)
+        near = rank_group((Photo("a", (), Feature(.7005)), Photo("b", (), Feature(.7))),
+                          Preferences(False, False))
+        self.assertEqual(near[0].tie_class, "below_resolution")
+        self.assertFalse(near[0].quality_preference)
+
+    def test_eye_off_is_independent_of_all_eye_derived_values(self):
+        a = face()
+        b = replace(a, features={**a.features, "eyes": Feature(.01),
+                                 "reliability": Feature(.01)})
+        p = Preferences(True, False)
+        result = rank_group((Photo("a", (a,), Feature(.6)),
+                             Photo("b", (b,), Feature(.6))), p)
+        self.assertEqual(result[0].score, result[1].score)
+        self.assertEqual(result[0].face_score, result[1].face_score)
+
     def test_eye_off_excludes_eye_and_eye_dependent_reliability(self):
         a = Photo("a", (face(eye=.1),), Feature(.7))
         bface = face(eye=.9)

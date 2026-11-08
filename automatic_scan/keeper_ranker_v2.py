@@ -1,11 +1,14 @@
 """Pure, shadow-only keeper scoring from already measured features."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from math import isfinite
 
 
-VERSION = "keeper-v2.0"
+VERSION = "keeper-v2.1-raw-log-v1"
+# Operational reporting thresholds in score points, provisional without labels.
+NEAR_TIE_POINTS = .5
+MEASUREMENT_RESOLUTION_POINTS = .15
 FACE_WEIGHTS = {"sharpness": .30, "eyes": .23, "pose": .15,
                 "exposure": .10, "contrast": .07, "detail": .05,
                 "detector": .04, "visible": .02, "reliability": .04}
@@ -72,6 +75,11 @@ class Score:
     used_face_features: tuple[str, ...]
     uncertain: bool
     explanation: str
+    tie_class: str = "distinct"
+    margin_to_next: float | None = None
+    quality_preference: bool = True
+    technical_discriminative: bool = True
+    face_evidence_incomplete: bool = False
 
 
 def _face_value(face: Face, keys: tuple[str, ...]) -> float:
@@ -122,16 +130,38 @@ def rank_group(photos: tuple[Photo, ...], preferences: Preferences = Preferences
                                             else ({"technical", "face", "eye"} if preferences.prefer_open_eyes
                                                   else {"technical", "face"})))
         final = max(0.0, base - penalty) if base is not None else None
+        incomplete = (preferences.prioritize_primary_face_quality and
+                      (not face_available or len(common) != len(enabled) or
+                       any(feature.confidence < 1 for face in faces for key, feature in face.features.items()
+                           if key in common)))
         result.append(Score(photo.image_id, final, base, penalty,
                             aggregate[0] if aggregate else None, technical,
                             aggregate[1] if aggregate else None,
                             aggregate[2] if aggregate else None,
                             aggregate[3] if aggregate else None,
                             face_weight, technical_weight, common,
-                            not (face_available and technical_available),
+                            not (face_available and technical_available) or incomplete or
+                            (technical_available and photo.technical.confidence < .5),
                             "face and technical" if face_available and technical_available else
                             "technical only" if technical_available else
-                            "face only" if face_available else "quality unavailable"))
-    return sorted(result, key=lambda item: (item.score is not None,
-                                            item.score if item.score is not None else 0,
-                                            item.image_id), reverse=True)
+                            "face only" if face_available else "quality unavailable",
+                            face_evidence_incomplete=incomplete))
+    result.sort(key=lambda item: (item.score is not None,
+                                 item.score if item.score is not None else 0,
+                                 item.image_id), reverse=True)
+    technical_values = [item.technical_score for item in result if item.technical_score is not None]
+    discriminative = (len(technical_values) > 1 and
+                      max(technical_values) - min(technical_values) >= .002)
+    annotated = []
+    for index, item in enumerate(result):
+        following = result[index + 1] if index + 1 < len(result) else None
+        margin = (item.score - following.score if following and item.score is not None
+                  and following.score is not None else None)
+        tie = ("unavailable" if item.score is None else "last" if margin is None else
+               "exact" if margin == 0 else "below_resolution" if margin < MEASUREMENT_RESOLUTION_POINTS else
+               "near" if margin < NEAR_TIE_POINTS else "distinct")
+        annotated.append(replace(item, tie_class=tie, margin_to_next=margin,
+                                 quality_preference=bool(margin is not None and
+                                                         margin >= MEASUREMENT_RESOLUTION_POINTS),
+                                 technical_discriminative=discriminative))
+    return annotated
