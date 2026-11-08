@@ -80,6 +80,23 @@ class RegionalSharpnessTests(unittest.TestCase):
                 cache.close()
         self.assertIn("regional", VERSION)
 
+    def test_changed_source_is_not_cached(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "changing.png"
+            path.write_bytes(b"before")
+            class ChangingLoader:
+                def load_grayscale(self, target, *, max_dimension):
+                    target.write_bytes(b"after-and-longer")
+                    return self_image
+            self_image = self.image
+            cache = RegionalCache(Path(directory) / "cache.sqlite3")
+            try:
+                result, stats = evaluate_group([path], cache, loader=ChangingLoader(), registered=False)
+                self.assertEqual(result[str(path)]["baseline"]["status"], "source_changed")
+                self.assertEqual(stats["cache_hits"], 0)
+            finally:
+                cache.close()
+
 
 if __name__ == "__main__":
     unittest.main()

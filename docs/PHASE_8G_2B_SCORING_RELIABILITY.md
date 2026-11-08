@@ -74,7 +74,8 @@ claims that our provisional ratio is perceptually accurate.
 The regional cache is separate from face, blur and duplicate caches. Keys
 include resolved path, size, modification time, algorithm version and maximum
 decode dimension; registered group keys include all candidate signatures.
-Cancellation is checked before processing and before each decode. A failed
+Cancellation is checked before processing and before each decode. A source
+signature change during decoding prevents a stale cache write. A failed
 decode or registration cannot change V1. The audit reuses each decoded image
 within its group and releases buffers after evaluation; it does not keep a
 library-wide decoded collection. There was no prefetched decode available
@@ -101,14 +102,22 @@ The first registered implementation used interpolation and favored its
 reference image; that bias was found and removed before this benchmark.
 No human preference labels are available, and most regional margins remain
 near ties. Therefore the experiment does **not** justify replacing raw-log.
+The controlled synthetic sensitivity check reinforces that decision: regional
+B scored the base scene 0.177, Gaussian blur with sigma 1 at 0.095 and sigma 2
+at 0.031, but adding Gaussian noise with standard deviation 12 raised the
+score to 0.465. A 15% exposure increase scored 0.185, a three-pixel shift
+0.182, and a ten-pixel crop resized to the original dimensions 0.157. The
+strong noise preference is unacceptable for deployment; tuning a penalty to
+this one synthetic scene would not validate the method.
 The audit exports provide per-candidate scores, margins, tie classes and
 registration status for the named IMG_2928/2929, 3438/3439, 3951–3953,
 3955/3956, 4183/4184 and 8190/8191 comparisons. Winner changes alone do not
 establish identifiable photographic improvement.
 
-Cold replay took 3.79 seconds overall, with 2.05 seconds in regional evaluation,
-17 additional decodes, zero models, and 88.4 MB peak tracked Python allocations.
-Warm replay took 1.74 seconds, with 17 regional cache hits and zero additional
+Cold replay took 4.11 seconds overall, with 2.25 seconds in regional evaluation,
+17 additional decodes, 17 within-group decode reuses, zero models, and 88.5 MB
+peak tracked Python allocations. Warm replay took 1.82 seconds, with 17
+regional cache hits and zero additional
 decodes. The cached raw-log replay was about 1.39 seconds. These are local
 replay measurements, not a full-scan latency estimate. Each group's images
 are bounded and released before the next group.
@@ -124,6 +133,9 @@ registration under framing changes, a noise sensitivity study, and a measured
 confidence interval for the near-tie thresholds. No composition, moment,
 expression or new ONNX model was added.
 The local Windows CI command (`python -B -m unittest discover -p "test_*.py"`)
-passed: 547 tests, 10 skipped, zero failures in 213.284 seconds. A final
-targeted run passed 49 tests. The full log is
+passed: 549 tests, 10 skipped, zero failures in 212.028 seconds. A final
+targeted run passed 50 tests. The full log is
 `audit_results/phase8g2b_windows_suite.txt`.
+Hosted GitHub Actions has not run. The attempted push to a dedicated branch was
+rejected by automatic approval review because it would publish the commit and
+audit artifacts externally without explicit authorization for that payload.

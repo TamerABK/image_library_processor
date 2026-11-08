@@ -151,6 +151,9 @@ def evaluate_group(paths, cache: RegionalCache, *, loader=default_image_loader,
                 if image is None:
                     baseline[str(path)] = RegionalResult(None, 0., 0, "decode_failed")
                     continue
+                if _signature(path) != key:
+                    baseline[str(path)] = RegionalResult(None, 0., 0, "source_changed")
+                    continue
                 images[str(path)] = image
                 if stored is None:
                     baseline[str(path)] = summarize(patch_values(image))
@@ -182,4 +185,5 @@ def evaluate_group(paths, cache: RegionalCache, *, loader=default_image_loader,
         cache.put(group_key, results)
     return results, {
             "status": "complete", "additional_decodes": count, "cache_hits": hits,
-            "decode_reuse": reused, "runtime_seconds": time.perf_counter()-started}
+            "decode_reuse": reused + (count if registered else 0),
+            "runtime_seconds": time.perf_counter()-started}
