@@ -80,6 +80,37 @@ class KeeperRankerV2Tests(unittest.TestCase):
         self.assertEqual(result[0].score, result[1].score)
         self.assertEqual(result[0].face_score, result[1].face_score)
 
+    def test_partial_eyes_use_evidence_without_missingness_reward(self):
+        complete = Photo("complete", (face(eye=.1), face(eye=.8)), Feature(.6))
+        partial = Photo("partial", (face(eye=.1), replace(face(eye=.8),
+            features={**face().features, "eyes": Feature(None, 0)})), Feature(.6))
+        ranked = rank_group((complete, partial))
+        self.assertIn("eyes", ranked[0].used_face_features)
+        self.assertTrue(all(score.eye_coverage > 0 for score in ranked))
+        self.assertLess(next(s for s in ranked if s.image_id == "partial").eye_coverage, 1)
+        self.assertTrue(any(s.face_evidence_incomplete for s in ranked))
+        without_eyes = rank_group((complete, partial), Preferences(True, False))
+        self.assertEqual(without_eyes[0].score, without_eyes[1].score)
+
+    def test_detector_alone_cannot_activate_face_weight(self):
+        detector = Face({"detector": Feature(.9)}, 1)
+        photographs = (Photo("a", (detector,), Feature(.6)),
+                       Photo("b", (detector,), Feature(.7)))
+        ranked = rank_group(photographs)
+        self.assertTrue(all(s.face_weight == 0 and not s.face_evidence_sufficient for s in ranked))
+        self.assertTrue(all("insufficient_visual_face_evidence" in s.uncertainty_reasons for s in ranked))
+        one_visual = Face({"detector": Feature(.9), "sharpness": Feature(.7)}, 1)
+        self.assertEqual(rank_group((Photo("a", (one_visual,), Feature(.6)),
+                                     Photo("b", (one_visual,), Feature(.7))))[0].face_weight, 0)
+
+    def test_technical_only_uncertainty_depends_on_technical_evidence(self):
+        photos = (Photo("a", (face(),), Feature(.9)), Photo("b", (), Feature(.7)))
+        on = rank_group(photos, Preferences(False, True))
+        off = rank_group(photos, Preferences(False, False))
+        self.assertEqual([(s.score, s.uncertain, s.tie_class) for s in on],
+                         [(s.score, s.uncertain, s.tie_class) for s in off])
+        self.assertFalse(any(s.uncertain for s in on))
+
     def test_eye_off_excludes_eye_and_eye_dependent_reliability(self):
         a = Photo("a", (face(eye=.1),), Feature(.7))
         bface = face(eye=.9)

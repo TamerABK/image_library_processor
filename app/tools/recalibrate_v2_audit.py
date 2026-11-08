@@ -12,11 +12,13 @@ import sys
 import time
 import tracemalloc
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from automatic_scan.keeper_ranker_v2 import Preferences, VERSION, rank_group
+from automatic_scan.keeper_ranker_v2 import Feature
 from automatic_scan.keeper_ranker_v2_adapter import METRICS, extract_faces, photo_input, technical_feature
+from automatic_scan.regional_sharpness_v2 import RegionalCache, evaluate_group, VERSION as REGIONAL_VERSION
 
 
 def read(path):
@@ -33,7 +35,7 @@ def write(path, rows):
         writer.writerows(rows)
 
 
-def replay(source: Path, output: Path):
+def replay(source: Path, output: Path, *, regional=False):
     output.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     tracemalloc.start()
@@ -46,6 +48,9 @@ def replay(source: Path, output: Path):
         groups[row["group_id"]].append(row)
     original = {(r["group_id"], r["preference_id"]): r
                 for r in read(source / "ranking_v1_v2_comparison.csv")}
+    phase2a_file = source.parent / "phase8g2a_replay" / "ranking_comparison.csv"
+    phase2a = {(r["group_id"], r["preference_id"]): r
+               for r in read(phase2a_file) if r.get("position") == "1"} if phase2a_file.exists() else {}
     connection = sqlite3.connect(f"file:{(source / 'audit_cache.sqlite3').as_posix()}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
     try:
@@ -53,7 +58,9 @@ def replay(source: Path, output: Path):
             "SELECT path, laplacian, sobel, local_contrast, final_score, status FROM blur_scan_cache")}
     finally:
         connection.close()
-    face_rows, technical_rows, result_rows = [], [], []
+    face_rows, technical_rows, result_rows, regional_rows = [], [], [], []
+    regional_cache = RegionalCache(output / "regional_cache.sqlite3") if regional else None
+    regional_stats = dict(additional_decodes=0, cache_hits=0, decode_reuse=0, runtime_seconds=0.)
     for path, photo in photos.items():
         raw = blur.get(path)
         calibrated = technical_feature(raw)
@@ -72,38 +79,74 @@ def replay(source: Path, output: Path):
     both = defaultdict(int)
     for group_id, members in groups.items():
         paths = [r["candidate_image_id"] for r in sorted(members, key=lambda r: int(r["final_position"]))]
+        regional_data = {}
+        if regional_cache is not None:
+            regional_data, stats = evaluate_group(paths, regional_cache)
+            for key in regional_stats:
+                regional_stats[key] += stats.get(key, 0)
+            for path, data in regional_data.items():
+                regional_rows.append(dict(group_id=group_id, image_id=Path(path).name,
+                    **{f"regional_{k}": v for k, v in data["baseline"].items()},
+                    **{f"registered_{k}": v for k, v in data["registered"].items()},
+                    registration_status=data["registration_status"]))
         legacy_saturated = all(blur.get(path) and blur[path]["laplacian"] >= 400
                                and blur[path]["sobel"] >= 60 for path in paths)
         for face_on in (True, False):
             for eye_on in (True, False):
                 pref_id = f"face_{int(face_on)}_eyes_{int(eye_on)}"
                 candidates = tuple(photo_input(path, faces[path], blur.get(path),
-                    float(photos[path]["width"] or 0), float(photos[path]["height"] or 0), rows=True)
+                    float(photos[path]["width"] or 0), float(photos[path]["height"] or 0),
+                    rows=True, include_faces=face_on)
                     for path in paths)
-                ranking = rank_group(candidates, Preferences(face_on, eye_on))
-                if ranking[0].face_score is not None and ranking[0].technical_score is not None:
-                    both[pref_id] += 1
-                old = original.get((group_id, pref_id), {})
-                for position, score in enumerate(ranking, 1):
-                    result_rows.append(dict(group_id=group_id, preference_id=pref_id,
-                        v1_winner=paths[0], original_v2_winner=old.get("v2_winner", ""),
-                        corrected_v2_winner=ranking[0].image_id,
-                        original_v2_margin=old.get("v2_margin", ""),
-                        corrected_v2_margin=ranking[0].margin_to_next,
-                        legacy_edges_saturated=legacy_saturated,
-                        position=position, **asdict(score)))
+                for method in (("raw_log", "regional", "registered") if regional else ("raw_log",)):
+                    selected = candidates
+                    effective_method = method
+                    if method != "raw_log":
+                        proposal = tuple(replace(candidate, technical=Feature(
+                            regional_data.get(candidate.image_id, {}).get(
+                                "baseline" if method == "regional" else "registered", {}).get("score"),
+                            regional_data.get(candidate.image_id, {}).get(
+                                "baseline" if method == "regional" else "registered", {}).get("confidence", 0)))
+                            for candidate in candidates)
+                        if all(candidate.technical.usable() for candidate in proposal):
+                            selected = proposal
+                        else:
+                            effective_method = method + "_fallback_raw_log"
+                    ranking = rank_group(selected, Preferences(face_on, eye_on))
+                    if method == "raw_log" and ranking[0].face_score is not None and ranking[0].technical_score is not None:
+                        both[pref_id] += 1
+                    old = original.get((group_id, pref_id), {})
+                    earlier = phase2a.get((group_id, pref_id), {})
+                    for position, score in enumerate(ranking, 1):
+                        result_rows.append(dict(group_id=group_id, preference_id=pref_id,
+                            technical_method=effective_method, v1_winner=Path(paths[0]).name,
+                            original_v2_winner=Path(old.get("v2_winner", "")).name,
+                            phase8g2a_v2_winner=Path(earlier.get("corrected_v2_winner", "")).name,
+                            corrected_v2_winner=Path(ranking[0].image_id).name,
+                            original_v2_margin=old.get("v2_margin", ""),
+                            corrected_v2_margin=ranking[0].margin_to_next,
+                            legacy_edges_saturated=legacy_saturated,
+                            position=position, **{**asdict(score), "image_id": Path(score.image_id).name}))
+    if regional_cache is not None:
+        regional_cache.close()
+    for row in face_rows + technical_rows:
+        row["image_id"] = Path(row["image_id"]).name
     write(output / "face_diagnostics.csv", face_rows)
     write(output / "technical_diagnostics.csv", technical_rows)
     write(output / "ranking_comparison.csv", result_rows)
+    write(output / "regional_diagnostics.csv", regional_rows)
     current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     summary = dict(version=VERSION, source=str(source), groups=len(groups),
                    both_components=dict(both), runtime_seconds=time.perf_counter() - started,
                    peak_python_allocated_bytes=peak, blur_cache_rows=len(blur),
-                   images_decoded=0, models_run=0)
+                   images_decoded=regional_stats["additional_decodes"], models_run=0,
+                   regional_version=REGIONAL_VERSION if regional else None,
+                   regional_stats=regional_stats)
     (output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary
 
 
 if __name__ == "__main__":
-    print(json.dumps(replay(Path(sys.argv[1]), Path(sys.argv[2])), indent=2))
+    print(json.dumps(replay(Path(sys.argv[1]), Path(sys.argv[2]),
+                            regional="--regional" in sys.argv), indent=2))

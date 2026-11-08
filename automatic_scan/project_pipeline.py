@@ -720,7 +720,9 @@ def process_project(orchestrator, folder, paths, *, emit, cancellation_token,
                 for group in groups:
                     candidates = tuple(photo_input(path, face_results.get(path, []),
                                                    blur_results.get(path),
-                                                   photos[path].width, photos[path].height) for path in group)
+                                                   photos[path].width, photos[path].height,
+                                                   include_faces=preferences.prioritize_primary_face_quality)
+                                        for path in group)
                     shadow.append([asdict(score) for score in rank_group(candidates, preferences)])
                 cache.put(folder, "ranking_v2", v2_key, shadow)
         except Exception:

@@ -1,0 +1,21 @@
+{
+  "version": "keeper-v2.2-evidence-v1-raw-log-v1",
+  "source": "audit_results\\phase8g2_full_20261103",
+  "groups": 8,
+  "both_components": {
+    "face_1_eyes_1": 7,
+    "face_1_eyes_0": 7
+  },
+  "runtime_seconds": 3.792771400003403,
+  "peak_python_allocated_bytes": 88362101,
+  "blur_cache_rows": 1732,
+  "images_decoded": 17,
+  "models_run": 0,
+  "regional_version": "regional-ratio-v3-mean-gradient",
+  "regional_stats": {
+    "additional_decodes": 17,
+    "cache_hits": 0,
+    "decode_reuse": 0,
+    "runtime_seconds": 2.049326700005622
+  }
+}

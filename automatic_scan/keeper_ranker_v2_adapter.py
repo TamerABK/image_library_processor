@@ -91,6 +91,6 @@ def extract_faces(faces, width=None, height=None, *, rows=False):
     return tuple(result), diagnostics
 
 
-def photo_input(path, faces, blur, width=None, height=None, *, rows=False):
-    extracted, _ = extract_faces(faces, width, height, rows=rows)
+def photo_input(path, faces, blur, width=None, height=None, *, rows=False, include_faces=True):
+    extracted, _ = extract_faces(faces, width, height, rows=rows) if include_faces else ((), ())
     return Photo(path, extracted, technical_feature(blur))
