@@ -81,6 +81,11 @@ enabled; four fail the equal-detection-count or geometry gate. Those four
 experimental C scores are only diagnostics. The output is in
 `audit_results/phase8g3_experimental/`. There are no human preference labels,
 so no accuracy comparison or justified experimental keeper winner.
+Eight review sheets were generated in its `contact_sheets` directory, covering
+all 17 confirmed candidates. The sheet tool decoded those 17 candidates for
+display after the score replay; this is separate from the zero-decode scoring
+measurement. Each sheet shows V1 and baseline V2 winners, available F/T/C
+values, M unavailability, variant scores, and C exclusion reasons.
 
 ## Human labeling and remaining work
 

@@ -55,6 +55,12 @@ Add `--regional` to benchmark raw-log, regional, and registered regional scoring
 
 The same replay also exports `experimental_variants.csv` for Phase 8G.3 baseline, moment, composition, and combined variants. Unavailable components have explicit reasons; these variants do not change the default V2 or V1 winner.
 
+Generate Phase 8G.3 contact sheets after a replay (this loads only confirmed duplicate candidates for display):
+
+```powershell
+& $py -B -m app.tools.contact_sheet_8g3 '.\audit_results\nsc_v2_replay' $photos '.\audit_results\nsc_v2_replay\contact_sheets'
+```
+
 ```powershell
 & $py -B -m app.tools.recalibrate_v2_audit '.\audit_results\phase8g2_full_20261103' '.\audit_results\nsc_v2_regional' --regional
 ```

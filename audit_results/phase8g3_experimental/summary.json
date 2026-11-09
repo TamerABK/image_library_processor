@@ -6,8 +6,8 @@
     "face_1_eyes_1": 7,
     "face_1_eyes_0": 7
   },
-  "runtime_seconds": 1.5380861000012374,
-  "peak_python_allocated_bytes": 86122798,
+  "runtime_seconds": 1.5032800000044517,
+  "peak_python_allocated_bytes": 86147582,
   "blur_cache_rows": 1732,
   "images_decoded": 0,
   "models_run": 0,

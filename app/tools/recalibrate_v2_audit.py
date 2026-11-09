@@ -144,9 +144,14 @@ def replay(source: Path, output: Path, *, regional=False):
                                 scores.append((score.image_id, value, reasons, m, c))
                             ordered = sorted(scores, key=lambda item: (item[1] is not None,
                                 item[1] if item[1] is not None else 0, item[0]), reverse=True)
+                            baseline_by_path = {item.image_id: item for item in ranking}
                             for position, (path, value, reasons, m, c) in enumerate(ordered, 1):
                                 variant_rows.append(dict(group_id=group_id, preference_id=pref_id,
                                     variant=variant, image_id=Path(path).name, position=position,
+                                    v1_winner=Path(paths[0]).name,
+                                    baseline_v2_winner=Path(ranking[0].image_id).name,
+                                    face_score=baseline_by_path[path].face_score,
+                                    technical_score=baseline_by_path[path].technical_score,
                                     score=value, winner=Path(ordered[0][0]).name if ordered[0][1] is not None else "",
                                     moment_score=m.score, moment_confidence=m.confidence,
                                     moment_coverage=m.coverage, moment_reasons="|".join(m.reasons),
