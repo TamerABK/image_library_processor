@@ -19,6 +19,8 @@ from automatic_scan.keeper_ranker_v2 import Preferences, VERSION, rank_group
 from automatic_scan.keeper_ranker_v2 import Feature
 from automatic_scan.keeper_ranker_v2_adapter import METRICS, extract_faces, photo_input, technical_feature
 from automatic_scan.regional_sharpness_v2 import RegionalCache, evaluate_group, VERSION as REGIONAL_VERSION
+from automatic_scan.experimental_quality_v2 import (composition_observation,
+    moment_observation, experimental_score, VERSION as EXPERIMENT_VERSION)
 
 
 def read(path):
@@ -58,7 +60,7 @@ def replay(source: Path, output: Path, *, regional=False):
             "SELECT path, laplacian, sobel, local_contrast, final_score, status FROM blur_scan_cache")}
     finally:
         connection.close()
-    face_rows, technical_rows, result_rows, regional_rows = [], [], [], []
+    face_rows, technical_rows, result_rows, regional_rows, variant_rows = [], [], [], [], []
     regional_cache = RegionalCache(output / "regional_cache.sqlite3") if regional else None
     regional_stats = dict(additional_decodes=0, cache_hits=0, decode_reuse=0, runtime_seconds=0.)
     for path, photo in photos.items():
@@ -113,6 +115,46 @@ def replay(source: Path, output: Path, *, regional=False):
                         else:
                             effective_method = method + "_fallback_raw_log"
                     ranking = rank_group(selected, Preferences(face_on, eye_on))
+                    if method == "raw_log":
+                        counts = [len(faces[path]) for path in paths]
+                        comparable = len(set(counts)) == 1 and counts[0] > 0
+                        observations = {}
+                        for path in paths:
+                            photo = photos[path]
+                            moment = moment_observation()
+                            composition = (composition_observation(faces[path],
+                                float(photo["width"] or 0), float(photo["height"] or 0))
+                                if face_on and comparable else composition_observation([], 0, 0))
+                            observations[path] = (moment, composition)
+                        for variant, use_m, use_c in (("baseline", False, False),
+                                                       ("plus_m", True, False),
+                                                       ("plus_c", False, True),
+                                                       ("plus_m_c", True, True)):
+                            # Face-off stays technical-only for every variant.
+                            use_m = use_m and face_on
+                            use_c = use_c and face_on
+                            group_c = use_c and all(observations[p][1].available for p in paths)
+                            scores = []
+                            for score in ranking:
+                                m, c = observations[score.image_id]
+                                value, reasons = experimental_score(score, m, c,
+                                    use_moment=use_m, use_composition=use_c and group_c)
+                                if use_c and not group_c:
+                                    value, reasons = None, ("group_face_count_or_geometry_incomparable",)
+                                scores.append((score.image_id, value, reasons, m, c))
+                            ordered = sorted(scores, key=lambda item: (item[1] is not None,
+                                item[1] if item[1] is not None else 0, item[0]), reverse=True)
+                            for position, (path, value, reasons, m, c) in enumerate(ordered, 1):
+                                variant_rows.append(dict(group_id=group_id, preference_id=pref_id,
+                                    variant=variant, image_id=Path(path).name, position=position,
+                                    score=value, winner=Path(ordered[0][0]).name if ordered[0][1] is not None else "",
+                                    moment_score=m.score, moment_confidence=m.confidence,
+                                    moment_coverage=m.coverage, moment_reasons="|".join(m.reasons),
+                                    composition_score=c.score, composition_confidence=c.confidence,
+                                    composition_coverage=c.coverage,
+                                    composition_reasons="|".join(c.reasons),
+                                    unavailable_reasons="|".join(reasons),
+                                    experimental_version=EXPERIMENT_VERSION))
                     if method == "raw_log" and ranking[0].face_score is not None and ranking[0].technical_score is not None:
                         both[pref_id] += 1
                     old = original.get((group_id, pref_id), {})
@@ -135,6 +177,7 @@ def replay(source: Path, output: Path, *, regional=False):
     write(output / "technical_diagnostics.csv", technical_rows)
     write(output / "ranking_comparison.csv", result_rows)
     write(output / "regional_diagnostics.csv", regional_rows)
+    write(output / "experimental_variants.csv", variant_rows)
     current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     summary = dict(version=VERSION, source=str(source), groups=len(groups),
