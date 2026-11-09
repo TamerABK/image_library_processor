@@ -14,6 +14,7 @@ from ui.models import ResultItem
 from .duplicate_data import group_revision, project_duplicate_rows
 from .duplicate_model import DuplicateGroupModel
 from .photo_model import PhotoListModel
+from face_processing.expression_insights import NAME as EXPRESSION_NAME, SIZE as EXPRESSION_SIZE, model_directory, analyze_group
 
 
 log = logging.getLogger(__name__)
@@ -85,6 +86,17 @@ class DuplicateReviewController(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(20)
         self._timer.timeout.connect(self._drain)
+        self._expression_state = "disabled"
+        self._expression_error = ""
+        self._expression_progress = ""
+        self._expression_data = {}
+        self._expression_cancel = threading.Event()
+        self._expression_results = Queue(maxsize=2)
+        self._expression_counts = (0, 0)
+        self._expression_thread = None
+        self._expression_timer = QTimer(self)
+        self._expression_timer.setInterval(30)
+        self._expression_timer.timeout.connect(self._drain_expression)
         processing.sessionChanged.connect(self._reset_session)
         processing.changed.connect(self._sync)
         processing.blurModel.reviewChanged.connect(self._blur_review_changed)
@@ -144,11 +156,108 @@ class DuplicateReviewController(QObject):
         if not row:
             return []
         return [dict(photoId=path, filename=Path(path).name,
+                     expression=self._expression_data.get(path, []),
                      recommended=path in row["recommendedKeepers"],
                      keeper=path in row["currentKeepers"],
                      intent=row["intents"].get(path, "UNDECIDED"),
                      explanation=row["explanation"] if path == row["representativePhotoId"] else [])
                 for path in row["paths"]]
+
+    @Property(str, notify=changed)
+    def expressionState(self):
+        return self._expression_state
+
+    @Property(str, notify=changed)
+    def expressionError(self):
+        return self._expression_error
+
+    @Property(str, notify=changed)
+    def expressionProgress(self):
+        return self._expression_progress
+
+    @Property(bool, notify=changed)
+    def expressionModelInstalled(self):
+        path = model_directory() / EXPRESSION_NAME
+        try:
+            return path.is_file() and path.stat().st_size == EXPRESSION_SIZE
+        except OSError:
+            return False
+
+    def _clear_expression(self):
+        self._expression_cancel.set()
+        self._expression_cancel = threading.Event()
+        self._expression_data = {}
+        self._expression_counts = (0, 0)
+        self._expression_state = "disabled"
+        self._expression_error = self._expression_progress = ""
+
+    @Slot(bool)
+    def analyzeExpressions(self, install=False):
+        self._assert_owner()
+        row = self._groups.get_row(self._selected)
+        if not row or self._expression_state in ("loading", "installing"):
+            return
+        if self._expression_thread is not None and self._expression_thread.is_alive():
+            self._expression_state = "unavailable"
+            self._expression_error = "Previous expression analysis is stopping. Try again shortly."
+            self.changed.emit()
+            return
+        if not install and not self.expressionModelInstalled:
+            self._expression_state = "unavailable"
+            self._expression_error = "Install the verified OpenCV Zoo model to analyze expressions."
+            self.changed.emit()
+            return
+        self._expression_cancel.set()
+        self._expression_cancel = threading.Event()
+        cancel = self._expression_cancel
+        session, group_id = self._session, self._selected
+        paths = tuple(row["paths"])
+        self._expression_counts = (0, len(paths))
+        self._expression_state = "installing" if install else "loading"
+        self._expression_error = ""
+        self._expression_progress = "Preparing model…" if install else "Starting analysis…"
+        self.changed.emit()
+        def work():
+            def progress(done, total):
+                self._expression_counts = (done, total)
+            try:
+                result, metrics = analyze_group(paths, self._processing._cache_path,
+                    model_directory() / EXPRESSION_NAME, cancel, install=install, progress=progress)
+                payload = (session, group_id, result, metrics, "")
+            except Exception as exc:
+                log.exception("expression_insights_failed")
+                payload = (session, group_id, None, {}, str(exc))
+            if not cancel.is_set():
+                try:
+                    self._expression_results.put_nowait(payload)
+                except Full:
+                    pass
+        self._expression_thread = threading.Thread(target=work, name="room36-expression-insights", daemon=True)
+        self._expression_thread.start()
+        self._expression_timer.start()
+
+    @Slot()
+    def _drain_expression(self):
+        self._assert_owner()
+        try:
+            session, group_id, result, metrics, error = self._expression_results.get_nowait()
+        except Empty:
+            if self._expression_state == "loading":
+                done, total = self._expression_counts
+                message = f"Analyzing {done} of {total} photos…"
+                if self._expression_progress != message:
+                    self._expression_progress = message
+                    self.changed.emit()
+            return
+        if session != self._session or group_id != self._selected:
+            return
+        self._expression_timer.stop()
+        self._expression_data = result or {}
+        self._expression_error = error
+        self._expression_state = "error" if error else "complete"
+        self._expression_progress = (f"Analyzed {len(result)} photos in {metrics['elapsed']:.1f}s; "
+                                     f"{metrics['cache_hits']} cached faces" if result else "")
+        self.changed.emit()
 
     def review_rows(self):
         """Plain current group projections for other project-scoped review UIs."""
@@ -173,6 +282,8 @@ class DuplicateReviewController(QObject):
     @Slot()
     def _reset_session(self):
         self._assert_owner()
+        self._clear_expression()
+        self._expression_timer.stop()
         self._canceled.set()
         self._canceled = threading.Event()
         self._session = self._processing.sessionId
@@ -259,6 +370,8 @@ class DuplicateReviewController(QObject):
     def openGroup(self, group_id):
         self._assert_owner()
         if self._groups.get_row(group_id):
+            if group_id != self._selected:
+                self._clear_expression()
             self._selected = group_id
             self._refresh_detail()
             self.changed.emit()
@@ -266,6 +379,7 @@ class DuplicateReviewController(QObject):
     @Slot()
     def back(self):
         self._assert_owner()
+        self._clear_expression()
         self._selected = ""
         self._detail.replace_items([], preserve_selection=False)
         self.changed.emit()
@@ -415,6 +529,8 @@ class DuplicateReviewController(QObject):
     @Slot()
     def shutdown(self):
         self._assert_owner()
+        self._expression_cancel.set()
+        self._expression_timer.stop()
         self._canceled.set()
         self._stop.set()
         self._timer.stop()

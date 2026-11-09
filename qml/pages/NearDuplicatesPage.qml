@@ -138,6 +138,46 @@ Item {
             color: theme.mutedText
             font.pixelSize: typography.body
         }
+        Rectangle {
+            objectName: "expressionInsights"
+            Layout.fillWidth: true
+            implicitHeight: expressionColumn.implicitHeight + 20
+            radius: 12
+            color: theme.panelFill
+            border.color: theme.separator
+            ColumnLayout {
+                id: expressionColumn
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 6
+                RowLayout {
+                    Layout.fillWidth: true
+                    Text { text: "Expression insights · Experimental"; color: theme.mainBlue; font.pixelSize: typography.body }
+                    Item { Layout.fillWidth: true }
+                    Components.PillButton {
+                        objectName: "expressionAnalyze"
+                        variant: "translucent"
+                        text: root.duplicates && !root.duplicates.expressionModelInstalled ? "Install model and analyze" : "Analyze expressions"
+                        enabled: root.duplicates && root.duplicates.expressionState !== "loading"
+                            && root.duplicates.expressionState !== "installing"
+                        onClicked: {
+                            if (!root.duplicates) return
+                            if (!root.duplicates.expressionModelInstalled) expressionInstallDialog.open()
+                            else root.duplicates.analyzeExpressions(false)
+                        }
+                    }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: root.duplicates && root.duplicates.expressionError ? root.duplicates.expressionError
+                        : root.duplicates && root.duplicates.expressionProgress ? root.duplicates.expressionProgress
+                        : "Optional visible-expression estimates. They do not affect keeper recommendations."
+                    color: theme.mutedText
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: typography.caption
+                }
+            }
+        }
         Text {
             objectName: "duplicateConflictMessage"
             Layout.fillWidth: true
@@ -187,12 +227,13 @@ Item {
                     id: memberRow
                     required property var modelData
                     width: memberList.width - 14
-                    height: 120
+                    height: memberColumn.implicitHeight + 20
                     radius: 14
                     color: theme.panelFill
                     border.width: 1
                     border.color: theme.separator
                     ColumnLayout {
+                        id: memberColumn
                         anchors.fill: parent
                         anchors.margins: 10
                         spacing: 4
@@ -241,6 +282,78 @@ Item {
                                 Accessible.name: text + " " + memberRow.modelData.filename
                             }
                         }
+                        Text {
+                            Layout.fillWidth: true
+                            visible: memberRow.modelData.expression && memberRow.modelData.expression.length > 0
+                            text: {
+                                var entries = memberRow.modelData.expression || []
+                                var uncertain = entries.filter(function(e) { return e.status !== "estimated" }).length
+                                return (entries.length - uncertain) + " estimated · " + uncertain + " uncertain or unavailable"
+                            }
+                            color: theme.mutedText
+                            font.pixelSize: typography.caption
+                        }
+                        Components.PillButton {
+                            objectName: "expressionDetails"
+                            variant: "translucent"
+                            visible: memberRow.modelData.expression && memberRow.modelData.expression.length > 0
+                            text: "Face details…"
+                            onClicked: {
+                                expressionDetailsDialog.entries = memberRow.modelData.expression
+                                expressionDetailsDialog.photoName = memberRow.modelData.filename
+                                expressionDetailsDialog.open()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Dialog {
+        id: expressionInstallDialog
+        objectName: "expressionInstallDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        title: "Install experimental expression model"
+        width: Math.min(460, root.width - 40)
+        height: 250
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onAccepted: if (root.duplicates) root.duplicates.analyzeExpressions(true)
+        Label {
+            width: Math.max(200, expressionInstallDialog.width - 40)
+            wrapMode: Text.WordWrap
+            text: "Download the pinned OpenCV Zoo FP32 model (4.8 MB). Its SHA-256 is checked before use. Photos and face crops stay on this computer. Expression estimates are experimental and do not change keeper choices. Commercial model provenance remains under review."
+        }
+    }
+    Dialog {
+        id: expressionDetailsDialog
+        objectName: "expressionDetailsDialog"
+        property var entries: []
+        property string photoName: ""
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        title: "Expression estimates · " + photoName
+        width: Math.min(500, root.width - 40)
+        height: Math.min(500, root.height - 40)
+        standardButtons: Dialog.Close
+        ScrollView {
+            anchors.fill: parent
+            Column {
+                width: expressionDetailsDialog.availableWidth
+                spacing: 8
+                Repeater {
+                    model: expressionDetailsDialog.entries
+                    delegate: Label {
+                        required property var modelData
+                        required property int index
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: "Face " + (index + 1) + ": " + (modelData.status === "estimated"
+                            ? "Estimated " + modelData.label + " (" + Math.round(modelData.confidence * 100) + "%)"
+                            : modelData.status === "uncertain" ? "Expression uncertain"
+                            : modelData.reason || "Expression unavailable")
                     }
                 }
             }

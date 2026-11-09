@@ -18,28 +18,16 @@ from PIL import Image, ImageDraw
 
 from app.tools.acquire_expression_models import MODELS, UPSTREAM_COMMIT, verify
 from image_loader import ImageLoader
+from face_processing.expression_insights import (align_official as _align_shared,
+    preprocess as _preprocess_shared, probabilities as _probabilities_shared, LABELS)
 
-LABELS = ("angry", "disgust", "fearful", "happy", "neutral", "sad", "surprised")
+_SHARED_LABELS = LABELS
 TEMPLATE = np.array([[38.2946,51.6963],[73.5318,51.5014],[56.0252,71.7366],
                      [41.5493,92.3655],[70.7299,92.2041]], dtype=np.float64)
 
 
 def align_official(image, landmarks):
-    """OpenCV Zoo nonreflective least-squares similarity and default warpAffine."""
-    points = np.asarray(landmarks, dtype=np.float64)
-    if points.shape != (5,2) or not np.isfinite(points).all():
-        return None
-    x, y = TEMPLATE[:,0:1], TEMPLATE[:,1:2]
-    design = np.vstack((np.hstack((x,y,np.ones((5,1)),np.zeros((5,1)))),
-                        np.hstack((y,-x,np.zeros((5,1)),np.ones((5,1))))))
-    if np.linalg.matrix_rank(design) < 4:
-        return None
-    solved = np.linalg.lstsq(design, np.r_[points[:,0],points[:,1]], rcond=-1)[0]
-    scale_cos, scale_sin, tx, ty = solved
-    inverse = np.array([[scale_cos,-scale_sin,0],
-                        [scale_sin,scale_cos,0],[tx,ty,1]])
-    transform = np.linalg.inv(inverse)[:,0:2].T
-    return cv2.warpAffine(image, transform, (112,112))
+    return _align_shared(image, landmarks)
 
 
 def read_csv(path):
@@ -98,22 +86,11 @@ def select_faces(rows, sample_size, seed):
 
 
 def preprocess(crop):
-    """OpenCV Zoo: aligned BGR 112² -> RGB -> [0,1] -> (x-.5)/.5 -> NCHW."""
-    if crop is None or crop.shape != (112, 112, 3):
-        raise ValueError("Expected aligned BGR crop of shape 112x112x3")
-    rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.
-    return np.ascontiguousarray(((rgb - .5) / .5).transpose(2, 0, 1)[None])
+    return _preprocess_shared(crop)
 
 
 def probabilities(output):
-    vector = np.asarray(output, dtype=np.float64).reshape(-1)
-    if vector.size != 7 or not np.isfinite(vector).all():
-        raise ValueError("Invalid seven-class model output")
-    if np.min(vector) >= 0 and abs(float(vector.sum()) - 1.) < 1e-3:
-        return vector / vector.sum()
-    shifted = vector - vector.max()
-    value = np.exp(shifted)
-    return value / value.sum()
+    return np.asarray(_probabilities_shared(output))
 
 
 def load_crops(selected, cache_db, root):
