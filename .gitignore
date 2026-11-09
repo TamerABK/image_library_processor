@@ -1,0 +1,9 @@
+audit_results/expression_benchmark/models/
+audit_results/expression_benchmark/review_sheets/
+audit_results/expression_benchmark/**/review_sheets/
+audit_results/expression_benchmark/**/expression_predictions.csv
+audit_results/expression_benchmark/**/prediction_comparison.csv
+audit_results/expression_benchmark/**/review_labels_template.csv
+audit_results/expression_benchmark/**/profile_*.json
+audit_results/expression_benchmark/run.log
+audit_results/expression_benchmark/windows_suite.txt
