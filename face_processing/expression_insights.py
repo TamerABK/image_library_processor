@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sqlite3
 import time
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -66,24 +67,24 @@ class ExpressionService:
             session_factory = ort.InferenceSession
             available = ort.get_available_providers()
         else:
+            ort = None  # Injected test sessions do not require ONNX Runtime in CI.
             available = providers or ["CPUExecutionProvider"]
         requested = providers or (["DmlExecutionProvider", "CPUExecutionProvider"]
                                   if "DmlExecutionProvider" in available else ["CPUExecutionProvider"])
         selected = [provider for provider in requested if provider in available]
         if not selected:
             raise ValueError("No supported ONNX execution provider is available.")
-        import onnxruntime as ort
-        options = ort.SessionOptions()
+        options = ort.SessionOptions() if ort is not None else SimpleNamespace()
         options.log_severity_level = 3
         if "DmlExecutionProvider" in selected:
-            options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL if ort is not None else "sequential"
             options.enable_mem_pattern = False
         try:
             self.session = session_factory(str(model_path), sess_options=options, providers=selected)
         except Exception:
             if selected == ["CPUExecutionProvider"] or "CPUExecutionProvider" not in available:
                 raise
-            options = ort.SessionOptions()
+            options = ort.SessionOptions() if ort is not None else SimpleNamespace()
             options.log_severity_level = 3
             self.session = session_factory(str(model_path), sess_options=options,
                                            providers=["CPUExecutionProvider"])
