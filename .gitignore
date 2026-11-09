@@ -10,3 +10,5 @@ audit_results/expression_benchmark/windows_suite.txt
 audit_results/expression_benchmark/ui_smoke_cache.sqlite3*
 audit_results/expression_benchmark/phase8g3a_windows_suite.txt
 audit_results/phase8g3b_color_integrity/
+audit_results/phase8g4_subject_quality/
+audit_results/phase8g4_windows_suite.txt
