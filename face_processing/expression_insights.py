@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from pathlib import Path
 import sqlite3
 import time
@@ -12,6 +11,7 @@ import cv2
 import numpy as np
 
 from app.tools.acquire_expression_models import MODELS, acquire, verify
+from app_paths import model_path
 from face_processing.cache import ImageFaceAnalysisCache
 from image_loader import ImageLoader
 
@@ -23,7 +23,7 @@ NAME, SIZE, SHA256 = MODELS["fp32"]
 
 
 def model_directory():
-    return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Room36" / "experimental_models"
+    return model_path(NAME).parent
 
 
 def align_official(image, landmarks):

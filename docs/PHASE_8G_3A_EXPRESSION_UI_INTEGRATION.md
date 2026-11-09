@@ -5,8 +5,9 @@
 Near Duplicates now offers **Expression insights** for the selected group. It is
 off until a user clicks **Analyze expressions**. On first use, an explicit
 dialog identifies the pinned OpenCV Zoo download, local processing, and the
-experimental nature of the observations. The model is installed under the
-user's local Room36 application-data directory, never in the repository.
+experimental nature of the observations. The model is resolved through
+`app_paths.model_path` in the same `onnx_models` resource directory as the
+other Room36 ONNX models. An existing verified copy is used without download.
 The existing acquisition utility checks the 4,791,892-byte FP32 checkpoint
 against SHA-256
 `4f61307602fc089ce20488a31d4e4614e3c9753a7d6c41578c854858b183e1a9`.

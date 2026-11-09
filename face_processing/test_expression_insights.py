@@ -7,6 +7,7 @@ from unittest.mock import patch
 import numpy as np
 
 from face_processing import expression_insights as expression
+from app_paths import model_path
 
 
 class _Input:
@@ -30,6 +31,10 @@ class _Session:
 
 
 class ExpressionInsightsTests(unittest.TestCase):
+    def test_model_uses_application_onnx_directory(self):
+        self.assertEqual(expression.model_directory() / expression.NAME,
+                         model_path(expression.NAME))
+
     def test_model_hash_required(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / expression.NAME
