@@ -96,6 +96,10 @@ color-noise behavior under JPEG compression need further study.
 ```
 
 The focused tests passed 7/7. The final full local Windows unittest run passed:
-570 tests, 10 skipped, in 191.250 s. Hosted GitHub Actions was not run.
+570 tests, 10 skipped, in 191.250 s. The hosted Windows Full Test Suite
+[passed on the follow-up CI compatibility commit](https://github.com/TamerABK/image_library_processor/actions/runs/42661665165).
+The initial push exposed a missing-ONNX-Runtime import in an existing mocked
+expression-service test; commit `fd4370e` removed that unnecessary test
+dependency. No color-ranking code changed in the fix.
 This small unlabeled data set cannot justify integration into the 15%
 technical component.
