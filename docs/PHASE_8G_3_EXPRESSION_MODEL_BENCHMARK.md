@@ -28,6 +28,15 @@ training-data permissions and model contributor provenance for commercial
 redistribution remain unresolved. OpenCV reports 88.27% on RAF-DB, which is
 not a Room36 event-photo accuracy result. No checkpoint is bundled.
 
+The block-quantized file cannot be compared fairly as published: it requires
+an additional `fc.weight` feed absent from the official example. A separate
+diagnostic feed of a zero tensor failed on CPU in ONNX Runtime's
+`DequantizeLinear` block-quantization kernel; DirectML accepted that artificial
+feed, but its output has no validated meaning. The benchmark therefore records
+the original signature as unsupported and does not report BQ predictions or
+latency. A repaired model would need its own provenance and numerical-parity
+validation before comparison.
+
 ## Official preprocessing and sample
 
 The benchmark follows [OpenCV Zoo's Python example](https://github.com/opencv/opencv_zoo/blob/main/models/facial_expression_recognition/facial_fer_model.py):
@@ -61,16 +70,16 @@ for each DirectML run; this does not measure GPU memory.
 
 | Variant/provider | Init ms | First ms | Median ms | P95 ms | Faces/s | Session RSS delta MiB |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| FP32 CPU | 14.9 | 3.72 | 2.026 | 2.695 | 478 | 22.1 |
-| FP32 DirectML | 153.1 | 3.56 | 0.317 | 0.422 | 2,949 | 53.9 |
-| INT8 CPU | 22.4 | 2.74 | 1.813 | 2.377 | 542 | 11.9 |
-| INT8 DirectML | 274.7 | 3.97 | 1.800 | 2.167 | 542 | 3.7 |
+| FP32 CPU | 12.0 | 2.28 | 1.742 | 1.965 | 578 | 16.2 |
+| FP32 DirectML | 136.3 | 2.83 | 0.280 | 0.323 | 3,491 | 62.2 |
+| INT8 CPU | 14.7 | 2.08 | 1.440 | 1.702 | 673 | 1.7 |
+| INT8 DirectML | 238.2 | 3.88 | 1.776 | 1.843 | 562 | 9.1 |
 | INT8-BQ CPU/DirectML | Session loads | — | — | — | — | Unusable extra input |
 
 CPU/DirectML peak **process** RSS ranged from 245 to 318 MiB across
 sequential runs; these peaks are order-dependent and should not be read as
 independent model memory costs. GPU memory could not be measured here.
-Reading source images and preparing all 400 crops took 31.24 seconds,
+Reading source images and preparing all 400 crops took 28.20 seconds,
 separate from the inference table. There were 400 crop preparations and no
 additional face-detector or embedding calls. Session creation and first-call
 costs are reported separately from warm inference.
@@ -87,9 +96,9 @@ predictions had top probability under 0.5. No human expression labels exist.
 ## Integration estimate and recommendation
 
 At the observed 4.88 detected faces per NSC photograph, inference-only time
-estimated from measured mean throughput is approximately 2.0/0.33 seconds
-for 200 photos, 10.2/1.65 seconds for 1,000, 51/8.3 seconds for 5,000,
-and 17.7/2.9 seconds for 8,453 faces (FP32 CPU/DirectML respectively).
+estimated from measured mean throughput is approximately 1.7/0.28 seconds
+for 200 photos, 8.4/1.40 seconds for 1,000, 42.2/7.0 seconds for 5,000,
+and 14.6/2.4 seconds for 8,453 faces (FP32 CPU/DirectML respectively).
 These exclude decoding, alignment, detection, session initialization and
 cache I/O. A future implementation could reuse existing face crops and provider
 configuration, cache outputs by model hash and crop version, and use bounded
@@ -124,5 +133,5 @@ glasses-specific behavior also remain unmeasured because the cached audit has
 no verified labels for those conditions. The review sheets expose disagreement
 examples for manual inspection but cannot substitute for a labeled test set.
 The local Windows CI-equivalent unittest command passed: 558 tests, 10 skipped,
-no failures in 204.492 seconds. Hosted GitHub Actions has not run; publishing
+no failures in 191.495 seconds. Hosted GitHub Actions has not run; publishing
 this commit and audit artifacts requires explicit external-publication approval.

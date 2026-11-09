@@ -1,5 +1,5 @@
 variant,provider,rss_before,rss_session,rss_peak,gpu_memory_bytes
-fp32,cpu,234405888,257527808,257294336,unavailable
-fp32,directml,257839104,314355712,315445248,unavailable
-int8,cpu,310923264,323350528,323346432,unavailable
-int8,directml,323334144,327254016,333516800,unavailable
+fp32,cpu,234565632,257953792,257720320,unavailable
+fp32,directml,258265088,317403136,323162112,unavailable
+int8,cpu,313856000,323239936,323235840,unavailable
+int8,directml,323223552,326832128,333627392,unavailable
