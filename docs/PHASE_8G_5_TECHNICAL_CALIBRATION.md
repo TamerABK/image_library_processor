@@ -1,5 +1,41 @@
 # Phase 8G.5: technical calibration
 
+## Corrective pass (algorithm v5)
+
+This section supersedes the original v3 conclusions below. V1 and default V2 remain untouched; `TechnicalQualityResult.score` remains unavailable. The revised private report is `audit_results/phase8g5_technical_calibration/Room36_Phase_8G5_Technical_Calibration_Revised.pdf`.
+
+| Audit question | v3 result | Corrected v5 result |
+|---|---|---|
+| Measured face ROIs | 8/124 at 1024 px | 9/124 at 1024, 52/124 at 2048, **124/124 native** on 17 NSC candidates |
+| Source-resolution cause | Unseparated | Downsampling plus 8% inset dominated; native ROIs use a 3% inset capped at 3 pixels. No native ROI was upsampled. |
+| Noise-induced false sharpness | Raw-log increased under added noise | Raw structured-detail diagnostic fell on the controlled crops; no ranking score activated. |
+| Strong sharpening | v3 adjusted detail rose | v5 still rises on IMG_3951 (0.18484 to 0.21540), but low cross-scale persistence flags suspected artifact; no quality score. |
+| JPEG quality 25 | v3 response unstable | v5 still rises slightly (0.18484 to 0.18640); 8-pixel boundary ratio rises 0.823 to 1.621 and flags suspected artifact. The ratio is crop-grid dependent and diagnostic only. |
+| Chroma-only sensitivity | Independent RGB noise contaminated luminance | Lab chroma-only severity 25: residual 1.128 to 11.199 on IMG_3951; measured luminance leakage SD 0.130 Lab-L units. |
+| Luminance-only leakage | Not isolated | Lab luminance-only severity 25: chroma residual 1.128 to 1.188; chroma leakage SD 0.436 Lab a/b units. |
+| Reliability fields | One detail/chroma-mixed number | Independent detail, noise, artifact, clipping and chroma coverage/status; no calibrated predictive confidence claimed. |
+| Face correspondence | Face indexes incorrectly paired | No same-person conclusion without independently verified identities; image-local ROI IDs and explicit abstention in PDF. |
+| Candidate technical score | Unavailable | Still unavailable: artifact screening is provisional and unvalidated across real scenes. |
+
+The native mode decodes each candidate once, measures all cached face ROIs in that buffer, and limits whole-image diagnostics to a 1024-pixel in-memory preview. It rejects a source exceeding 32 million reported pixels. Cached face boxes are mapped from the 2048-pixel detection coordinate space through `detection_space_size` and `face_region`; orientation follows `ImageLoader`. The result statuses distinguish unsupported image, insufficient analysis/source resolution, and insufficient structured detail. `face_metrics.csv` includes ROI dimensions, both bright and shadow channel clipping, provenance, and separate evidence fields. A missing compatible face cache yields no fabricated face metrics.
+
+The new artifact observation combines cross-scale persistence and an 8-pixel boundary excess ratio. The provisional suspicion rules are persistence below 0.65 or boundary excess above 1.5. Those thresholds flag the tested aggressive unsharp and JPEG-25 examples; they are **not** validated defect probabilities. Natural periodic scene structure, crop-grid phase, and resampling can produce false positives or false negatives. The detail number is retained for diagnosis but withheld from ranking. The alternative multiscale Lab chroma MAD is exported beside the existing float-Lab median residual. Both can respond to legitimate chromatic microtexture.
+
+Controlled Lab perturbations operate on converted float Lab: luminance-only changes `L`, chroma-only changes `a/b`, and combined/correlated variants change both or spatially smooth the chroma disturbance. Every round trip records observed `L` and `a/b` variation, including gamut and quantization leakage. In seven measured NSC face crops, severity-25 chroma-only injection raised the chroma estimator substantially more than luminance-only injection. The eighth crop was too small for the 64-pixel chroma gate; it is unavailable, not zero. The original `chroma_noise_*` name now denotes actual Lab chroma perturbation.
+
+Native cold replay: **17 decodes, 7.568 s, 276.0 MiB sampled peak process RSS**. Warm run: **17 hits, zero decodes, 0.0097 s, 180.5 MiB sampled RSS**. The cold run includes controlled perturbations on one face crop from each of eight groups; the warm run reuses cached candidate measurements. `cold_timings.csv` records per-photo decode, whole-image, color and face-region times with group IDs for aggregation. RSS is whole-process sampled RSS, not exact incremental peak. 1024 and 2048 cold runs took 2.244 s and 5.559 s respectively. No new inference occurs. The revised PDF uses IMG_4184/IMG_4183 as an inconclusive real pair and explicitly avoids pairing people by face index. No real pair justified a directional winner on the new measurements.
+
+**Corrective decision:** native ROI extraction is **READY** as an experimental data-collection path under the 32-million-pixel guard. Isolated Lab chroma measurement is **CONDITIONAL** on crop size and texture review. Artifact indicators and face clipping are **DIAGNOSTIC**. A combined technical ranking score is **REJECTED** for 8G.6 until repeatability, artifact false positives, source-resolution color behavior and human technical labels are assessed.
+
+Reproduce the three resolutions and revised PDF:
+
+```powershell
+.\.venv\Scripts\python.exe -B -m app.tools.audit_technical_calibration --max-dimension 1024 --output audit_results/phase8g5_technical_calibration/corrected_1024
+.\.venv\Scripts\python.exe -B -m app.tools.audit_technical_calibration --max-dimension 2048 --output audit_results/phase8g5_technical_calibration/corrected_2048
+.\.venv\Scripts\python.exe -B -m app.tools.audit_technical_calibration --max-dimension 0 --output audit_results/phase8g5_technical_calibration/corrected_native_final
+.\.venv\Scripts\python.exe -B -m app.tools.report_technical_calibration --audit audit_results/phase8g5_technical_calibration/corrected_native_final --output audit_results/phase8g5_technical_calibration/Room36_Phase_8G5_Technical_Calibration_Revised.pdf
+```
+
 ## Decision
 
 The new measurements are **experimental diagnostics**. They are separately callable and cached; no production V1 code, default V2 code, blur classification, face inference, or keeper decision is changed. The tested detail measure resists added random noise but rewards strong unsharp masking and has an unstable JPEG response. It therefore has no normalized quality score and must not enter V2 in Phase 8G.6 yet. There are no human technical-preference labels for the eight NSC groups.

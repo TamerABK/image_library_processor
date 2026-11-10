@@ -16,6 +16,13 @@ def read(path):
         return list(csv.DictReader(stream))
 
 
+def independent_face_observations(rows, image_id):
+    """Image-local observations; face indexes never certify cross-photo identity."""
+    selected = sorted((r for r in rows if r["image_id"] == image_id and r["status"] == "measured"),
+                      key=lambda r: int(r["face_index"]))[:2]
+    return [dict(row, region_label=f"{image_id}:ROI{row['face_index']}") for row in selected]
+
+
 def font(size, bold=False):
     path = Path("C:/Windows/Fonts")/("segoeuib.ttf" if bold else "segoeui.ttf")
     return ImageFont.truetype(str(path), size) if path.is_file() else ImageFont.load_default()
@@ -123,15 +130,18 @@ def controlled_chart_pages(rows, comparisons, cold, warm):
 
 
 def build(audit, output):
+    if not audit.is_dir():
+        raise FileNotFoundError(f"Real audit directory is missing: {audit}")
     summary = json.loads((audit/"summary.json").read_text(encoding="utf-8"))
     cold_path = audit/"cold_summary.json"
     cold = json.loads(cold_path.read_text(encoding="utf-8")) if cold_path.is_file() else summary
     photos = read(audit/"photo_metrics.csv")
     faces = read(audit/"face_metrics.csv")
-    controls = read(audit/"controlled.csv")
+    all_controls = read(audit/"controlled.csv")
+    controls = [r for r in all_controls if r["group_id"] == all_controls[0]["group_id"]] if all_controls else []
     comparisons = read(audit/"group_comparisons.csv")
-    by_name = {p["image_id"]: p for p in photos}
-    # Near-tied baseline with two measurable face ROIs in each photo.
+    # Phase 8G.4 geometry-only links are tentative without independently
+    # verified identity. This report never pairs faces by index.
     eligible = []
     for group in comparisons:
         members = [p for p in photos if p["group_id"] == group["group_id"]]
@@ -143,15 +153,13 @@ def build(audit, output):
         raise ValueError("No real pair with two measurable face regions in both photos")
     _, comparison, members = min(eligible, key=lambda item: item[0])
     left, right = members
-    lf = sorted((f for f in faces if f["image_id"] == left["image_id"] and f["status"] == "measured"),
-                key=lambda f: int(f["face_index"]))[:2]
-    rf = sorted((f for f in faces if f["image_id"] == right["image_id"] and f["status"] == "measured"),
-                key=lambda f: int(f["face_index"]))[:2]
+    lf = independent_face_observations(faces, left["image_id"])
+    rf = independent_face_observations(faces, right["image_id"])
     pages = []
     page = Image.new("RGB", (1800, 2500), "#f8fafc")
     d = ImageDraw.Draw(page)
     label(d, (90, 100), "Room36 / Technical Calibration", 69, bold=True)
-    label(d, (90, 205), "Phase 8G.5 | Real-photo and controlled audit", 36)
+    label(d, (90, 205), "Phase 8G.5 corrective pass | Native ROI audit", 36)
     d.rounded_rectangle((90, 350, 1710, 810), radius=30, fill="#e5eef4")
     label(d, (130, 405), "Decision: diagnostic only", 52, "#9d6817", True)
     label(d, (130, 515), "Noise-aware detail resists tested noise and blur,", 35)
@@ -160,8 +168,8 @@ def build(audit, output):
     for i, line in enumerate((
         "8 NSC groups; 17 real candidates; cached faces reused.",
         "Float-Lab chroma residual stays available at tested high noise.",
-        "Only 8 of 124 face ROIs met the >=32-pixel detail gate.",
-        "The 1024-pixel preview is not a sensor-level noise measurement.",
+        f"Native ROI detail measured: {sum(f['status'] == 'measured' for f in faces)}/{len(faces)}; no upsampling.",
+        "A decoded native ROI is not a calibrated sensor-noise measurement.",
         "V1 production and default shadow V2 are unchanged.")):
         label(d, (110, 930+i*105), line, 32)
     label(d, (90, 1700), "Go / no-go for 8G.6", 48, bold=True)
@@ -179,10 +187,13 @@ def build(audit, output):
          (80, 740, 1710, 1160), "Luminance noise: adjusted detail")
     plot(d, controls, ["baseline", "unsharp_0.5", "unsharp_1", "unsharp_2"],
          (80, 1220, 1710, 1640), "Sharpening: known failure")
-    label(d, (90, 1740), "Raw-log rises from 0.385 to 0.399 at luma-noise 25.", 29)
-    label(d, (90, 1800), "Laplacian rises from 488.5 to 12,730.4 on the same crop.", 29)
-    label(d, (90, 1860), "Adjusted detail falls from 0.358 to 0.328 under noise.", 29)
-    label(d, (90, 1920), "It rises to 0.410 under strong sharpening: score withheld.", 29, "#9d6817")
+    baseline = next(r for r in controls if r["variant"] == "baseline")
+    noisy = next(r for r in controls if r["variant"] == "luma_noise_25")
+    sharpened = next(r for r in controls if r["variant"] == "unsharp_2")
+    label(d, (90, 1740), f"Raw-log: {float(baseline['baseline_raw_log']):.3f} to {float(noisy['baseline_raw_log']):.3f} at luma-noise 25.", 29)
+    label(d, (90, 1800), f"Laplacian: {float(baseline['baseline_laplacian']):.1f} to {float(noisy['baseline_laplacian']):.1f}.", 29)
+    label(d, (90, 1860), f"Adjusted detail: {float(baseline['noise_aware_detail']):.3f} to {float(noisy['noise_aware_detail']):.3f}.", 29)
+    label(d, (90, 1920), f"Strong sharpening: {float(sharpened['noise_aware_detail']):.3f}; score withheld.", 29, "#9d6817")
     pages.append(page)
     page = Image.new("RGB", (1800, 2500), "#f8fafc")
     d = ImageDraw.Draw(page)
@@ -195,11 +206,13 @@ def build(audit, output):
                [json.loads(f["box"]) for f in rf],
                (int(right["decoded_width"]), int(right["decoded_height"])))
     d = ImageDraw.Draw(page)
-    label(d, (80, 1010), "Amber / blue circles mark measured face ROIs, not proved defects.", 28)
+    label(d, (80, 1010), "Circles mark measured ROIs. Identity correspondence is UNVERIFIED.", 28)
     label(d, (80, 1100), f"Existing technical: {float(left['baseline_score']):.6f} vs {float(right['baseline_score']):.6f}", 30)
     label(d, (80, 1160), f"Whole-image adjusted detail: {float(left['noise_aware_detail']):.4f} vs {float(right['noise_aware_detail']):.4f}", 30)
-    for i, (a, b) in enumerate(zip(lf, rf)):
-        label(d, (80, 1260+i*75), f"Face {i+1}: adjusted detail {float(a['noise_aware_detail']):.4f} vs {float(b['noise_aware_detail']):.4f}", 29)
+    for i, face in enumerate(lf):
+        label(d, (80, 1260+i*65), f"A ROI {face['face_index']}: {float(face['noise_aware_detail']):.4f} (independent)", 25)
+    for i, face in enumerate(rf):
+        label(d, (900, 1260+i*65), f"B ROI {face['face_index']}: {float(face['noise_aware_detail']):.4f} (independent)", 25)
     label(d, (80, 1400), f"A: {float(left['detail']):.4f} x {float(left['edge_persistence']):.4f} - {float(left['noise_floor']):.4f} = {float(left['noise_aware_detail']):.4f}", 27)
     label(d, (80, 1450), f"B: {float(right['detail']):.4f} x {float(right['edge_persistence']):.4f} - {float(right['noise_floor']):.4f} = {float(right['noise_aware_detail']):.4f}", 27)
     label(d, (80, 1500), "Calculation: median fine gradient × cross-scale persistence − noise floor.", 28)
@@ -211,12 +224,12 @@ def build(audit, output):
         page.paste(magnified_region(right["source_path"], json.loads(rf[0]["box"]),
                                     (int(right["decoded_width"]), int(right["decoded_height"]))), (930, 1780))
         d = ImageDraw.Draw(page)
-        label(d, (90, 2110), "Corresponding ROI crops; no confident experimental keeper.", 27)
+        label(d, (90, 2110), "Independent ROI crops; no verified same-person comparison.", 27)
     pages.append(page)
     page = Image.new("RGB", (1800, 2500), "#f8fafc")
     d = ImageDraw.Draw(page)
     label(d, (80, 75), "Calibration, availability and performance", 54, bold=True)
-    label(d, (90, 170), "Algorithm v3-noise-detail", 38, bold=True)
+    label(d, (90, 170), "Algorithm v5 / separate evidence fields", 38, bold=True)
     for i, line in enumerate((
         "Fine: median Sobel magnitude after Gaussian sigma 0.65.",
         "Coarse: median gradient after Gaussian sigma 2.0 on strong-edge mask.",
@@ -224,8 +237,9 @@ def build(audit, output):
         "Noise floor: median high-pass luminance residual in low-coarse-edge pixels.",
         "Diagnostic adjusted detail: max(0, fine*persistence-noise floor).",
         "Float-Lab noise: median chroma residual plus 1.4826 MAD on 35% smoothest luminance.",
-        "This formula has no validated normalization, so technical score = unavailable.")):
+        "Artifact and chroma reliability are separate; technical score = unavailable.")):
         label(d, (100, 255+i*95), line, 26)
+    label(d, (100, 940), "Artifact suspicion: persistence < 0.65 or 8-pixel boundary ratio > 1.5 (provisional).", 25)
     label(d, (90, 1050), "All NSC groups", 38, bold=True)
     for i, row in enumerate(comparisons):
         label(d, (105, 1125+i*90), f"{row['group_id']}  baseline range {float(row['baseline_margin']):.5f}  |  new score withheld", 26)
@@ -234,6 +248,28 @@ def build(audit, output):
     label(d, (90, 2080), "Next: validate against sharpening, JPEG, texture and labeled technical preferences.", 27)
     pages.append(page)
     pages.extend(controlled_chart_pages(controls, comparisons, cold, summary))
+    separation = Image.new("RGB", (1800, 2500), "#f8fafc")
+    sd = ImageDraw.Draw(separation)
+    label(sd, (80, 70), "Isolated luminance and chroma perturbations", 47, bold=True)
+    line_chart(sd, controls, ["baseline", "luma_noise_5", "luma_noise_12", "luma_noise_25"],
+               "chroma_noise", (80, 210, 900, 820), "Chroma estimator / luminance-only")
+    line_chart(sd, controls, ["baseline", "chroma_noise_5", "chroma_noise_12", "chroma_noise_25"],
+               "chroma_noise", (930, 210, 1750, 820), "Chroma estimator / chroma-only")
+    line_chart(sd, controls, ["baseline", "luma_noise_5", "luma_noise_12", "luma_noise_25"],
+               "observed_chroma_std", (80, 900, 900, 1510), "Luminance injection / chroma leakage")
+    line_chart(sd, controls, ["baseline", "chroma_noise_5", "chroma_noise_12", "chroma_noise_25"],
+               "observed_luma_std", (930, 900, 1750, 1510), "Chroma injection / luminance leakage")
+    label(sd, (80, 1640), "Lab conversion and RGB gamut clipping introduce measured cross-channel leakage.", 27)
+    label(sd, (80, 1710), "Neither curve is calibrated recognition accuracy or a keeper preference.", 27)
+    pages.append(separation)
+    original = Image.new("RGB", (1800, 2500), "#f8fafc")
+    label(ImageDraw.Draw(original), (80, 80), "Original photographs / no annotations", 49, bold=True)
+    draw_photo(original, left["source_path"], (60, 220), (810, 740), [],
+               (int(left["decoded_width"]), int(left["decoded_height"])))
+    draw_photo(original, right["source_path"], (930, 220), (810, 740), [],
+               (int(right["decoded_width"]), int(right["decoded_height"])))
+    label(ImageDraw.Draw(original), (90, 1050), "Annotation page circles measured regions; no identity claim.", 29)
+    pages.append(original)
     output.parent.mkdir(parents=True, exist_ok=True)
     for index, page in enumerate(pages, 1):
         page.save(output.parent/f"report_page_{index}.png")
@@ -245,7 +281,7 @@ def build(audit, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--audit", type=Path, default=Path("audit_results/phase8g5_technical_calibration"))
-    parser.add_argument("--output", type=Path, default=Path("audit_results/phase8g5_technical_calibration/Room36_Phase_8G5_Technical_Calibration.pdf"))
+    parser.add_argument("--output", type=Path, default=Path("audit_results/phase8g5_technical_calibration/Room36_Phase_8G5_Technical_Calibration_Revised.pdf"))
     args = parser.parse_args()
     print(json.dumps(build(args.audit, args.output), indent=2))
 
