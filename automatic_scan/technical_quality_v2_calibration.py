@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 import cv2
 import numpy as np
 
-VERSION = "technical-calibration-v5-independent-evidence"
+VERSION = "technical-calibration-v6-evidence-contract"
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,11 @@ class TechnicalQualityResult:
     clipping_reliability: str = "unavailable"
     chroma_reliability: str = "unavailable"
     unavailable_reasons: tuple[str, ...] = ()
+    luminance_noise_coverage: float = 0.
+    chroma_noise_coverage: float = 0.
+    empirical_repeatability: float | None = None
+    defect_direction_reliability: str = "unvalidated"
+    predictive_confidence: float | None = None
 
     def to_dict(self):
         return asdict(self)
@@ -100,15 +105,17 @@ def measure_technical(image):
                                       None, 0., "Unsupported or too-small decoded image",
                                       unavailable_reasons=("unsupported_or_too_small",))
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)/255.
+    clipping = tuple(float(v) for v in np.mean(image >= 254, axis=(0, 1)))
+    chroma, coverage, _ = chroma_noise_float_lab(image)
     fine = _gradient(cv2.GaussianBlur(gray, (0, 0), .65))
     coarse = _gradient(cv2.GaussianBlur(gray, (0, 0), 2.0))
     mask = coarse >= max(.015, float(np.percentile(coarse, 80)))
     if int(mask.sum()) < 64:
-        chroma, coverage, _ = chroma_noise_float_lab(image)
         return TechnicalQualityResult(VERSION, "insufficient_structured_detail", None, None, None, None, None,
-                                      chroma, coverage, None, 0., "Insufficient structured edges",
+                                      chroma, coverage, clipping, 0., "Insufficient structured edges",
                                       chroma_reliability="measured_unvalidated" if chroma is not None else "unavailable",
-                                      noise_coverage=coverage, noise_reliability="measured_unvalidated" if chroma is not None else "unavailable",
+                                      clipping_coverage=1., clipping_reliability="decoded_saturation_only",
+                                      chroma_noise_coverage=coverage,
                                       unavailable_reasons=("insufficient_structured_edges",))
     # Persistent coarse edges are less sensitive to uncorrelated sensor noise.
     persistence = float(np.median(coarse[mask] / (fine[mask]+.002)))
@@ -118,8 +125,6 @@ def measure_technical(image):
     residual = np.abs(gray-cv2.GaussianBlur(gray, (0, 0), .7))
     noise = float(np.median(residual[flat])) if flat.any() else None
     adjusted = max(0., detail*persistence-noise) if noise is not None else None
-    chroma, coverage, _ = chroma_noise_float_lab(image)
-    clipping = tuple(float(v) for v in np.mean(image >= 254, axis=(0, 1)))
     blocking = _blocking_ratio(gray)
     artifact_status = ("suspected_processing_artifact" if persistence < .65 or
                        (blocking is not None and blocking > 1.5) else "direction_unvalidated")
@@ -135,4 +140,5 @@ def measure_technical(image):
                                   artifact_reliability=artifact_status, clipping_coverage=1.,
                                   clipping_reliability="decoded_saturation_only",
                                   chroma_reliability="measured_unvalidated" if chroma is not None else "unavailable",
+                                  luminance_noise_coverage=float(flat.mean()), chroma_noise_coverage=coverage,
                                   unavailable_reasons=("chroma_unavailable",) if chroma is None else ())

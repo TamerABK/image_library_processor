@@ -229,7 +229,7 @@ def build(audit, output):
     page = Image.new("RGB", (1800, 2500), "#f8fafc")
     d = ImageDraw.Draw(page)
     label(d, (80, 75), "Calibration, availability and performance", 54, bold=True)
-    label(d, (90, 170), "Algorithm v5 / separate evidence fields", 38, bold=True)
+    label(d, (90, 170), "Algorithm v6 / independent evidence contract", 38, bold=True)
     for i, line in enumerate((
         "Fine: median Sobel magnitude after Gaussian sigma 0.65.",
         "Coarse: median gradient after Gaussian sigma 2.0 on strong-edge mask.",
@@ -270,6 +270,32 @@ def build(audit, output):
                (int(right["decoded_width"]), int(right["decoded_height"])))
     label(ImageDraw.Draw(original), (90, 1050), "Annotation page circles measured regions; no identity claim.", 29)
     pages.append(original)
+    calibration_path = audit/"calibration_result.json"
+    if calibration_path.is_file():
+        calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
+        review = Image.new("RGB", (1800, 2500), "#f8fafc")
+        rd = ImageDraw.Draw(review)
+        label(rd, (80, 75), "Pairwise review and calibration gate", 52, bold=True)
+        label(rd, (95, 190), f"Human-labeled pairs: {calibration['parameters']['labeled_pairs']}", 34)
+        label(rd, (95, 260), f"Calibration: {calibration['status']} / score withheld", 34, "#9d6817")
+        label(rd, (95, 340), "A/B order is seeded; reviewers do not see algorithm scores.", 28)
+        label(rd, (95, 405), "Technical attributes and overall keeper preference have separate fields.", 28)
+        label(rd, (95, 470), "Event-level split prevents burst photos crossing train/validation.", 28)
+        label(rd, (95, 570), "Research basis and limits", 38, bold=True)
+        references = (
+            "Liu et al., RankIQA, ICCV 2017: synthetic distortion orderings.",
+            "Prashnani et al., PieAPP, CVPR 2018: reference-based pairwise judgments.",
+            "Fang et al., SPAQ, CVPR 2020: attribute-specific human ratings.",
+            "Hosu et al., KonIQ-10k, IEEE TIP 2020: authentic distortion diversity.",
+            "Mittal et al., BRISQUE, IEEE TIP 2012: natural-scene statistics.",
+            "None validates a Room36 threshold or keeper score without local labels.",
+        )
+        for i, line in enumerate(references):
+            label(rd, (105, 670+i*110), line, 27)
+        label(rd, (95, 1580), "GO/NO-GO: NO-GO for Phase 8G.6 score integration.", 34, "#9d6817", True)
+        label(rd, (105, 1680), "Required: independent labeled shoots, held-out advantage,", 28)
+        label(rd, (105, 1740), "artifact false-positive checks and stable score anchoring.", 28)
+        pages.append(review)
     output.parent.mkdir(parents=True, exist_ok=True)
     for index, page in enumerate(pages, 1):
         page.save(output.parent/f"report_page_{index}.png")
@@ -281,7 +307,7 @@ def build(audit, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--audit", type=Path, default=Path("audit_results/phase8g5_technical_calibration"))
-    parser.add_argument("--output", type=Path, default=Path("audit_results/phase8g5_technical_calibration/Room36_Phase_8G5_Technical_Calibration_Revised.pdf"))
+    parser.add_argument("--output", type=Path, default=Path("audit_results/phase8g5_final_calibration/Room36_Phase_8G5_Final_Calibration_Report.pdf"))
     args = parser.parse_args()
     print(json.dumps(build(args.audit, args.output), indent=2))
 

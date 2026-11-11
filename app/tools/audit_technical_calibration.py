@@ -38,7 +38,7 @@ def write(path, records):
 def cache_key(path, maximum, face_cache_revision=""):
     stat = path.stat()
     return hashlib.sha256(json.dumps((str(path.resolve()), stat.st_size, stat.st_mtime_ns,
-        maximum, VERSION, "audit-schema-v2", "ImageLoader-BGR8-v1", "face-roi-adaptive-inset-v2",
+        maximum, VERSION, "audit-schema-v3", "ImageLoader-BGR8-v1", "face-roi-adaptive-inset-v2",
         face_cache_revision)).encode()).hexdigest()
 
 
@@ -149,9 +149,9 @@ def run(audit, output, maximum=1024):
                     stat = path.stat()
                     faces = face_cache.get(path, stat.st_size, stat.st_mtime_ns)
                     tick = time.perf_counter()
-                    if maximum == 0 and int(photos[name]["width"])*int(photos[name]["height"]) > 32_000_000:
-                        raise ValueError("native_memory_budget_exceeded")
-                    image = loader.load_for_scan(path, max_dimension=None if maximum == 0 else maximum)
+                    native_fallback = maximum == 0 and int(photos[name]["width"])*int(photos[name]["height"]) > 32_000_000
+                    image = loader.load_for_scan(path, max_dimension=2048 if native_fallback else
+                                                 None if maximum == 0 else maximum)
                     stages["decode_seconds"] = time.perf_counter()-tick
                     count_decodes += 1
                     if image is None:
@@ -178,7 +178,9 @@ def run(audit, output, maximum=1024):
                                 inset = max(1, min(3, int(min(roi.shape[:2])*.03)))
                                 roi = roi[inset:-inset, inset:-inset]
                             result = measure_technical(roi).to_dict()
-                            if min(original_size) < 32:
+                            if native_fallback:
+                                result["status"] = "native_fallback_insufficient_detail"
+                            elif min(original_size) < 32:
                                 result["status"] = "insufficient_source_resolution" if maximum == 0 else "insufficient_analysis_resolution"
                             face_payload.append(dict(face_index=index, box=box, prominence=(
                                 diagnostics[index]["prominence"] if index < len(diagnostics) else 0),
@@ -201,6 +203,7 @@ def run(audit, output, maximum=1024):
                             control_rows.extend(group_controls)
                             control_groups.add(group["group_id"])
                     payload = dict(whole=whole, color=color, faces=face_payload,
+                                   native_fallback=native_fallback,
                                    detection_status="compatible_detection" if faces is not None else "missing_compatible_detection",
                                    decoded_size=list(image.shape[:2]))
                     cache_file.write_text(json.dumps(payload), encoding="utf-8")
@@ -218,9 +221,14 @@ def run(audit, output, maximum=1024):
                     noise_floor=whole["noise_floor"], chroma_noise=whole["chroma_noise"],
                     chroma_coverage=whole["chroma_coverage"], face_regions=len(payload["faces"]),
                     detection_status=payload["detection_status"],
+                    native_fallback=payload["native_fallback"],
                     color_clipping=payload["color"].get("clipping_max"),
                     detail_coverage=whole.get("detail_coverage"), detail_reliability=whole.get("detail_reliability"),
                     noise_coverage=whole.get("noise_coverage"), noise_reliability=whole.get("noise_reliability"),
+                    luminance_noise_coverage=whole.get("luminance_noise_coverage"),
+                    chroma_noise_coverage=whole.get("chroma_noise_coverage"),
+                    predictive_confidence=whole.get("predictive_confidence"),
+                    defect_direction_reliability=whole.get("defect_direction_reliability"),
                     artifact_measurement=whole.get("artifact_measurement"),
                     artifact_reliability=whole.get("artifact_reliability"),
                     chroma_reliability=whole.get("chroma_reliability"),
